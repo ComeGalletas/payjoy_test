@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+api/vendor/
+api/var/
+.task
+.phpunit.cache/
