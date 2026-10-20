@@ -1,0 +1,53 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels that PR's older run. Pushes to main each get their own group,
+# so they are never cancelled or replaced.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('check-pr-{0}', github.ref) || format('check-push-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The guard tests fail instead of skipping on CI; point them at the sh to use.
+      SH_PATH: /bin/sh
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2.40.0
+        with:
+          php-version: '8.3'
+          extensions: pdo_sqlite, curl, mbstring, openssl
+          tools: composer:v2
+          coverage: none
+
+      - name: Find the Composer cache directory
+        id: composer-cache
+        working-directory: api
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('api/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: make init
+        run: make init
+
+      - name: make check
+        run: make check
