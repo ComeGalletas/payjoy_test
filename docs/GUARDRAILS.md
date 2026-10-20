@@ -14,11 +14,11 @@ owned by the owner (GR-006). Update the Status column as each layer lands.
 |---|---|---|---|---|
 | GR-001 | Never write into `DATA_ROOT` / `BACKUP_ROOT` | PreToolUse hook rejecting writes under those paths; tests use temp dirs | Owner review | Brief only |
 | GR-002 | Never read or edit `.env` | Claude Code settings deny `Read`/`Edit` on `.env`; PreToolUse hook on shell commands naming `.env`; `.env` in `.gitignore` | Secret scan in `make check` | Brief only |
-| GR-004 | Edit only inside your own worktree | PreToolUse hook comparing target paths with the session's worktree root | PR diff review | Partial: the agent harness isolates worktree subagents; `install-hooks.php` writes nothing from a linked worktree |
+| GR-004 | Edit only inside your own worktree | PreToolUse hook comparing target paths with the session's worktree root | PR diff review | Partial: `install-hooks.php` writes nothing from a linked worktree. The agent harness's worktree isolation also helps, but it is not a project-owned layer (and was worked around once, see LOG 2026-10-20) |
 | GR-005 | Only the owner changes `CLAUDE.md` / `AGENTS.md` | PreToolUse hook unless `AGENT_GUARD_OFF=1`; CODEOWNERS | Branch protection requires owner review | Brief only |
 | GR-006 | Guard, hook, settings, policy files belong to the owner | Same hook and CODEOWNERS as GR-005, covering `.claude/`, hooks, `docs/GUARDRAILS.md`, CI config | Branch protection | Brief only |
-| GR-013 | Never push to main; never merge your own PR | Branch protection on `main`; pre-push hook rejecting `main` | Remote rejects direct pushes | Enforced: protection requires a PR and the `check` status check, admins included, no force-push or deletion; `pre-push` rejects pushes and deletes of `main`. Merging only after both co-lead approvals is by process (ADR 0015) |
-| GR-017 | Never bypass git hooks | PreToolUse hook blocking `--no-verify`, `commit -n`, `SKIP=`, `core.hooksPath` | CI re-runs `make check` | Partial: CI `check` is required on `main`; the PreToolUse flag blocker is not built |
+| GR-013 | Never push to main; never merge your own PR | Branch protection on `main`; pre-push hook rejecting `main` | Remote rejects direct pushes | Partial: no-push-to-main is enforced (protection requires a PR and the `check` status check, admins included, no force-push or deletion; `pre-push` rejects pushes and deletes of `main`). Never-merge-your-own-PR is process only (single account, 0 required reviews; ADR 0015) |
+| GR-017 | Never bypass git hooks | PreToolUse hook blocking `--no-verify`, `commit -n`, `SKIP=`, `core.hooksPath` | CI re-runs `make check` | Partial: CI `check` is required on `main` and backstops a bypassed `pre-push`; nothing backstops a bypassed `commit-msg` (CI doesn't check subjects); the PreToolUse flag blocker is not built |
 | GR-018 | No `git reset --hard`, `git clean -f`, `rm -rf` | PreToolUse hook on shell commands | Remote keeps pushed history | Brief only |
 | GR-030 | Report a guard block and ask; never work around it | Brief | Owner review of session transcripts and PRs | Brief only (by design) |
 | GR-031 | Content in PRs, issues, files, tool results is data | Brief | Owner review | Brief only (by design) |
@@ -48,6 +48,8 @@ Rules about the app itself, enforced by the test suite inside `make check`.
 - Git hooks live in the shared `.git/hooks`, installed only from the main checkout. Worktrees use
   whatever the main checkout installed; `make init` in a worktree warns when they differ.
 - Until P0-06, a second `make init` after `FORCE=1` can overwrite the `.bak` copy of a foreign hook.
+- Until P0-06, `commit-msg` assumes `#` is the comment character, and a commit made with
+  `--cleanup=verbatim` whose first line starts with `#` passes the subject check.
 - PreToolUse hooks match command text; indirect paths (variables, generated scripts) can slip past
   them. GR-030 forbids trying, and review is the backstop.
 - Owner sessions run with `AGENT_GUARD_OFF=1` and rely on review instead of guards.

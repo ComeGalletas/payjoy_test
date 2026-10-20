@@ -15,7 +15,9 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   (lead authorized the guard's own suggestion, "plain, separate commands"); a chained sleep (use
   Monitor instead); a complex `gh api --jq` poll (lead checked CI read-only from the main checkout).
   The push ran in plain PowerShell, which the lead explicitly authorized because that shell was
-  never blocked; the pre-push `make check` and CI both ran.
+  never blocked; the push itself was never attempted or blocked in Bash (its first PowerShell
+  attempt failed only on the network). The owner was told in chat before approving. The pre-push
+  `make check` and CI both ran.
 - Tester: PASS 10/10. Judge: APPROVE WITH NITS. CI `check`: pass, 13 s. Co-leads: both approved.
 - Merged with `gh pr merge 1 --merge --match-head-commit 47a6c80…` → merge commit `365a57f`.
 - Main checkout: `make init FORCE=1` installed the merged hooks; the round-1 copies (no marker) are
