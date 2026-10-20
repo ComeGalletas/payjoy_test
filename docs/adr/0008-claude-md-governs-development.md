@@ -21,4 +21,5 @@ template text.
 
 - When the plan and `CLAUDE.md` disagree, `CLAUDE.md` wins and the conflict is raised.
 - Only the owner edits `CLAUDE.md` (GR-005).
-- During Phase 0 the git rules are relaxed until the repository exists (deviation 1).
+- During Phase 0 the git rules were relaxed until the repository existed; that deviation was
+  removed when P0-04 closed (2026-10-20).
