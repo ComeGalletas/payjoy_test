@@ -1,0 +1,49 @@
+{
+    "name": "fx-installments/api",
+    "description": "FX Installments: USD price to local-currency installments, REST API and static-flow chatbot.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.3",
+        "ext-curl": "*",
+        "ext-mbstring": "*",
+        "ext-openssl": "*",
+        "ext-pdo_sqlite": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^12.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "FxInstallments\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "FxInstallments\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "platform": {
+            "php": "8.3.33"
+        },
+        "sort-packages": true
+    },
+    "scripts": {
+        "lint": "@php bin/lint.php",
+        "test": "phpunit --testsuite Unit,Acceptance",
+        "check": [
+            "@lint",
+            "@test"
+        ],
+        "acceptance": "phpunit",
+        "test-guards": "phpunit --testsuite Guards"
+    },
+    "scripts-descriptions": {
+        "lint": "Run php -l on every .php file under src/, tests/, bin/ and public/.",
+        "test": "Run the Unit and Acceptance suites.",
+        "check": "Lint, then test.",
+        "acceptance": "Run PHPUnit on the path given after --.",
+        "test-guards": "Run the git hook guard tests (needs sh)."
+    }
+}

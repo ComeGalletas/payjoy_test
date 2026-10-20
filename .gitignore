@@ -5,3 +5,20 @@ api/vendor/
 api/var/
 .task
 .phpunit.cache/
+
+# PHPUnit and coverage output
+.phpunit.result.cache
+api/coverage/
+
+# Scratch files from local hook checks
+/m
+
+# Agent worktrees created inside the main checkout
+.claude/worktrees/
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

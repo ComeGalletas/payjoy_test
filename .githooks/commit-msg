@@ -1,0 +1,32 @@
+#!/bin/sh
+# commit-msg: enforce the subject convention from CLAUDE.md, "<ID>: <imperative summary>".
+# <ID> is a work ID from docs/PLAN.md section 10: P<phase>-<nn> (for example P1-03) or L-<nn>.
+# Subjects that git writes for merges ("Merge ...") and reverts ('Revert "...') are allowed.
+
+msg_file="$1"
+
+if [ -z "$msg_file" ] || [ ! -f "$msg_file" ]; then
+    echo "commit-msg: no commit message file given" >&2
+    exit 1
+fi
+
+# The subject is the first line that is neither blank nor a git comment.
+subject=$(tr -d '\r' < "$msg_file" | grep -v '^#' | grep -v '^[[:space:]]*$' | head -n 1)
+
+case "$subject" in
+    "Merge "* | 'Revert "'*)
+        exit 0
+        ;;
+esac
+
+if printf '%s\n' "$subject" | grep -Eq '^(P[0-9]-[0-9]{2}|L-[0-9]{2}): .+'; then
+    exit 0
+fi
+
+cat >&2 <<EOF
+commit-msg: rejected subject: "$subject"
+  Expected "<ID>: <imperative summary>", for example "P1-03: Add AmountParser".
+  <ID> is P<phase>-<two digits> (P0-04, P1-10) or L-<two digits> (L-01).
+  Subjects starting with "Merge " or 'Revert "' are also allowed.
+EOF
+exit 1
