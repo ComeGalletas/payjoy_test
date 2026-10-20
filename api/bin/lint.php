@@ -3,14 +3,14 @@
 declare(strict_types=1);
 
 /*
- * Runs `php -l` on every .php file under src/, tests/, bin/ and public/ (those that exist),
+ * Runs `php -l` on every .php file under src/, tests/, bin/, public/ and db/ (those that exist),
  * relative to the api/ directory. Exits 1 if any file has a syntax error or no file is found.
  *
  * Usage: php bin/lint.php
  */
 
 $apiRoot = dirname(__DIR__);
-$directories = ['src', 'tests', 'bin', 'public'];
+$directories = ['src', 'tests', 'bin', 'public', 'db'];
 
 $files = [];
 foreach ($directories as $directory) {

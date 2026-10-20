@@ -40,7 +40,7 @@
         "test-guards": "phpunit --testsuite Guards"
     },
     "scripts-descriptions": {
-        "lint": "Run php -l on every .php file under src/, tests/, bin/ and public/.",
+        "lint": "Run php -l on every .php file under src/, tests/, bin/, public/ and db/.",
         "test": "Run the Unit and Acceptance suites.",
         "check": "Lint, then test.",
         "acceptance": "Run PHPUnit on the path given after --.",

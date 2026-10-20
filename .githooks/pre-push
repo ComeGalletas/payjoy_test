@@ -1,6 +1,9 @@
 #!/bin/sh
+# fx-installments managed hook
 # pre-push: never push to main (GR-013), then run the quality gate (`make check`).
-# git passes "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
+# git passes "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin; a deletion has
+# "(delete)" as the local ref. `make check` runs on the working tree, not on the pushed commits;
+# CI re-runs it on the exact commits.
 
 remote_name="$1"
 

@@ -1,7 +1,10 @@
 #!/bin/sh
+# fx-installments managed hook
 # commit-msg: enforce the subject convention from CLAUDE.md, "<ID>: <imperative summary>".
 # <ID> is a work ID from docs/PLAN.md section 10: P<phase>-<nn> (for example P1-03) or L-<nn>.
-# Subjects that git writes for merges ("Merge ...") and reverts ('Revert "...') are allowed.
+# The summary needs at least one non-whitespace character.
+# Also allowed: git's own merge subjects ("Merge branch ...", "Merge pull request ...", ...)
+# and revert/reapply subjects ('Revert "...', 'Reapply "...').
 
 msg_file="$1"
 
@@ -10,23 +13,29 @@ if [ -z "$msg_file" ] || [ ! -f "$msg_file" ]; then
     exit 1
 fi
 
-# The subject is the first line that is neither blank nor a git comment.
-subject=$(tr -d '\r' < "$msg_file" | grep -v '^#' | grep -v '^[[:space:]]*$' | head -n 1)
+# Drop CRs, then everything from git's scissors line on (`git commit -v` puts the diff below
+# it), then comment and blank lines. The subject is the first line left.
+subject=$(tr -d '\r' < "$msg_file" \
+    | sed -e '/^# -* >8 -*$/,$d' \
+    | grep -v '^#' \
+    | grep -v '^[[:space:]]*$' \
+    | head -n 1)
 
-case "$subject" in
-    "Merge "* | 'Revert "'*)
-        exit 0
-        ;;
-esac
+if printf '%s\n' "$subject" \
+    | grep -Eq '^Merge (branch|branches|remote-tracking branch|pull request|tag|commit) |^(Revert|Reapply) "'; then
+    exit 0
+fi
 
-if printf '%s\n' "$subject" | grep -Eq '^(P[0-9]-[0-9]{2}|L-[0-9]{2}): .+'; then
+if printf '%s\n' "$subject" | grep -Eq '^(P[0-9]-[0-9]{2}|L-[0-9]{2}): .*[^[:space:]]'; then
     exit 0
 fi
 
 cat >&2 <<EOF
 commit-msg: rejected subject: "$subject"
   Expected "<ID>: <imperative summary>", for example "P1-03: Add AmountParser".
-  <ID> is P<phase>-<two digits> (P0-04, P1-10) or L-<two digits> (L-01).
-  Subjects starting with "Merge " or 'Revert "' are also allowed.
+  <ID> is P<phase>-<two digits> (P0-04, P1-10) or L-<two digits> (L-01), and the summary
+  must not be empty or whitespace only.
+  Also allowed: git's merge subjects ("Merge branch|branches|remote-tracking branch|
+  pull request|tag|commit ...") and subjects starting with 'Revert "' or 'Reapply "'.
 EOF
 exit 1

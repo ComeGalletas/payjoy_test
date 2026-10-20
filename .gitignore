@@ -10,9 +10,6 @@ api/var/
 .phpunit.result.cache
 api/coverage/
 
-# Scratch files from local hook checks
-/m
-
 # Agent worktrees created inside the main checkout
 .claude/worktrees/
 
