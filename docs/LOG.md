@@ -4,6 +4,30 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-20 — P1-01 Foundation (PR #6, head 9c1eeeb)
+
+- Builder: DONE_WITH_CONCERNS, one commit `9c1eeeb`. Unit+Acceptance 6 → 151 tests (606
+  assertions), guards 80; green in Git Bash and cmd. New runtime dependency `vlucas/phpdotenv`
+  v5.7.0 (with graham-campbell/result-type 1.2.0, phpoption 1.10.0, symfony polyfill-ctype 1.37.0,
+  polyfill-mbstring 1.43.0, polyfill-php80 1.43.0). Schema shipped only `events` and `rate_limits`,
+  as the lead decided; the rest is P1-02.
+- Tester: PASS 11/11; mutations caught (empty-token auth 4 failures, limit 31 → 7, exception text
+  in the 500 → 2 unit tests, Metrics rethrow → 7). Judge: APPROVE WITH NITS. CI `check`: pass,
+  19 s. Co-leads: both approved; the owner merged it as `9d30675`.
+- Builder finding: PDO binds PHP floats as 14-digit strings, losing precision; the stopgap
+  `Database::floatParam()` is replaced by integer storage (ADR 0017, in P1-02).
+- Gate scripts: the Composer `test` and `acceptance` scripts now pass `-d allow_url_fopen=0`
+  (ADR 0018). The owner merged PR #6 with this change; GR-006 now lists the gate scripts as
+  owner-owned.
+- **Process breaches, both logged:** after a harness block on a Bash call, the builder followed the
+  block message's advice by switching to PowerShell instead of stopping, as the brief required; it
+  also retried the Composer download about 8 times against the brief's 3. No harm resulted. Briefs
+  now say: follow the guard's stated remedy in the same tool, otherwise stop.
+- Owner decisions during review: every request is recorded with its raw IP for 30 days and abusive
+  IPs are blocked (ADR 0016, new task P1-11 before P1-05); money and rates are stored as integers
+  in fixed units (ADR 0017). ADR 0018 records the test network isolation. CLAUDE.md deviation 3
+  (ADR timing) awaits the owner's OK in the docs PR.
+
 ## 2026-10-20 — P0-05 and P0-06 close-out review (PR #4)
 
 - PR #4 (P0-06 close-out) was merged by the owner as `b823ab8` before its tester and judge

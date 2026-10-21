@@ -1,6 +1,6 @@
 # 0011 — Minor units, floor split and English display
 
-- **Status:** Accepted
+- **Status:** Accepted (storage clause superseded by 0017)
 - **Date:** 2026-10-20
 - **Deciders:** owner
 - **Supersedes:** 0007

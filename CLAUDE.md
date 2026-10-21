@@ -102,3 +102,8 @@ not a sandbox. Known limits and backstops: see `docs/GUARDRAILS.md` "Known limit
 2. **`DATA_ROOT` / `BACKUP_ROOT` left open.** The app has no protected data folders yet. Both stay
    as placeholders in `.env.example`; tests and mocks point them at temporary directories.
    **Wins:** GR-001 still applies to any real value the owner sets.
+3. **ADR timing.** Builders don't edit `docs/`, so an ADR can't always ship in the same commit as
+   the first code that depends on it. A decision known before a task gets its ADR in a lead docs PR
+   merged before the builder starts. A decision that comes up during a build gets its ADR in a lead
+   docs PR merged right after the code PR, before the next task starts. **Wins:** this deviation
+   over the "same commit" convention.

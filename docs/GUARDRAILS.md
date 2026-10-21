@@ -16,7 +16,7 @@ owned by the owner (GR-006). Update the Status column as each layer lands.
 | GR-002 | Never read or edit `.env` | Claude Code settings deny `Read`/`Edit` on `.env`; PreToolUse hook on shell commands naming `.env`; `.env` in `.gitignore` | Secret scan in `make check` | Brief only |
 | GR-004 | Edit only inside your own worktree | PreToolUse hook comparing target paths with the session's worktree root | PR diff review | Partial: `install-hooks.php` writes nothing from a linked worktree. The agent harness's worktree isolation also helps, but it is not a project-owned layer (and was worked around once, see LOG 2026-10-20) |
 | GR-005 | Only the owner changes `CLAUDE.md` / `AGENTS.md` | PreToolUse hook unless `AGENT_GUARD_OFF=1`; CODEOWNERS | Branch protection requires owner review | Brief only |
-| GR-006 | Guard, hook, settings, policy files belong to the owner | Same hook and CODEOWNERS as GR-005, covering `.claude/`, hooks, `docs/GUARDRAILS.md`, CI config | Branch protection | Brief only |
+| GR-006 | Guard, hook, settings, policy files belong to the owner | Same hook and CODEOWNERS as GR-005, covering `.claude/`, hooks, `docs/GUARDRAILS.md`, CI config and the Composer gate scripts (`test`, `acceptance`, `check`; ADR 0018) | Branch protection | Brief only |
 | GR-013 | Never push to main; never merge your own PR | Branch protection on `main`; pre-push hook rejecting `main` | Remote rejects direct pushes | Partial: no-push-to-main is enforced (protection requires a PR and the `check` status check, admins included, no force-push or deletion; `pre-push` rejects pushes and deletes of `main`). Never-merge-your-own-PR is process only (single account, 0 required reviews; ADR 0015) |
 | GR-017 | Never bypass git hooks | PreToolUse hook blocking `--no-verify`, `commit -n`, `SKIP=`, `core.hooksPath` | CI re-runs `make check` | Partial: CI `check` is required on `main` and backstops a bypassed `pre-push`; nothing backstops a bypassed `commit-msg` (CI doesn't check subjects); the PreToolUse flag blocker is not built |
 | GR-018 | No `git reset --hard`, `git clean -f`, `rm -rf` | PreToolUse hook on shell commands | Remote keeps pushed history | Brief only |
@@ -34,8 +34,10 @@ Rules about the app itself, enforced by the test suite inside `make check`.
 | INV-03 | The API key and upstream bodies never appear in responses, events, logs or exception text | Test that triggers every upstream error path and greps all output for the fake key; secret scan |
 | INV-04 | Every JSON endpoint returns the envelope (the widget page and CSV reports are the only exceptions) | Router-level test over every JSON route |
 | INV-05 | Unvalidated input never reaches an upstream URL | Unit tests on `ExchangeRateClient` with a mocked HTTP handler |
-| INV-06 | Tests never reach the network or load the real key | Test bootstrap sets a fake key and fails any test that builds a real HTTP handler |
+| INV-06 | Tests never reach the network or load the real key | `-d allow_url_fopen=0` in the Composer gate scripts and a stream-wrapper guard that fails the run even when the exception is swallowed (P1-01, ADR 0018); curl and Guzzle added in P1-04 |
 | INV-07 | A failed metrics write never fails the user's request | Acceptance test in P1-01 against a read-only database |
+| INV-08 | Every request, including blocked ones, writes exactly one `requests` row; the query string is never stored | Acceptance test in P1-11 (ADR 0016) |
+| INV-09 | No database column stores a float; money is integer cents, rates are integers scaled by 10^10 | Acceptance test in P1-02 that inspects every column type (ADR 0017) |
 
 ## Known limits
 
@@ -60,6 +62,10 @@ Rules about the app itself, enforced by the test suite inside `make check`.
 - The default `git merge --squash` message ("Squashed commit of the following:") is rejected; give
   the commit a `<ID>: …` subject (L-04).
 - `install-hooks.php` writes hooks in place, not atomically (L-04).
+- The no-network guard covers PHP stream wrappers (and, from P1-04, curl and Guzzle), not raw
+  sockets (`tcp://`, `ssl://`, `fsockopen`); review is the backstop.
+- Until nginx is in front (P3-01), the app can't drop a blocked IP's connection before answering;
+  it sends a minimal 403 `IP_BLOCKED` with `Connection: close` instead.
 - PreToolUse hooks match command text; indirect paths (variables, generated scripts) can slip past
   them. GR-030 forbids trying, and review is the backstop.
 - Owner sessions run with `AGENT_GUARD_OFF=1` and rely on review instead of guards.
