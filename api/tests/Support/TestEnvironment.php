@@ -104,6 +104,25 @@ final class TestEnvironment
     }
 
     /**
+     * Deletes a database made by freshDatabasePath() (with its WAL files and folder). Call it
+     * from tearDown() once every PDO on the file is released: on Windows an open SQLite file
+     * can't be deleted, and the shutdown cleanup then leaves it behind. Returns whether the
+     * folder is gone.
+     */
+    public static function removeDatabase(string $path): bool
+    {
+        gc_collect_cycles();
+        foreach (['', '-wal', '-shm', '-journal'] as $suffix) {
+            if (is_file($path . $suffix)) {
+                @unlink($path . $suffix);
+            }
+        }
+        self::removeTree(dirname($path));
+
+        return !is_dir(dirname($path));
+    }
+
+    /**
      * Deletes only paths under this suite's own temp root.
      */
     private static function removeTree(string $path): void

@@ -9,6 +9,7 @@
         "ext-mbstring": "*",
         "ext-openssl": "*",
         "ext-pdo_sqlite": "*",
+        "guzzlehttp/guzzle": "^8.3",
         "vlucas/phpdotenv": "^5.6"
     },
     "require-dev": {
@@ -32,19 +33,19 @@
     },
     "scripts": {
         "lint": "@php bin/lint.php",
-        "test": "@php -d allow_url_fopen=0 vendor/phpunit/phpunit/phpunit --testsuite Unit,Acceptance",
+        "test": "@php -d allow_url_fopen=0 -d disable_functions=curl_exec,curl_multi_exec vendor/phpunit/phpunit/phpunit --testsuite Unit,Acceptance",
         "check": [
             "@lint",
             "@test"
         ],
-        "acceptance": "@php -d allow_url_fopen=0 vendor/phpunit/phpunit/phpunit",
+        "acceptance": "@php -d allow_url_fopen=0 -d disable_functions=curl_exec,curl_multi_exec vendor/phpunit/phpunit/phpunit",
         "test-guards": "phpunit --testsuite Guards"
     },
     "scripts-descriptions": {
         "lint": "Run php -l on every .php file under src/, tests/, bin/, public/ and db/.",
-        "test": "Run the Unit and Acceptance suites, with allow_url_fopen off (INV-06).",
+        "test": "Run the Unit and Acceptance suites, with allow_url_fopen off and curl_exec/curl_multi_exec disabled (INV-06).",
         "check": "Lint, then test.",
-        "acceptance": "Run PHPUnit on the path given after --, with allow_url_fopen off (INV-06).",
+        "acceptance": "Run PHPUnit on the path given after --, with allow_url_fopen off and curl_exec/curl_multi_exec disabled (INV-06).",
         "test-guards": "Run the git hook guard tests (needs sh)."
     }
 }

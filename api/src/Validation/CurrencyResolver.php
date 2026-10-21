@@ -12,7 +12,9 @@ use LogicException;
  *
  * The whole text is folded (`TextNormalizer`: case, accents, spaces) and matched exactly, in
  * this order:
- * 1. an ambiguous name or symbol (`$`, `peso`, `dólar`) → unclear, never a guess;
+ * 1. an ambiguous name or symbol (`$`, `peso`, `dólar`) → unclear, never a guess; so is an
+ *    English word that is also a code (`try`, `all`; `CurrencySynonyms::CODE_WORDS`) unless
+ *    it was typed in capitals (`TRY` → TRY);
  * 2. a 3-letter code on the allow-list (`eur`, `BRL`) → that code, no country;
  * 3. the synonym table (`reais`, `R$`, `euro`) → its code, no country;
  * 4. the currency-country map (`brazil`, `España`) → its code and the canonical country name;
@@ -42,6 +44,9 @@ final class CurrencyResolver
         }
 
         if (isset(self::ambiguous()[$folded])) {
+            return CurrencyResolution::unclear();
+        }
+        if (in_array($folded, CurrencySynonyms::CODE_WORDS, true) && !self::typedInCapitals($text)) {
             return CurrencyResolution::unclear();
         }
 
@@ -121,6 +126,15 @@ final class CurrencyResolver
         }
 
         return self::$ambiguous;
+    }
+
+    /**
+     * Whether the text is three capital ASCII letters, ignoring surrounding whitespace. Only
+     * called on text fold() accepted, so it is valid UTF-8.
+     */
+    private static function typedInCapitals(string $text): bool
+    {
+        return preg_match('/^[\s\p{Z}]*[A-Z]{3}[\s\p{Z}]*$/Du', $text) === 1;
     }
 
     private static function foldEntry(string $name): string

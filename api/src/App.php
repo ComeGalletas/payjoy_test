@@ -15,6 +15,11 @@ use FxInstallments\Http\Kernel;
 use FxInstallments\Http\RateLimiter;
 use FxInstallments\Http\Router;
 use FxInstallments\Metrics\Metrics;
+use FxInstallments\Rates\ExchangeRateClient;
+use FxInstallments\Rates\RateCache;
+use FxInstallments\Rates\RateStore;
+use FxInstallments\Rates\RateTableAllowList;
+use FxInstallments\Rates\UpstreamBreaker;
 use PDO;
 
 /**
@@ -29,16 +34,22 @@ final class App
     /** @var Closure(): int */
     private readonly Closure $clock;
 
+    private ?RateCache $rates = null;
+
     /**
      * @param (Closure(): int)|null $clock UTC epoch seconds; defaults to time()
      * @param (Closure(string): void)|null $errorLog where Metrics and Kernel note failures;
      *        defaults to error_log()
+     * @param ExchangeRateClient|null $rateClient the upstream client; defaults to
+     *        ExchangeRateClient::fromEnvironment(), built on first use of rates(). Tests pass
+     *        one with a mocked handler.
      */
     public function __construct(
         public readonly ConfigRepository $config,
         public readonly Connection $db,
         ?Closure $clock = null,
         private readonly ?Closure $errorLog = null,
+        private ?ExchangeRateClient $rateClient = null,
     ) {
         $this->clock = $clock ?? static fn (): int => time();
         $this->metrics = new Metrics($db, $this->clock, $errorLog);
@@ -101,5 +112,33 @@ final class App
     public function cors(): Cors
     {
         return new Cors($this->config->stringList('cors.allowed_origins'));
+    }
+
+    public function upstreamBreaker(): UpstreamBreaker
+    {
+        return new UpstreamBreaker($this->db, $this->clock);
+    }
+
+    /**
+     * The rate cache (P1-04). The upstream client is built on first use.
+     */
+    public function rates(): RateCache
+    {
+        return $this->rates ??= new RateCache(
+            new RateStore($this->db),
+            $this->rateClient ??= ExchangeRateClient::fromEnvironment(),
+            $this->upstreamBreaker(),
+            $this->metrics,
+            $this->config->int('rates.max_stale_hours'),
+            $this->clock,
+        );
+    }
+
+    /**
+     * The real allow-list: the stored rate table's codes, or the fallback currency list.
+     */
+    public function currencyAllowList(): RateTableAllowList
+    {
+        return new RateTableAllowList(new RateStore($this->db));
     }
 }
