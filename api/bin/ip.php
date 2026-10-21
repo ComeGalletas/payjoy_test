@@ -15,8 +15,10 @@ declare(strict_types=1);
  *                           a raw IP until removed, so review them
  *
  * The IP is stored in its canonical form (lowercase, compressed IPv6), which is how PHP and
- * web servers report REMOTE_ADDR. Refuses to run while the database is behind the code (run
- * bin/migrate.php first). Exit codes: 0 done, 1 failed, 2 usage.
+ * web servers report REMOTE_ADDR. `block` and `unblock` write `ip.block` / `ip.unblock` events
+ * without the IP or the reason text. Refuses to run while the database is behind the code,
+ * or its SQLite file is missing (run bin/migrate.php first). Exit codes: 0 done, 1 failed,
+ * 2 usage.
  */
 
 use FxInstallments\Bootstrap;
@@ -26,6 +28,7 @@ use FxInstallments\Db\Migrator;
 use FxInstallments\Http\IpBlock;
 use FxInstallments\Http\IpBlocking;
 use FxInstallments\Http\IpBlocks;
+use FxInstallments\Metrics\Metrics;
 
 $apiRoot = dirname(__DIR__);
 require $apiRoot . '/vendor/autoload.php';
@@ -51,6 +54,7 @@ $command = $args[0] ?? null;
 $ip = null;
 $minutes = null;
 $reason = 'manual';
+$reasonGiven = false;
 
 if ($command === 'list' && count($args) === 1) {
     // nothing else to read
@@ -71,8 +75,9 @@ if ($command === 'list' && count($args) === 1) {
             $minutes = (int) $match[2];
         } else {
             $reason = trim($match[2]);
-            if ($reason === '' || strlen($reason) > IpBlocks::MAX_REASON || preg_match('/[\x00-\x1F\x7F]/', $reason) === 1) {
-                $usage('--reason must be 1 to ' . IpBlocks::MAX_REASON . ' characters with no control characters');
+            $reasonGiven = true;
+            if (!IpBlocks::isValidReason($reason)) {
+                $usage('--reason must be 1 to ' . IpBlocks::MAX_REASON . ' characters of UTF-8 text with no control characters');
             }
         }
     }
@@ -92,13 +97,31 @@ $describe = static fn (IpBlock $block): string => sprintf(
 
 try {
     Bootstrap::init($apiRoot);
+    // A missing SQLite file is refused before connecting, so this never creates one.
+    $dsn = Database::dsnFromEnvironment($apiRoot);
+    if (str_starts_with($dsn, 'sqlite:') && substr($dsn, 7) !== ':memory:' && !is_file(substr($dsn, 7))) {
+        fwrite(STDERR, "ip: failed: no database file (run php bin/migrate.php first)\n");
+        exit(1);
+    }
     $pdo = Database::fromEnvironment($apiRoot);
     (new Migrator($pdo))->assertCurrent();
-    $blocks = new IpBlocks(Connection::wrap($pdo));
+    $db = Connection::wrap($pdo);
+    $blocks = new IpBlocks($db);
+    // ip.block / ip.unblock events never hold the IP, nor the reason text (an operator may
+    // type an IP there). A failed event write is noted on stderr and never fails the command.
+    $metrics = new Metrics($db);
     $now = time();
 
     if ($command === 'block') {
         $block = $blocks->blockManually((string) $ip, $reason, $now, $minutes === null ? null : $now + $minutes * 60);
+        $metrics->record('ip.block', [
+            'source' => 'api',
+            'meta' => [
+                'source' => IpBlock::MANUAL,
+                'reason' => $reasonGiven ? 'given' : 'default',
+                'duration_minutes' => $minutes,
+            ],
+        ]);
         fwrite(STDOUT, sprintf(
             "ip: blocked %s (manual) %s\n",
             $block->ip,
@@ -109,6 +132,13 @@ try {
 
     if ($command === 'unblock') {
         $lifted = $blocks->unblock((string) $ip, $now);
+        $metrics->record('ip.unblock', [
+            'source' => 'api',
+            'meta' => [
+                'source' => $lifted?->source,
+                'was_active' => $lifted !== null,
+            ],
+        ]);
         fwrite(STDOUT, $lifted === null
             ? "ip: {$ip} had no active block\n"
             : sprintf("ip: unblocked %s (was %s)\n", $lifted->ip, $describe($lifted)));

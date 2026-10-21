@@ -41,9 +41,11 @@ final class RequestLogTest extends TestCase
     }
 
     #[DataProvider('paths')]
-    public function testThePathHasNoQueryStringAndIsCutTo200Bytes(string $path, string $stored): void
+    public function testThePathIsAsciiWithoutQueryStringAndAtMost200Characters(string $path, string $stored): void
     {
         self::assertSame($stored, RequestLog::storedPath($path));
+        self::assertLessThanOrEqual(200, strlen($stored));
+        self::assertMatchesRegularExpression('/^[\x21-\x7E]*$/', $stored);
 
         $this->requestLog()->record(self::NOW, '203.0.113.7', 'GET', $path, 404, 1, false);
         self::assertSame($stored, $this->rows()[0]['path']);
@@ -54,24 +56,66 @@ final class RequestLogTest extends TestCase
      */
     public static function paths(): iterable
     {
+        $a199 = '/' . str_repeat('a', 199);
         yield 'plain' => ['/convert', '/convert'];
         yield 'query string' => ['/convert?amount=200&token=secret', '/convert'];
         yield 'empty query' => ['/convert?', '/convert'];
         yield 'fragment' => ['/a#b?c', '/a'];
         yield 'only a query' => ['?x=1', ''];
-        yield 'exactly 200' => ['/' . str_repeat('a', 199), '/' . str_repeat('a', 199)];
-        yield '201 cut to 200' => ['/' . str_repeat('a', 200), '/' . str_repeat('a', 199)];
+        yield 'a 200-character ASCII path stays unchanged' => [$a199, $a199];
+        yield '201 cut to 200' => ['/' . str_repeat('a', 200), $a199];
         yield 'long with query' => ['/' . str_repeat('b', 300) . '?q=1', '/' . str_repeat('b', 199)];
         yield 'query after 200 bytes' => ['/' . str_repeat('c', 250) . '?secret', '/' . str_repeat('c', 199)];
+        yield 'é is percent-encoded' => ['/caf' . "\u{e9}", '/caf%C3%A9'];
+        yield 'an invalid byte is percent-encoded' => ["/x\xFFy", '/x%FFy'];
+        yield 'a space is percent-encoded' => ['/a b', '/a%20b'];
+        yield 'control bytes and DEL are percent-encoded' => ["/\t\x00\x7F", '/%09%00%7F'];
+        yield 'existing escapes are kept' => ['/caf%C3%A9', '/caf%C3%A9'];
+        // 197 ASCII + "é" (%C3%A9): the cut at 200 would land inside "%C3" or "%A9".
+        yield 'cut would split the 1st escape after its %' => ['/' . str_repeat('d', 198) . "\u{e9}", '/' . str_repeat('d', 198)];
+        yield 'cut would split the 1st escape after %C' => ['/' . str_repeat('d', 197) . "\u{e9}", '/' . str_repeat('d', 197)];
+        yield 'cut would split the 2nd escape' => ['/' . str_repeat('d', 194) . "\u{e9}", '/' . str_repeat('d', 194) . '%C3'];
+        yield 'cut right after an escape keeps it' => ['/' . str_repeat('d', 193) . "\u{e9}", '/' . str_repeat('d', 193) . '%C3%A9'];
+        yield 'a client escape at the cut is not split either' => ['/' . str_repeat('d', 198) . '%41', '/' . str_repeat('d', 198)];
+        yield 'a lone % at the cut is kept' => ['/' . str_repeat('d', 198) . '%zz', '/' . str_repeat('d', 198) . '%'];
     }
 
-    public function testTheMethodAndIpAreBounded(): void
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function methods(): iterable
     {
-        $this->requestLog()->record(self::NOW, str_repeat('9', 100), str_repeat('X', 40), '/', 404, 1, false);
+        yield 'GET' => ['GET', 'GET'];
+        yield 'exactly 16' => [str_repeat('X', 16), str_repeat('X', 16)];
+        yield 'cut to 16' => [str_repeat('X', 40), str_repeat('X', 16)];
+        yield 'non-ASCII is percent-encoded' => ["G\u{c9}T", 'G%C3%89T'];
+        yield 'a space is percent-encoded' => ['GE T', 'GE%20T'];
+        yield 'the cut never splits an escape' => [str_repeat('M', 14) . "\xFF", str_repeat('M', 14)];
+    }
 
-        $row = $this->rows()[0];
-        self::assertSame(str_repeat('9', RequestLog::MAX_IP), $row['ip']);
-        self::assertSame(str_repeat('X', RequestLog::MAX_METHOD), $row['method']);
+    #[DataProvider('methods')]
+    public function testTheMethodIsAsciiAndAtMost16Characters(string $method, string $stored): void
+    {
+        self::assertSame($stored, RequestLog::storedMethod($method));
+
+        $this->requestLog()->record(self::NOW, '203.0.113.7', $method, '/', 404, 1, false);
+        self::assertSame($stored, $this->rows()[0]['method']);
+    }
+
+    public function testStoredValuesAreValidUtf8AndEncodeAsJson(): void
+    {
+        $path = RequestLog::storedPath('/' . str_repeat("\u{e9}", 150));
+
+        self::assertTrue(mb_check_encoding($path, 'UTF-8'));
+        self::assertSame('"' . $path . '"', json_encode($path, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+        self::assertSame('/' . str_repeat('%C3%A9', 33), $path);
+    }
+
+    public function testTheIpIsBounded(): void
+    {
+        $this->requestLog()->record(self::NOW, str_repeat('9', 100), 'GET', '/', 404, 1, false);
+
+        self::assertSame(str_repeat('9', RequestLog::MAX_IP), $this->rows()[0]['ip']);
     }
 
     public function testANegativeLatencyIsStoredAsZero(): void
@@ -110,30 +154,37 @@ final class RequestLogTest extends TestCase
         self::assertFalse($log->record(self::NOW, '203.0.113.7', 'GET', '/', 200, 1, false));
     }
 
-    public function testClientErrorCountsCoverUnblocked4xxSinceTheGivenTime(): void
+    public function testClientErrorCountsAreRateLimitedMinutesAndOther4xx(): void
     {
         $log = $this->requestLog();
         $ip = '203.0.113.7';
+        $minute = intdiv(self::NOW, 60) * 60;
         foreach ([
-            [self::NOW - 1, 429, false],   // before $since
-            [self::NOW, 429, false],
-            [self::NOW, 404, false],
-            [self::NOW + 5, 429, false],
-            [self::NOW + 5, 400, false],
-            [self::NOW + 5, 499, false],
-            [self::NOW + 5, 403, true],    // blocked: never counted
-            [self::NOW + 5, 500, false],   // 5xx: not a client error
-            [self::NOW + 5, 503, false],
-            [self::NOW + 5, 200, false],
-            [self::NOW + 5, 399, false],
+            [$minute - 1, 429, false],     // the minute before, and before $since below
+            [$minute, 429, false],         // minute 0, three times: counts once
+            [$minute + 30, 429, false],
+            [$minute + 59, 429, false],
+            [$minute + 60, 429, false],    // minute 1
+            [$minute + 60, 429, true],     // blocked: never counted
+            [$minute + 180, 429, true],    // a minute with only a blocked 429: not counted
+            [$minute, 404, false],
+            [$minute + 5, 400, false],
+            [$minute + 5, 499, false],
+            [$minute + 5, 403, true],      // blocked: never counted
+            [$minute + 5, 500, false],     // 5xx: not a client error
+            [$minute + 5, 503, false],
+            [$minute + 5, 200, false],
+            [$minute + 5, 399, false],
         ] as [$ts, $status, $blocked]) {
             $log->record($ts, $ip, 'GET', '/', $status, 1, $blocked);
         }
-        $log->record(self::NOW, '198.51.100.1', 'GET', '/', 429, 1, false);
+        $log->record($minute + 120, '198.51.100.1', 'GET', '/', 429, 1, false);
 
-        self::assertSame([2, 5], $log->clientErrorCountsSince($ip, self::NOW));
-        self::assertSame([3, 6], $log->clientErrorCountsSince($ip, self::NOW - 1));
-        self::assertSame([0, 0], $log->clientErrorCountsSince($ip, self::NOW + 6));
+        self::assertSame([2, 3], $log->clientErrorCountsSince($ip, $minute));
+        self::assertSame([3, 3], $log->clientErrorCountsSince($ip, $minute - 1));
+        self::assertSame([2, 0], $log->clientErrorCountsSince($ip, $minute + 6));
+        self::assertSame([1, 0], $log->clientErrorCountsSince($ip, $minute + 60));
+        self::assertSame([0, 0], $log->clientErrorCountsSince($ip, $minute + 61));
         self::assertSame([0, 0], $log->clientErrorCountsSince('192.0.2.1', 0));
     }
 

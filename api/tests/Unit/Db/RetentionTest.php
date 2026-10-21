@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Db;
 
 use FxInstallments\Db\Retention;
+use FxInstallments\Http\IpBlocking;
 use FxInstallments\Tests\Support\TestEnvironment;
 use InvalidArgumentException;
 use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -62,16 +64,37 @@ final class RetentionTest extends TestCase
         self::assertSame(['at'], $this->column('SELECT ip FROM requests'));
     }
 
-    public function testBlocksGoOnceTheirExpiryIsReachedAndPermanentOnesStay(): void
+    /**
+     * An ended block is kept one block.window_minutes past its expiry (owner decision,
+     * 2026-10-21), so IpBlocking's clean slate survives a prune.
+     */
+    public function testBlocksGoAWindowAfterTheyEndAndPermanentOnesStay(): void
     {
+        $window = 10 * 60;
         $insert = $this->pdo->prepare('INSERT INTO ip_blocks (ip, reason, source, blocked_at, expires_at) VALUES (?, ?, ?, 0, ?)');
-        $insert->execute(['auto-at', 'r', 'auto', self::NOW]);
-        $insert->execute(['manual-before', 'r', 'manual', self::NOW - 1]);
-        $insert->execute(['auto-after', 'r', 'auto', self::NOW + 1]);
+        $insert->execute(['auto-exactly-a-window', 'r', 'auto', self::NOW - $window]);
+        $insert->execute(['manual-over-a-window', 'r', 'manual', self::NOW - $window - 1]);
+        $insert->execute(['auto-a-second-short', 'r', 'auto', self::NOW - $window + 1]);
+        $insert->execute(['manual-ended-now', 'r', 'manual', self::NOW]);
+        $insert->execute(['auto-active', 'r', 'auto', self::NOW + 1]);
         $insert->execute(['manual-forever', 'r', 'manual', null]);
 
         self::assertSame(2, $this->prune()['ip_blocks']);
-        self::assertSame(['auto-after', 'manual-forever'], $this->column('SELECT ip FROM ip_blocks ORDER BY ip'));
+        self::assertSame(
+            ['auto-a-second-short', 'auto-active', 'manual-ended-now', 'manual-forever'],
+            $this->column('SELECT ip FROM ip_blocks ORDER BY ip'),
+        );
+    }
+
+    public function testTheBlockWindowComesFromTheSetting(): void
+    {
+        $insert = $this->pdo->prepare('INSERT INTO ip_blocks (ip, reason, source, blocked_at, expires_at) VALUES (?, ?, ?, 0, ?)');
+        $insert->execute(['ended-90s-ago', 'r', 'auto', self::NOW - 90]);
+        $insert->execute(['ended-60s-ago', 'r', 'auto', self::NOW - 60]);
+        $insert->execute(['ended-59s-ago', 'r', 'auto', self::NOW - 59]);
+
+        self::assertSame(2, $this->prune(blockWindowMinutes: 1)['ip_blocks']);
+        self::assertSame(['ended-59s-ago'], $this->column('SELECT ip FROM ip_blocks'));
     }
 
     public function testEventsAreNeverPrunedAndCountsCoverEveryTable(): void
@@ -85,15 +108,33 @@ final class RetentionTest extends TestCase
     public function testTheRetentionMustBePositive(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        new Retention($this->pdo, 0);
+        new Retention($this->pdo, 0, 10);
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function invalidBlockWindows(): iterable
+    {
+        yield 'zero' => [0];
+        yield 'negative' => [-10];
+        yield 'over a year' => [IpBlocking::MAX_MINUTES + 1];
+    }
+
+    #[DataProvider('invalidBlockWindows')]
+    public function testTheBlockWindowIsValidatedAsIpBlockingDoes(int $minutes): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('block.window_minutes must be between 1 and 525600');
+        new Retention($this->pdo, 30, $minutes);
     }
 
     /**
      * @return array<string, int>
      */
-    private function prune(int $retentionDays = 30): array
+    private function prune(int $retentionDays = 30, int $blockWindowMinutes = 10): array
     {
-        return (new Retention($this->pdo, $retentionDays))->prune(self::NOW);
+        return (new Retention($this->pdo, $retentionDays, $blockWindowMinutes))->prune(self::NOW);
     }
 
     /**

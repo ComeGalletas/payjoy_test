@@ -6,6 +6,7 @@ namespace FxInstallments\Http;
 
 use Closure;
 use FxInstallments\Db\Connection;
+use FxInstallments\Metrics\RequestLog;
 use InvalidArgumentException;
 use PDO;
 use PDOException;
@@ -22,8 +23,8 @@ use Throwable;
  * - an automatic block on an active automatic one extends its `expires_at` to the later of the
  *   two (its `blocked_at` and reason stay);
  * - unblocking ends an active block now (`expires_at = now`) instead of deleting the row, so
- *   the requests before it never count toward the next automatic block (IpBlocking) and
- *   `--prune` removes it like any expired block.
+ *   the requests before it never count toward the next automatic block (IpBlocking);
+ *   `--prune` removes it one `block.window_minutes` later, like any ended block (Retention).
  *
  * Each write transaction starts with a no-op UPDATE on the IP's row, which takes SQLite's write
  * lock up front (no lock upgrade, so busy_timeout applies), as RateLimiter does. A concurrent
@@ -31,7 +32,7 @@ use Throwable;
  */
 final class IpBlocks
 {
-    public const MAX_IP = 64;
+    /** Characters, not bytes. */
     public const MAX_REASON = 200;
 
     public function __construct(private readonly Connection $db)
@@ -63,30 +64,34 @@ final class IpBlocks
     }
 
     /**
-     * Blocks $ip automatically from $now until $expiresAt. Returns the row as it now stands:
-     * an active manual block is returned unchanged.
+     * Blocks $ip automatically from $now until $expiresAt. Returns the row as it now stands and
+     * what was done: an active manual block, or an active automatic one that already ends
+     * later, is left unchanged.
      */
-    public function blockAutomatically(string $ip, string $reason, int $now, int $expiresAt): IpBlock
+    public function blockAutomatically(string $ip, string $reason, int $now, int $expiresAt): AutoBlockOutcome
     {
         self::checkIpAndReason($ip, $reason);
         if ($expiresAt <= $now) {
             throw new InvalidArgumentException('An automatic block must expire after it starts');
         }
 
-        return $this->write($ip, static function (PDO $pdo, ?IpBlock $existing) use ($ip, $reason, $now, $expiresAt): IpBlock {
+        return $this->write($ip, static function (PDO $pdo, ?IpBlock $existing) use ($ip, $reason, $now, $expiresAt): AutoBlockOutcome {
             if ($existing !== null && $existing->isActiveAt($now)) {
-                if ($existing->isManual()) {
-                    return $existing;
+                if ($existing->isManual() || (int) $existing->expiresAt >= $expiresAt) {
+                    return new AutoBlockOutcome($existing, AutoBlockOutcome::UNCHANGED);
                 }
-                $later = max((int) $existing->expiresAt, $expiresAt);
-                if ($later !== $existing->expiresAt) {
-                    $pdo->prepare('UPDATE ip_blocks SET expires_at = ? WHERE ip = ?')->execute([$later, $ip]);
-                }
+                $pdo->prepare('UPDATE ip_blocks SET expires_at = ? WHERE ip = ?')->execute([$expiresAt, $ip]);
 
-                return new IpBlock($ip, $existing->reason, IpBlock::AUTO, $existing->blockedAt, $later);
+                return new AutoBlockOutcome(
+                    new IpBlock($ip, $existing->reason, IpBlock::AUTO, $existing->blockedAt, $expiresAt),
+                    AutoBlockOutcome::EXTENDED,
+                );
             }
 
-            return self::put($pdo, $existing, new IpBlock($ip, $reason, IpBlock::AUTO, $now, $expiresAt));
+            return new AutoBlockOutcome(
+                self::put($pdo, $existing, new IpBlock($ip, $reason, IpBlock::AUTO, $now, $expiresAt)),
+                AutoBlockOutcome::STARTED,
+            );
         });
     }
 
@@ -200,13 +205,24 @@ final class IpBlocks
         );
     }
 
+    /**
+     * A reason is 1 to MAX_REASON characters of valid UTF-8 with no control characters.
+     */
+    public static function isValidReason(string $reason): bool
+    {
+        return $reason !== ''
+            && mb_check_encoding($reason, 'UTF-8')
+            && mb_strlen($reason, 'UTF-8') <= self::MAX_REASON
+            && preg_match('/[\x00-\x1F\x7F]/', $reason) !== 1;
+    }
+
     private static function checkIpAndReason(string $ip, string $reason): void
     {
-        if ($ip === '' || strlen($ip) > self::MAX_IP) {
-            throw new InvalidArgumentException('A block needs an IP of 1 to ' . self::MAX_IP . ' characters');
+        if ($ip === '' || strlen($ip) > RequestLog::MAX_IP) {
+            throw new InvalidArgumentException('A block needs an IP of 1 to ' . RequestLog::MAX_IP . ' characters');
         }
-        if ($reason === '' || strlen($reason) > self::MAX_REASON || preg_match('/[\x00-\x1F\x7F]/', $reason) === 1) {
-            throw new InvalidArgumentException('A block reason must be 1 to ' . self::MAX_REASON . ' characters with no control characters');
+        if (!self::isValidReason($reason)) {
+            throw new InvalidArgumentException('A block reason must be 1 to ' . self::MAX_REASON . ' characters of UTF-8 text with no control characters');
         }
     }
 }

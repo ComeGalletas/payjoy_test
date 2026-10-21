@@ -23,8 +23,9 @@ use Throwable;
  *   message and trace never reach the response or the event; the error log gets its class,
  *   file and line only.
  * - Every error response that reached routing is recorded as an `error` event with its code,
- *   HTTP status, method, path (never the query string) and latency. Metrics never throws
- *   (INV-07).
+ *   HTTP status, method, path and latency. Method and path follow the request log's rules
+ *   (RequestLog::storedMethod(), storedPath()): no query string or fragment, ASCII only, cut
+ *   without splitting an escape. Metrics never throws (INV-07).
  * - **Request log:** every request handled here, blocked ones included, writes exactly one
  *   `requests` row with its final status and latency (time until the response was built,
  *   block check included). A failed write never fails the request.
@@ -36,8 +37,6 @@ use Throwable;
  */
 final class Kernel
 {
-    private const MAX_PATH_IN_EVENT = 200;
-
     /** @var Closure(string): void */
     private readonly Closure $errorLog;
 
@@ -94,8 +93,8 @@ final class Kernel
                 'latency_ms' => $latencyMs,
                 'meta' => [
                     'http_status' => $response->status(),
-                    'method' => substr($request->method(), 0, 16),
-                    'path' => substr($request->path(), 0, self::MAX_PATH_IN_EVENT),
+                    'method' => RequestLog::storedMethod($request->method()),
+                    'path' => RequestLog::storedPath($request->path()),
                 ] + $meta,
             ]);
         }

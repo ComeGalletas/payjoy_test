@@ -123,9 +123,9 @@ final class IpCliTest extends TestCase
         yield 'negative minutes' => [['block', '203.0.113.7', '--minutes=-5'], "ip: --minutes must be a whole number from 1 to 525600\n"];
         yield 'fractional minutes' => [['block', '203.0.113.7', '--minutes=1.5'], "ip: --minutes must be a whole number from 1 to 525600\n"];
         yield 'over a year' => [['block', '203.0.113.7', '--minutes=' . (IpBlocking::MAX_MINUTES + 1)], "ip: --minutes must be a whole number from 1 to 525600\n"];
-        yield 'empty reason' => [['block', '203.0.113.7', '--reason= '], "ip: --reason must be 1 to 200 characters with no control characters\n"];
-        yield 'reason with a newline' => [['block', '203.0.113.7', "--reason=a\nb"], "ip: --reason must be 1 to 200 characters with no control characters\n"];
-        yield 'long reason' => [['block', '203.0.113.7', '--reason=' . str_repeat('r', 201)], "ip: --reason must be 1 to 200 characters with no control characters\n"];
+        yield 'empty reason' => [['block', '203.0.113.7', '--reason= '], "ip: --reason must be 1 to 200 characters of UTF-8 text with no control characters\n"];
+        yield 'reason with a newline' => [['block', '203.0.113.7', "--reason=a\nb"], "ip: --reason must be 1 to 200 characters of UTF-8 text with no control characters\n"];
+        yield 'long reason' => [['block', '203.0.113.7', '--reason=' . str_repeat('r', 201)], "ip: --reason must be 1 to 200 characters of UTF-8 text with no control characters\n"];
     }
 
     /**
@@ -136,6 +136,55 @@ final class IpCliTest extends TestCase
     {
         self::assertSame([2, '', $problem . self::USAGE], $this->runCli($args));
         self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM ip_blocks')->fetchColumn());
+    }
+
+    public function testBlockAndUnblockWriteEventsWithoutTheIpOrTheReasonText(): void
+    {
+        $this->runCli(['block', '203.0.113.7']);
+        $this->runCli(['block', '203.0.113.8', '--minutes=15', '--reason=from 198.51.100.4']);
+        $this->runCli(['unblock', '203.0.113.7']);
+        $this->runCli(['unblock', '203.0.113.7']);
+
+        $events = $this->pdo->query('SELECT * FROM events ORDER BY id')->fetchAll();
+        self::assertSame(
+            [
+                ['ip.block', 'api', 'ok', '{"source":"manual","reason":"default","duration_minutes":null}'],
+                ['ip.block', 'api', 'ok', '{"source":"manual","reason":"given","duration_minutes":15}'],
+                ['ip.unblock', 'api', 'ok', '{"source":"manual","was_active":true}'],
+                ['ip.unblock', 'api', 'ok', '{"source":null,"was_active":false}'],
+            ],
+            array_map(static fn (array $row): array => [$row['event_type'], $row['source'], $row['status'], $row['meta']], $events),
+        );
+        $all = json_encode($events, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        foreach (['203.0.113', '198.51.100', '::ffff:'] as $form) {
+            self::assertStringNotContainsString($form, $all);
+        }
+    }
+
+    public function testAFailedEventWriteDoesNotFailTheCommand(): void
+    {
+        $this->pdo->exec("CREATE TRIGGER events_fail BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'no'); END");
+
+        [$exit, $out, $err] = $this->runCli(['block', '203.0.113.7']);
+        self::assertSame(0, $exit);
+        self::assertSame("ip: blocked 203.0.113.7 (manual) until unblocked\n", $out);
+        self::assertSame("fx-installments metrics: event ip.block not recorded (PDOException)\n", $err);
+
+        [$exit, $out, $err] = $this->runCli(['unblock', '203.0.113.7']);
+        self::assertSame(0, $exit);
+        self::assertStringStartsWith('ip: unblocked 203.0.113.7', $out);
+        self::assertSame("fx-installments metrics: event ip.unblock not recorded (PDOException)\n", $err);
+        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM events')->fetchColumn());
+    }
+
+    public function testAMissingDatabaseFileIsRefusedWithoutCreatingIt(): void
+    {
+        $path = TestEnvironment::tempDir('ip-cli-missing') . '/missing.db';
+
+        foreach ([['list'], ['block', '203.0.113.7'], ['unblock', '203.0.113.7']] as $args) {
+            self::assertSame([1, '', "ip: failed: no database file (run php bin/migrate.php first)\n"], $this->runCli($args, $path));
+        }
+        self::assertFileDoesNotExist($path);
     }
 
     public function testADatabaseBehindTheCodeIsRefused(): void

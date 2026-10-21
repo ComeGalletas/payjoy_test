@@ -6,6 +6,7 @@ namespace FxInstallments\Metrics;
 
 use Closure;
 use FxInstallments\Db\Connection;
+use PDO;
 use Throwable;
 
 /**
@@ -13,9 +14,12 @@ use Throwable;
  * with the raw client IP, method, path, final status, latency and whether it was blocked.
  * Business events stay in `events` (Metrics).
  *
- * - The path never carries the query string (anything from the first `?` or `#` is dropped)
- *   and is cut to 200 bytes; the method to 16. Both are byte cuts, like the `error` event's
- *   meta: request targets are ASCII (percent-encoded), so bytes are characters.
+ * - The path never carries the query string: anything from the first `?` or `#` is dropped.
+ * - Path and method are stored as pure ASCII: every byte outside 0x21-0x7E is percent-encoded
+ *   (`é` is `%C3%A9`, `\xFF` is `%FF`, a space is `%20`), then the value is cut to 200 (path)
+ *   or 16 (method) characters without splitting a `%XX` escape. So a stored path is always
+ *   valid UTF-8 (portable to Postgres TEXT) and "200 characters" holds. The Kernel's `error`
+ *   event uses the same rules (storedPath(), storedMethod()).
  * - A failed write never fails the request (the INV-07 policy of Metrics): every Throwable is
  *   caught and a short note naming the exception class only goes to the fallback logger.
  *
@@ -26,7 +30,7 @@ final class RequestLog
 {
     public const MAX_PATH = 200;
     public const MAX_METHOD = 16;
-    /** Longer than any textual IPv6 address (45). */
+    /** The one IP length bound (requests.ip and ip_blocks.ip); longer than any textual IPv6 address (45). */
     public const MAX_IP = 64;
 
     /** @var Closure(string): void */
@@ -53,7 +57,7 @@ final class RequestLog
                 ->execute([
                     $ts,
                     substr($ip, 0, self::MAX_IP),
-                    substr($method, 0, self::MAX_METHOD),
+                    self::storedMethod($method),
                     self::storedPath($path),
                     $status,
                     max(0, $latencyMs),
@@ -69,32 +73,71 @@ final class RequestLog
     }
 
     /**
-     * The client-error counts behind automatic blocking: responses from $ip with `ts >= $since`
-     * that were not blocked, as [429 responses, all 4xx responses (429s included)]. Blocked
-     * requests (403 IP_BLOCKED) are never counted. Throws on a database failure.
+     * The counts behind automatic blocking, over the requests from $ip with `ts >= $since` that
+     * were not blocked (blocked requests, 403 IP_BLOCKED, never count):
      *
-     * @return array{int, int}
+     * - rate-limited minutes: the number of distinct fixed one-minute UTC windows (`ts / 60`,
+     *   RateLimiter's `window_start`) with at least one 429;
+     * - other client errors: the number of 4xx responses other than 429.
+     *
+     * Integer `ts / 60` is integer division on SQLite and Postgres alike (ADR 0010). Throws on
+     * a database failure.
+     *
+     * @return array{int, int} [rate-limited minutes, other 4xx responses]
      */
     public function clientErrorCountsSince(string $ip, int $since): array
     {
         $select = $this->db->pdo()->prepare(
-            'SELECT SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END) AS rate_limited, COUNT(*) AS client_errors'
+            'SELECT COUNT(DISTINCT CASE WHEN status = 429 THEN ts / 60 END) AS rate_limited_minutes,'
+            . ' SUM(CASE WHEN status <> 429 THEN 1 ELSE 0 END) AS other_client_errors'
             . ' FROM requests WHERE ip = ? AND ts >= ? AND blocked = 0 AND status >= 400 AND status < 500',
         );
         $select->execute([substr($ip, 0, self::MAX_IP), $since]);
-        $row = $select->fetch(\PDO::FETCH_ASSOC);
+        $row = $select->fetch(PDO::FETCH_ASSOC);
 
-        return is_array($row) ? [(int) $row['rate_limited'], (int) $row['client_errors']] : [0, 0];
+        return is_array($row) ? [(int) $row['rate_limited_minutes'], (int) $row['other_client_errors']] : [0, 0];
     }
 
     /**
-     * The path as stored: no query string or fragment, at most MAX_PATH bytes.
+     * The path as stored: no query string or fragment, ASCII only, at most MAX_PATH characters.
      */
     public static function storedPath(string $path): string
     {
-        $cut = strcspn($path, '?#');
+        return self::asciiCut(substr($path, 0, strcspn($path, '?#')), self::MAX_PATH);
+    }
 
-        return substr(substr($path, 0, $cut), 0, self::MAX_PATH);
+    /**
+     * The method as stored: ASCII only, at most MAX_METHOD characters.
+     */
+    public static function storedMethod(string $method): string
+    {
+        return self::asciiCut($method, self::MAX_METHOD);
+    }
+
+    /**
+     * Percent-encodes every byte outside 0x21-0x7E, then cuts to $max characters, moving the
+     * cut back before a `%XX` escape it would split (the value's own escapes included).
+     */
+    private static function asciiCut(string $value, int $max): string
+    {
+        $encoded = (string) preg_replace_callback(
+            '/[^\x21-\x7E]/',
+            static fn (array $byte): string => sprintf('%%%02X', ord($byte[0])),
+            $value,
+        );
+        if (strlen($encoded) <= $max) {
+            return $encoded;
+        }
+        $cut = $max;
+        foreach ([1, 2] as $back) {
+            $at = $max - $back;
+            if ($encoded[$at] === '%' && preg_match('/^%[0-9A-Fa-f]{2}/', substr($encoded, $at, 3)) === 1) {
+                $cut = $at;
+                break;
+            }
+        }
+
+        return substr($encoded, 0, $cut);
     }
 
     private function noteFailure(Throwable $e): void

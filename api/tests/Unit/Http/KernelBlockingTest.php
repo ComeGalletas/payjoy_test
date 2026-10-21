@@ -51,7 +51,7 @@ final class KernelBlockingTest extends TestCase
             ['content-type' => 'application/json', 'x-content-type-options' => 'nosniff', 'connection' => 'close'],
             $response->headers(),
         );
-        self::assertSame('{"ok":false,"error":{"code":"IP_BLOCKED","message_for_user":"Access denied."}}', $response->body());
+        self::assertSame('{"ok":false,"error":{"code":"IP_BLOCKED","message_for_user":"Too many unusual requests came from your network. Please try again later."}}', $response->body());
         self::assertSame(0, $this->handlerRuns);
         self::assertSame(0, $this->rowCount('events'));
         self::assertSame([[self::IP, '/ok', 403, 1]], $this->requestRows());
@@ -180,6 +180,18 @@ final class KernelBlockingTest extends TestCase
         }, $app->requestLog(), $app->ipBlocking(), fn (): int => $this->clock->now);
 
         self::assertSame(200, $kernel->handle(new Request('GET', '/ok', remoteAddr: self::IP))->status());
+    }
+
+    public function testTheErrorEventUsesTheRequestLogPathAndMethodRules(): void
+    {
+        $path = '/caf' . "\u{e9}" . '/' . str_repeat('x', 300) . '#frag?q=1';
+        $this->kernel()->handle(new Request("P\u{d3}ST", $path, remoteAddr: self::IP));
+
+        $meta = json_decode((string) $this->pdo->query('SELECT meta FROM events')->fetchColumn(), true, flags: JSON_THROW_ON_ERROR);
+        $row = $this->pdo->query('SELECT method, path FROM requests')->fetch();
+        self::assertSame(['method' => $row['method'], 'path' => $row['path']], ['method' => $meta['method'], 'path' => $meta['path']]);
+        self::assertSame('P%C3%93ST', $meta['method']);
+        self::assertSame('/caf%C3%A9/' . str_repeat('x', 189), $meta['path']);
     }
 
     public function testEveryRequestWritesExactlyOneRow(): void

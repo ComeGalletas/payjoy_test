@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Http;
 
 use FxInstallments\Db\Connection;
+use FxInstallments\Http\AutoBlockOutcome;
 use FxInstallments\Http\IpBlock;
 use FxInstallments\Http\IpBlocks;
+use FxInstallments\Tests\Support\HookedPdo;
 use FxInstallments\Tests\Support\RacingPdo;
 use FxInstallments\Tests\Support\TestEnvironment;
 use InvalidArgumentException;
@@ -45,7 +47,7 @@ final class IpBlocksTest extends TestCase
 
     public function testAnAutomaticBlockOnANewIpWritesARow(): void
     {
-        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 3600);
+        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 3600)->block;
 
         self::assertEquals(new IpBlock(self::IP, 'rate_limit_hits', 'auto', self::NOW, self::NOW + 3600), $block);
         self::assertSame([[self::IP, 'rate_limit_hits', 'auto', self::NOW, self::NOW + 3600]], $this->rows());
@@ -117,7 +119,7 @@ final class IpBlocksTest extends TestCase
     {
         $this->insert('manual', 'operator', self::NOW - 60, $expiresAt);
 
-        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 3600);
+        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 3600)->block;
 
         self::assertEquals(new IpBlock(self::IP, 'operator', 'manual', self::NOW - 60, $expiresAt), $block);
         self::assertSame([[self::IP, 'operator', 'manual', self::NOW - 60, $expiresAt]], $this->rows());
@@ -127,7 +129,7 @@ final class IpBlocksTest extends TestCase
     {
         $this->insert('auto', 'rate_limit_hits', self::NOW - 600, self::NOW + 3000);
 
-        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_ERROR_RESPONSES, self::NOW, self::NOW + 3600);
+        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_ERROR_RESPONSES, self::NOW, self::NOW + 3600)->block;
 
         // The expiry moves; blocked_at and the reason stay.
         self::assertEquals(new IpBlock(self::IP, 'rate_limit_hits', 'auto', self::NOW - 600, self::NOW + 3600), $block);
@@ -138,7 +140,7 @@ final class IpBlocksTest extends TestCase
     {
         $this->insert('auto', 'rate_limit_hits', self::NOW - 600, self::NOW + 9000);
 
-        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_ERROR_RESPONSES, self::NOW, self::NOW + 3600);
+        $block = $this->blocks->blockAutomatically(self::IP, IpBlock::REASON_ERROR_RESPONSES, self::NOW, self::NOW + 3600)->block;
 
         self::assertSame(self::NOW + 9000, $block->expiresAt);
         self::assertSame([[self::IP, 'rate_limit_hits', 'auto', self::NOW - 600, self::NOW + 9000]], $this->rows());
@@ -215,11 +217,95 @@ final class IpBlocksTest extends TestCase
             $b->blockManually(self::IP, 'operator', self::NOW, null);
         });
 
-        $block = (new IpBlocks(Connection::wrap($a)))->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 3600);
+        $block = (new IpBlocks(Connection::wrap($a)))->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 3600)->block;
 
         self::assertEquals(new IpBlock(self::IP, 'operator', 'manual', self::NOW, null), $block);
         self::assertSame(['UPDATE (stale)', 'SELECT'], $a->statements);
         self::assertEquals($block, $b->find(self::IP));
+    }
+
+    public function testEveryStatementOfAWriteRunsInsideOneCommittedTransaction(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        $other = TestEnvironment::connect($path);
+        $other->exec("INSERT INTO ip_blocks (ip, reason, source, blocked_at, expires_at) VALUES ('203.0.113.7', 'old', 'auto', 0, 10)");
+        $hooked = HookedPdo::open($path);
+        $blocks = new IpBlocks(Connection::wrap($hooked));
+
+        $blocks->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 60);
+        $blocks->blockManually(self::IP, 'operator', self::NOW, null);
+        $blocks->unblock(self::IP, self::NOW);
+
+        // Lock-taking UPDATE, SELECT, then the write: all with the transaction open.
+        self::assertSame([
+            ['UPDATE', true], ['SELECT', true], ['UPDATE', true],
+            ['UPDATE', true], ['SELECT', true], ['UPDATE', true],
+            ['UPDATE', true], ['SELECT', true], ['UPDATE', true],
+        ], $hooked->prepared);
+        self::assertFalse($hooked->inTransaction());
+        // Committed: another connection sees the result.
+        self::assertSame(
+            [['source' => 'manual', 'expires_at' => self::NOW]],
+            $other->query('SELECT source, expires_at FROM ip_blocks')->fetchAll(),
+        );
+    }
+
+    /**
+     * Connection B tries to block the IP by hand between A's SELECT (which found an expired
+     * row) and A's write. A's transaction holds the write lock from its first statement, so B
+     * is refused at once (busy_timeout 0) instead of being silently overwritten by A.
+     */
+    public function testAWriteBetweenTheSelectAndTheWriteIsLockedOut(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        TestEnvironment::connect($path)
+            ->exec("INSERT INTO ip_blocks (ip, reason, source, blocked_at, expires_at) VALUES ('203.0.113.7', 'old', 'auto', 0, 10)");
+        $bPdo = TestEnvironment::connect($path);
+        $bPdo->exec('PRAGMA busy_timeout = 0');
+        $b = new IpBlocks(Connection::wrap($bPdo));
+        $a = HookedPdo::open($path);
+        $bOutcome = null;
+        $a->before('UPDATE ip_blocks SET reason = ?, source', static function () use ($b, &$bOutcome): void {
+            try {
+                $b->blockManually(self::IP, 'operator', self::NOW, null);
+                $bOutcome = 'written';
+            } catch (\PDOException) {
+                $bOutcome = 'locked out';
+            }
+        });
+
+        $outcome = (new IpBlocks(Connection::wrap($a)))->blockAutomatically(self::IP, IpBlock::REASON_RATE_LIMIT_HITS, self::NOW, self::NOW + 60);
+
+        self::assertSame('locked out', $bOutcome);
+        self::assertFalse($bPdo->inTransaction());
+        self::assertSame(AutoBlockOutcome::STARTED, $outcome->outcome);
+        self::assertEquals($outcome->block, $b->find(self::IP));
+    }
+
+    public function testOutcomesSayWhatWasDone(): void
+    {
+        self::assertSame(AutoBlockOutcome::STARTED, $this->blocks->blockAutomatically(self::IP, 'r', self::NOW, self::NOW + 60)->outcome);
+        self::assertSame(AutoBlockOutcome::EXTENDED, $this->blocks->blockAutomatically(self::IP, 'r', self::NOW, self::NOW + 61)->outcome);
+        self::assertSame(AutoBlockOutcome::UNCHANGED, $this->blocks->blockAutomatically(self::IP, 'r', self::NOW, self::NOW + 61)->outcome);
+        self::assertSame(AutoBlockOutcome::UNCHANGED, $this->blocks->blockAutomatically(self::IP, 'r', self::NOW, self::NOW + 30)->outcome);
+        $this->blocks->blockManually(self::IP, 'operator', self::NOW, self::NOW + 10);
+        self::assertSame(AutoBlockOutcome::UNCHANGED, $this->blocks->blockAutomatically(self::IP, 'r', self::NOW, self::NOW + 999)->outcome);
+        self::assertSame(AutoBlockOutcome::STARTED, $this->blocks->blockAutomatically(self::IP, 'r', self::NOW + 10, self::NOW + 99)->outcome);
+    }
+
+    public function testAReasonIsCountedInCharacters(): void
+    {
+        $this->blocks->blockManually(self::IP, str_repeat('é', IpBlocks::MAX_REASON), self::NOW, null);
+        self::assertSame(str_repeat('é', 200), $this->blocks->find(self::IP)?->reason);
+
+        foreach ([str_repeat('é', 201), "bad \xFF utf-8"] as $reason) {
+            try {
+                $this->blocks->blockManually(self::IP, $reason, self::NOW, null);
+                self::fail('the reason should have been refused');
+            } catch (InvalidArgumentException $e) {
+                self::assertSame('A block reason must be 1 to 200 characters of UTF-8 text with no control characters', $e->getMessage());
+            }
+        }
     }
 
     public function testAFailedWriteRollsBackAndLeavesNoOpenTransaction(): void

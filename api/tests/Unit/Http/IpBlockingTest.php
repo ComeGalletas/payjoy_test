@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace FxInstallments\Tests\Unit\Http;
 
+use ArrayObject;
+use Closure;
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Db\Connection;
+use FxInstallments\Http\AutoBlockOutcome;
 use FxInstallments\Http\IpBlock;
 use FxInstallments\Http\IpBlocking;
 use FxInstallments\Http\IpBlocks;
+use FxInstallments\Metrics\Metrics;
 use FxInstallments\Metrics\RequestLog;
 use FxInstallments\Tests\Support\TestEnvironment;
 use InvalidArgumentException;
@@ -18,7 +22,8 @@ use PHPUnit\Framework\TestCase;
 
 final class IpBlockingTest extends TestCase
 {
-    private const NOW = 1_790_000_000;
+    /** The first second of a UTC minute. */
+    private const NOW = 1_790_000_040;
     private const IP = '203.0.113.7';
     private const WINDOW = 600;      // block.window_minutes = 10
     private const DURATION = 3600;   // block.duration_minutes = 60
@@ -26,55 +31,105 @@ final class IpBlockingTest extends TestCase
     private PDO $pdo;
     private RequestLog $requests;
     private IpBlocks $blocks;
+    private Metrics $metrics;
+
+    /** @var ArrayObject<int, string> */
+    private ArrayObject $log;
 
     protected function setUp(): void
     {
         $this->pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
         $db = Connection::wrap($this->pdo);
-        $this->requests = new RequestLog($db, static function (): void {
-        });
+        $this->log = new ArrayObject();
+        $log = $this->log;
+        $note = static function (string $line) use ($log): void {
+            $log[] = $line;
+        };
+        $this->requests = new RequestLog($db, $note);
         $this->blocks = new IpBlocks($db);
+        $this->metrics = new Metrics($db, static fn (): int => self::NOW, $note);
     }
 
     public function testTheDefaultsComeFromConfig(): void
     {
-        $blocking = IpBlocking::fromConfig($this->blocks, $this->requests, new ConfigRepository(), null);
+        $blocking = IpBlocking::fromConfig($this->blocks, $this->requests, $this->metrics, new ConfigRepository(), null);
 
         self::assertSame([10, 5, 100, 60], [$blocking->windowMinutes, $blocking->rateLimitHits, $blocking->errorResponses, $blocking->durationMinutes]);
     }
 
-    public function testTheRateLimitHitThresholdIsReachedNotExceeded(): void
+    public function testManyRateLimitedResponsesInOneMinuteCountOnce(): void
+    {
+        $blocking = $this->blocking(rateLimitHits: 2);
+
+        $this->log(self::NOW, 429, 40);
+        $this->log(self::NOW + 59, 429, 40);
+
+        self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW + 59, null), 'one minute, however many 429s');
+        self::assertSame([], $this->blockRows());
+    }
+
+    public function testA35RequestBurstInOneMinuteNeverBlocksWithTheDefaults(): void
+    {
+        $blocking = IpBlocking::fromConfig($this->blocks, $this->requests, $this->metrics, new ConfigRepository(), null);
+
+        // 30 pass, 35 are rate-limited, all inside one minute.
+        $this->log(self::NOW, 200, 30);
+        $this->log(self::NOW + 30, 429, 35);
+
+        self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW + 30, null));
+    }
+
+    public function testRateLimitedMinutesReachingTheThresholdBlock(): void
     {
         $blocking = $this->blocking(rateLimitHits: 3);
 
-        $this->log(self::NOW, 429, 2);
-        self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW, null), 'two 429s are under three');
+        $this->log(self::NOW, 429, 5);
+        $this->log(self::NOW + 60, 429);
+        self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW + 60, null), 'two minutes are under three');
 
-        $this->log(self::NOW, 429);
-        $block = $blocking->afterResponse(self::IP, 429, self::NOW, null);
-        self::assertEquals(new IpBlock(self::IP, 'rate_limit_hits', 'auto', self::NOW, self::NOW + self::DURATION), $block);
-        self::assertEquals($block, $this->blocks->find(self::IP));
+        $this->log(self::NOW + 120, 429);
+        $outcome = $blocking->afterResponse(self::IP, 429, self::NOW + 120, null);
+        self::assertSame(AutoBlockOutcome::STARTED, $outcome?->outcome);
+        self::assertEquals(new IpBlock(self::IP, 'rate_limit_hits', 'auto', self::NOW + 120, self::NOW + 120 + self::DURATION), $outcome->block);
+        self::assertEquals($outcome->block, $this->blocks->find(self::IP));
     }
 
-    public function testTheErrorResponseThresholdCountsEvery4xxIncluding429s(): void
+    public function testMinutesAreFixedUtcWindowsNotRollingSixtySeconds(): void
+    {
+        $blocking = $this->blocking(rateLimitHits: 2);
+
+        // One second apart, but in two UTC minutes (RateLimiter's window_start).
+        $this->log(self::NOW - 1, 429);
+        $this->log(self::NOW, 429);
+
+        self::assertNotNull($blocking->afterResponse(self::IP, 429, self::NOW, null));
+    }
+
+    public function testTheErrorResponseThresholdCountsEvery4xxExcept429(): void
     {
         $blocking = $this->blocking(rateLimitHits: 100, errorResponses: 5);
 
-        foreach ([400, 401, 404, 429] as $status) {
+        foreach ([400, 401, 404, 499] as $status) {
             $this->log(self::NOW, $status);
+        }
+        // 429s never count here, in any number of minutes.
+        for ($minute = 0; $minute < 5; $minute++) {
+            $this->log(self::NOW - $minute * 60, 429, 10);
         }
         self::assertNull($blocking->afterResponse(self::IP, 404, self::NOW, null));
 
-        $this->log(self::NOW, 499);
-        self::assertSame('error_responses', $blocking->afterResponse(self::IP, 499, self::NOW, null)?->reason);
+        $this->log(self::NOW, 404);
+        self::assertSame('error_responses', $blocking->afterResponse(self::IP, 404, self::NOW, null)?->block->reason);
     }
 
     public function testRateLimitHitsWinWhenBothThresholdsAreReached(): void
     {
         $blocking = $this->blocking(rateLimitHits: 2, errorResponses: 2);
-        $this->log(self::NOW, 429, 2);
+        $this->log(self::NOW - 60, 429);
+        $this->log(self::NOW, 429);
+        $this->log(self::NOW, 404, 2);
 
-        self::assertSame('rate_limit_hits', $blocking->afterResponse(self::IP, 429, self::NOW, null)?->reason);
+        self::assertSame('rate_limit_hits', $blocking->afterResponse(self::IP, 404, self::NOW, null)?->block->reason);
     }
 
     public function testServerErrorsSuccessesAndBlockedRequestsNeverCount(): void
@@ -84,6 +139,7 @@ final class IpBlockingTest extends TestCase
         $this->log(self::NOW, 503, 10);
         $this->log(self::NOW, 200, 10);
         $this->log(self::NOW, 403, 10, blocked: true);
+        $this->log(self::NOW, 429, 10, blocked: true);
 
         self::assertNull($blocking->afterResponse(self::IP, 404, self::NOW, null), 'nothing counted, the current 404 was not logged');
         self::assertSame([], $this->blockRows());
@@ -109,57 +165,109 @@ final class IpBlockingTest extends TestCase
         self::assertSame([], $this->blockRows());
     }
 
-    public function testTheWindowEdges(): void
+    public function testTheWindowEdgesForRateLimitedMinutes(): void
     {
         $blocking = $this->blocking(rateLimitHits: 2);
 
-        // Exactly window seconds old: out of the window.
+        // Exactly window seconds old: out of the window (and in another minute than NOW).
         $this->log(self::NOW - self::WINDOW, 429);
         $this->log(self::NOW, 429);
         self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW, null));
 
-        // One second younger: in it.
+        // One second younger: in it, and in a minute of its own.
         $this->log(self::NOW - self::WINDOW + 1, 429);
         self::assertNotNull($blocking->afterResponse(self::IP, 429, self::NOW, null));
     }
 
+    public function testTheWindowEdgesForErrorResponses(): void
+    {
+        $blocking = $this->blocking(errorResponses: 2);
+
+        $this->log(self::NOW - self::WINDOW, 404);
+        $this->log(self::NOW, 404);
+        self::assertNull($blocking->afterResponse(self::IP, 404, self::NOW, null));
+
+        $this->log(self::NOW - self::WINDOW + 1, 404);
+        self::assertNotNull($blocking->afterResponse(self::IP, 404, self::NOW, null));
+    }
+
     public function testOnlyThisIpsRequestsCount(): void
     {
-        $blocking = $this->blocking(rateLimitHits: 2);
-        $this->log(self::NOW, 429, 5, ip: '198.51.100.1');
+        $blocking = $this->blocking(rateLimitHits: 2, errorResponses: 2);
+        $this->log(self::NOW - 60, 429, 1, ip: '198.51.100.1');
+        $this->log(self::NOW, 404, 5, ip: '198.51.100.1');
         $this->log(self::NOW, 429);
+        $this->log(self::NOW, 404);
 
         self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW, null));
     }
 
     public function testRequestsBeforeThePreviousBlockExpiredNeverCountAgain(): void
     {
-        $blocking = $this->blocking(rateLimitHits: 3);
+        $blocking = $this->blocking(errorResponses: 3);
         $expiredAt = self::NOW - 60;
-        $previous = new IpBlock(self::IP, 'rate_limit_hits', 'auto', $expiredAt - self::DURATION, $expiredAt);
-        $this->log($expiredAt - 1, 429, 2);   // just before the block ended
-        $this->log($expiredAt, 429);           // the block's last instant is already unblocked
-        $this->log(self::NOW, 429);
+        $previous = new IpBlock(self::IP, 'error_responses', 'auto', $expiredAt - self::DURATION, $expiredAt);
+        $this->log($expiredAt - 1, 404, 2);   // just before the block ended
+        $this->log($expiredAt, 404);           // the block's last instant is already unblocked
+        $this->log(self::NOW, 404);
 
-        self::assertNull($blocking->afterResponse(self::IP, 429, self::NOW, $previous), 'only two 429s since the expiry');
-        self::assertNotNull($blocking->afterResponse(self::IP, 429, self::NOW, null), 'four without the cutoff');
+        self::assertNull($blocking->afterResponse(self::IP, 404, self::NOW, $previous), 'only two 404s since the expiry');
+        self::assertNotNull($blocking->afterResponse(self::IP, 404, self::NOW, null), 'four without the cutoff');
     }
 
     public function testAPermanentPreviousBlockDoesNotMoveTheWindow(): void
     {
-        $blocking = $this->blocking(rateLimitHits: 2);
-        $this->log(self::NOW - 10, 429, 2);
+        $blocking = $this->blocking(errorResponses: 2);
+        $this->log(self::NOW - 10, 404, 2);
 
-        self::assertNotNull($blocking->afterResponse(self::IP, 429, self::NOW, new IpBlock(self::IP, 'r', 'manual', 0, null)));
+        self::assertNotNull($blocking->afterResponse(self::IP, 404, self::NOW, new IpBlock(self::IP, 'r', 'manual', 0, null)));
     }
 
-    public function testANewThresholdOnAnActiveAutomaticBlockExtendsIt(): void
+    public function testAStartedBlockWritesAnIpBlockEventWithoutTheIp(): void
     {
-        $blocking = $this->blocking(rateLimitHits: 1);
-        $this->blocks->blockAutomatically(self::IP, 'rate_limit_hits', self::NOW - 600, self::NOW + 3000);
-        $this->log(self::NOW, 429);
+        $blocking = $this->blocking(errorResponses: 1);
+        $this->log(self::NOW, 404);
 
-        self::assertSame(self::NOW + self::DURATION, $blocking->afterResponse(self::IP, 429, self::NOW, null)?->expiresAt);
+        $blocking->afterResponse(self::IP, 404, self::NOW, null);
+
+        self::assertSame([[
+            'ts' => self::NOW, 'source' => 'api', 'event_type' => 'ip.block', 'status' => 'ok', 'error_code' => null,
+            'meta' => '{"source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}',
+        ]], $this->blockEvents());
+    }
+
+    public function testAnExtendedBlockWritesAnEventAndAnUnchangedOneWritesNone(): void
+    {
+        $blocking = $this->blocking(errorResponses: 1);
+        $this->log(self::NOW, 404);
+
+        // An active automatic block ending sooner: extended.
+        $this->blocks->blockAutomatically(self::IP, 'rate_limit_hits', self::NOW - 600, self::NOW + 3000);
+        self::assertSame(AutoBlockOutcome::EXTENDED, $blocking->afterResponse(self::IP, 404, self::NOW, null)?->outcome);
+        self::assertSame(self::NOW + self::DURATION, $this->blocks->find(self::IP)?->expiresAt);
+
+        // Already ending at least as late: unchanged, no event.
+        self::assertSame(AutoBlockOutcome::UNCHANGED, $blocking->afterResponse(self::IP, 404, self::NOW, null)?->outcome);
+
+        // An active manual block: unchanged, no event.
+        $this->blocks->blockManually(self::IP, 'operator', self::NOW, null);
+        self::assertSame(AutoBlockOutcome::UNCHANGED, $blocking->afterResponse(self::IP, 404, self::NOW, null)?->outcome);
+
+        self::assertSame(
+            ['{"source":"auto","reason":"error_responses","duration_minutes":60,"extended":true}'],
+            array_column($this->blockEvents(), 'meta'),
+        );
+    }
+
+    public function testAFailedEventWriteStillBlocks(): void
+    {
+        $this->pdo->exec('DROP TABLE events');
+        $blocking = $this->blocking(errorResponses: 1);
+        $this->log(self::NOW, 404);
+
+        self::assertSame(AutoBlockOutcome::STARTED, $blocking->afterResponse(self::IP, 404, self::NOW, null)?->outcome);
+        self::assertNotNull($this->blocks->find(self::IP));
+        self::assertSame(['fx-installments metrics: event ip.block not recorded (PDOException)'], $this->log->getArrayCopy());
     }
 
     /**
@@ -180,10 +288,10 @@ final class IpBlockingTest extends TestCase
     public function testLoopbackTheTrustedProxyAndNonIpsAreNeverBlockedAutomatically(string $ip, ?string $trustedProxy): void
     {
         $blocking = $this->blocking(rateLimitHits: 1, errorResponses: 1, trustedProxy: $trustedProxy);
-        $this->log(self::NOW, 429, 3, ip: $ip);
+        $this->log(self::NOW, 404, 3, ip: $ip);
 
         self::assertTrue($blocking->isExempt($ip));
-        self::assertNull($blocking->afterResponse($ip, 429, self::NOW, null));
+        self::assertNull($blocking->afterResponse($ip, 404, self::NOW, null));
         self::assertSame([], $this->blockRows());
     }
 
@@ -231,12 +339,12 @@ final class IpBlockingTest extends TestCase
     public function testOutOfRangeSettingsFailLoudly(array $settings): void
     {
         $this->expectException(InvalidArgumentException::class);
-        IpBlocking::fromConfig($this->blocks, $this->requests, new ConfigRepository($settings), null);
+        IpBlocking::fromConfig($this->blocks, $this->requests, $this->metrics, new ConfigRepository($settings), null);
     }
 
     public function testTheLimitsThemselvesAreAccepted(): void
     {
-        $blocking = IpBlocking::fromConfig($this->blocks, $this->requests, new ConfigRepository([
+        $blocking = IpBlocking::fromConfig($this->blocks, $this->requests, $this->metrics, new ConfigRepository([
             'block.window_minutes' => IpBlocking::MAX_MINUTES,
             'block.duration_minutes' => 1,
             'block.rate_limit_hits' => 1,
@@ -249,12 +357,21 @@ final class IpBlockingTest extends TestCase
     public function testANonIntegerSettingFailsLoudly(): void
     {
         $this->expectException(InvalidArgumentException::class);
-        IpBlocking::fromConfig($this->blocks, $this->requests, new ConfigRepository(['block.window_minutes' => '10']), null);
+        IpBlocking::fromConfig($this->blocks, $this->requests, $this->metrics, new ConfigRepository(['block.window_minutes' => '10']), null);
     }
 
     private function blocking(int $rateLimitHits = 5, int $errorResponses = 100, ?string $trustedProxy = null): IpBlocking
     {
-        return new IpBlocking($this->blocks, $this->requests, self::WINDOW / 60, $rateLimitHits, $errorResponses, self::DURATION / 60, $trustedProxy);
+        return new IpBlocking(
+            $this->blocks,
+            $this->requests,
+            $this->metrics,
+            self::WINDOW / 60,
+            $rateLimitHits,
+            $errorResponses,
+            self::DURATION / 60,
+            $trustedProxy,
+        );
     }
 
     private function log(int $ts, int $status, int $times = 1, bool $blocked = false, string $ip = self::IP): void
@@ -270,5 +387,16 @@ final class IpBlockingTest extends TestCase
     private function blockRows(): array
     {
         return $this->pdo->query('SELECT * FROM ip_blocks')->fetchAll();
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function blockEvents(): array
+    {
+        return array_map(
+            static fn (array $row): array => ['ts' => (int) $row['ts']] + $row,
+            $this->pdo->query("SELECT ts, source, event_type, status, error_code, meta FROM events WHERE event_type LIKE 'ip.%' ORDER BY id")->fetchAll(),
+        );
     }
 }

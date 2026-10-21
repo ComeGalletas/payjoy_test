@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace FxInstallments\Tests\Acceptance;
 
+use ArrayObject;
 use FxInstallments\App;
+use FxInstallments\Config\ConfigRepository;
+use FxInstallments\Db\Connection;
+use FxInstallments\Db\Retention;
+use FxInstallments\Http\IpBlocks;
 use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\Request;
@@ -95,15 +100,27 @@ final class P1_11_RequestLogTest extends TestCase
         self::assertSame([[self::CLIENT, 'GET', '/ok', 200, 0], [self::OTHER, 'GET', '/ok', 200, 0]], $this->requestRows());
     }
 
-    public function testTheConfiguredNumberOf429sBlocksTheIp(): void
+    /**
+     * `block.rate_limit_hits` counts distinct rate-limited minutes (owner decision, 2026-10-21):
+     * the IP must get 429s in that many different fixed UTC minutes within the window.
+     */
+    public function testTheConfiguredNumberOfRateLimitedMinutesBlocksTheIp(): void
     {
         $kernel = $this->kernel(['ratelimit.per_minute' => 2, 'block.rate_limit_hits' => 3]);
         $limited = new Request('GET', '/limited', remoteAddr: self::CLIENT);
 
-        self::assertSame(200, $kernel->handle($limited)->status());
-        self::assertSame(200, $kernel->handle($limited)->status());
-        for ($hit = 1; $hit <= 3; $hit++) {
-            self::assertSame(429, $kernel->handle($limited)->status(), "429 number {$hit}");
+        for ($minute = 1; $minute <= 3; $minute++) {
+            self::assertSame(200, $kernel->handle($limited)->status());
+            self::assertSame(200, $kernel->handle($limited)->status());
+            // Several 429s in one minute count as one rate-limited minute.
+            $hits = $minute < 3 ? 10 : 1;
+            for ($hit = 1; $hit <= $hits; $hit++) {
+                self::assertSame(429, $kernel->handle($limited)->status(), "minute {$minute}, 429 number {$hit}");
+            }
+            if ($minute < 3) {
+                self::assertSame([], $this->blockRows(), "{$minute} rate-limited minute(s) are under three");
+                $this->clock->advance(60);
+            }
         }
         self::assertSame(
             [[self::CLIENT, 'auto', 'rate_limit_hits', $this->clock->now, $this->clock->now + 60 * 60]],
@@ -113,6 +130,22 @@ final class P1_11_RequestLogTest extends TestCase
         // Blocked everywhere, not just on the rate-limited route; another IP is unaffected.
         $this->assertBlocked($kernel->handle(new Request('GET', '/ok', remoteAddr: self::CLIENT)));
         self::assertSame(200, $kernel->handle(new Request('GET', '/ok', remoteAddr: self::OTHER))->status());
+    }
+
+    public function testABurstInsideOneMinuteNeverBlocksWithTheDefaults(): void
+    {
+        $this->clock->now = intdiv(time(), 60) * 60; // the first second of a UTC minute
+        $kernel = $this->kernel();
+        $limited = new Request('GET', '/limited', remoteAddr: self::CLIENT);
+
+        $statuses = [];
+        for ($i = 1; $i <= 65; $i++) {
+            $statuses[] = $kernel->handle($limited)->status();
+        }
+
+        self::assertSame(array_merge(array_fill(0, 30, 200), array_fill(0, 35, 429)), $statuses);
+        self::assertSame([], $this->blockRows());
+        self::assertSame(200, $kernel->handle(new Request('GET', '/ok', remoteAddr: self::CLIENT))->status());
     }
 
     public function testTheConfiguredNumberOfErrorResponsesBlocksTheIp(): void
@@ -223,6 +256,74 @@ final class P1_11_RequestLogTest extends TestCase
         self::assertSame(200, $kernel->handle(new Request('GET', '/ok', remoteAddr: self::CLIENT))->status());
     }
 
+    /**
+     * The tester's round-1 repro: an unblock followed by a prune must keep the clean slate
+     * (--prune keeps an ended block for block.window_minutes; owner decision, 2026-10-21).
+     */
+    public function testAPruneRightAfterAnUnblockKeepsTheCleanSlate(): void
+    {
+        $start = $this->clock->now;
+        $kernel = $this->kernel(['block.error_responses' => 3]);
+        for ($i = 0; $i < 3; $i++) {
+            self::assertSame(404, $kernel->handle(new Request('GET', '/nope', remoteAddr: self::CLIENT))->status());
+        }
+        $this->assertBlocked($kernel->handle(new Request('GET', '/ok', remoteAddr: self::CLIENT)));
+
+        self::assertNotNull((new IpBlocks(Connection::wrap($this->pdo)))->unblock(self::CLIENT, $start + 30));
+        $pruned = (new Retention($this->pdo, 30, (new ConfigRepository())->int('block.window_minutes')))->prune($start + 31);
+        self::assertSame(0, $pruned['ip_blocks'], 'the ended block is kept for one window');
+
+        $this->clock->now = $start + 32;
+        self::assertSame(404, $kernel->handle(new Request('GET', '/nope', remoteAddr: self::CLIENT))->status());
+        self::assertSame(200, $kernel->handle(new Request('GET', '/ok', remoteAddr: self::CLIENT))->status(), 'not re-blocked');
+
+        // A window after the unblock, the row goes; the old 404s have left the window too.
+        self::assertSame(1, (new Retention($this->pdo, 30, 10))->prune($start + 30 + 600)['ip_blocks']);
+    }
+
+    /**
+     * ip.block / ip.unblock events (owner decision, 2026-10-21) never hold the IP, in any
+     * form, and neither does the error log. The reason text an operator types is not stored
+     * in events either (it may contain an IP).
+     */
+    public function testBlockEventsAndTheErrorLogNeverHoldTheIp(): void
+    {
+        $log = new ArrayObject();
+        $kernel = $this->kernel(['block.error_responses' => 2], $log);
+        $v6 = '2001:db8::7';
+        foreach ([self::CLIENT, $v6] as $ip) {
+            $kernel->handle(new Request('GET', '/nope', remoteAddr: $ip));
+            $kernel->handle(new Request('GET', '/nope', remoteAddr: $ip));
+            $this->assertBlocked($kernel->handle(new Request('GET', '/ok', remoteAddr: $ip)));
+        }
+        [, , $err1] = self::runCli('ip.php', ['block', '2001:DB8:0:0::7', '--minutes=5', '--reason=seen with 198.51.100.99'], $this->path);
+        [, , $err2] = self::runCli('ip.php', ['unblock', self::CLIENT], $this->path);
+        [, , $err3] = self::runCli('ip.php', ['unblock', '192.0.2.44'], $this->path);
+
+        $events = $this->pdo->query("SELECT * FROM events WHERE event_type LIKE 'ip.%' ORDER BY id")->fetchAll();
+        self::assertSame(
+            [
+                ['ip.block', 'api', '{"source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}'],
+                ['ip.block', 'api', '{"source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}'],
+                ['ip.block', 'api', '{"source":"manual","reason":"given","duration_minutes":5}'],
+                ['ip.unblock', 'api', '{"source":"auto","was_active":true}'],
+                ['ip.unblock', 'api', '{"source":null,"was_active":false}'],
+            ],
+            array_map(static fn (array $row): array => [$row['event_type'], $row['source'], $row['meta']], $events),
+        );
+
+        $everything = $this->pdo->query('SELECT * FROM events')->fetchAll();
+        $haystack = json_encode($everything, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES)
+            . "\n" . implode("\n", $log->getArrayCopy()) . "\n" . $err1 . $err2 . $err3;
+        foreach ([
+            self::CLIENT, '::ffff:' . self::CLIENT, '::ffff:cb00:7107', '203.0.113',
+            $v6, '2001:DB8:0:0::7', '2001:db8:0:0:0:0:0:7', '2001:db8',
+            '198.51.100.99', '192.0.2.44',
+        ] as $form) {
+            self::assertStringNotContainsStringIgnoringCase($form, $haystack, "the events or error log hold {$form}");
+        }
+    }
+
     public function testRowsOlderThan30DaysArePruned(): void
     {
         $kernel = $this->kernel();
@@ -250,17 +351,18 @@ final class P1_11_RequestLogTest extends TestCase
         self::assertSame(403, $response->status());
         self::assertSame('close', $response->header('Connection'));
         self::assertSame('application/json', $response->header('Content-Type'));
-        self::assertSame('{"ok":false,"error":{"code":"IP_BLOCKED","message_for_user":"Access denied."}}', $response->body());
+        self::assertSame('{"ok":false,"error":{"code":"IP_BLOCKED","message_for_user":"Too many unusual requests came from your network. Please try again later."}}', $response->body());
     }
 
     /**
      * App::kernel() (the production wiring) on a test route table.
      *
      * @param array<string, mixed> $config
+     * @param ArrayObject<int, string>|null $log the error log
      */
-    private function kernel(array $config = []): Kernel
+    private function kernel(array $config = [], ?ArrayObject $log = null): Kernel
     {
-        $app = TestEnvironment::app($this->clock, $config, $this->pdo);
+        $app = TestEnvironment::app($this->clock, $config, $this->pdo, $log);
 
         return $app->kernel($this->router($app));
     }
