@@ -4,8 +4,8 @@ Checklist of the work IDs in `docs/PLAN.md` §10, which holds each task's spec a
 The first unchecked item is the current work. From Phase 1 on, the lead ticks an item when its PR
 is merged and adds its end status.
 
-**Current phase:** Phase 0 — Pre-work
-**Next item:** P0-05 (owner), then P1-01
+**Current phase:** Phase 0 done; Phase 1 next
+**Next item:** P1-01
 
 ## Phase 0 — Pre-work
 
@@ -13,8 +13,8 @@ is merged and adds its end status.
 - [x] P0-02 Doc set and initial ADRs — DONE (2026-10-20)
 - [x] P0-03 Install prerequisites (PHP 8.3 + extensions, CA bundle, Composer, git, make) — DONE_WITH_CONCERNS (2026-10-20; see LOG)
 - [x] P0-04 Repository, Composer/PHPUnit skeleton, Makefile, hooks, branch protection — DONE (2026-10-20; PR #1, follow-ups in P0-06)
-- [ ] P0-05 Owner adds API key and admin token to `.env`
-- [x] P0-06 Guard hardening follow-ups from the P0-04 review — DONE (2026-10-20; PR #3)
+- [x] P0-05 Owner adds API key and admin token to `.env` — DONE (2026-10-20)
+- [x] P0-06 Guard hardening follow-ups from the P0-04 review — DONE (2026-10-20; PR #3; builder's concerns settled by owner decision and L-04)
 
 ## Phase 1 — Deterministic MVP
 
@@ -56,4 +56,4 @@ is merged and adds its end status.
 - [ ] L-01 `bin/export-typebot.php`
 - [ ] L-02 Telegram / WhatsApp channel
 - [ ] L-03 Postgres metrics
-- [ ] L-04 Tooling backlog (cache v5, atomic hook write, `FORCE=0`, squash-merge subjects)
+- [ ] L-04 Tooling backlog (cache v5, atomic hook write, `FORCE=0`, squash-merge subjects, backup pruning)

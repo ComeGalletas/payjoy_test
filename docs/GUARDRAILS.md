@@ -49,10 +49,12 @@ Rules about the app itself, enforced by the test suite inside `make check`.
   whatever the main checkout installed; `make init` in a worktree warns when they differ.
 - Hook backups (`<hook>.bak.<YYYYMMDD-HHMMSS>`) are never overwritten, but they accumulate in
   `.git/hooks`; nothing prunes them (L-04).
-- git runs `commit-msg` before comment cleanup, so the hook always rejects a message whose first
-  non-blank line is a comment. A subject typed below git's comment block, or a commit template that
-  starts with a comment, is rejected; type the subject on line 1. `core.commentChar=auto` is
-  treated as `#`.
+- By owner decision (P0-06), `commit-msg` always rejects a message whose first non-blank line is a
+  comment. Because git runs `commit-msg` before comment cleanup, this also catches a subject typed
+  below git's comment block, or a commit template that starts with a comment; type the subject on
+  line 1.
+- `core.commentChar=auto` is treated as `#`. With `auto`, git may pick another comment character
+  for a message; the hook won't treat lines starting with that character as comments.
 - `git rebase -i` squash and fixup don't run `commit-msg`, so squashed messages aren't checked;
   `reword` is. CI doesn't check subjects either.
 - The default `git merge --squash` message ("Squashed commit of the following:") is rejected; give
