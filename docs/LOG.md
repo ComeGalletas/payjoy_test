@@ -35,8 +35,8 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   magnitude claim (the real worst case is 1,000,000 USD in IRR, ≈ 1.73 × 10^14 minor units), and
   the review follow-ups placed in P1-03, P1-04, P1-05, P1-08, P1-09, P1-11, L-03, L-04 and the
   P1-02 note (for the task that adds migration 4).
-- PR #9 review: tester PASS (all docs claims true against the code); judge CHANGES NEEDED (three
-  wording overclaims, fixed). Owner decisions: ratified the file-tools rule above; approved the
+- PR #9 review: tester PASS (all docs claims true against the code); judge CHANGES NEEDED (two
+  overclaims in ADR 0017 and a factual error in ADR 0020, fixed); judge recheck APPROVE WITH NITS. Owner decisions: ratified the file-tools rule above; approved the
   GUARDRAILS edits (INV-07, INV-09, INV-10) and a CLAUDE.md Commands row for `migrate.php`; manual
   blocks win, and a new automatic block extends an active automatic one.
 

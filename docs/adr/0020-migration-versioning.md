@@ -16,7 +16,7 @@ ones.
 - `api/src/Db/Migrations.php` holds one ordered list. Versions are consecutive integers starting
   at 1; the applied version is `app_state.schema_version`. Only a database without `app_state` is
   version 0; a missing or non-integer `schema_version` value throws `SchemaCorrupt`, so the app
-  answers 500 and `migrate.php` and `--prune` exit 1 (ADR 0019).
+  answers 500 and `migrate.php` and `--prune` exit 1 (the fail-closed startup of ADR 0019).
 - Each migration runs in one transaction; from migration 2 on (which creates `app_state`) the
   version update is in the same transaction, so a failure leaves the previous version intact.
   Migration 1 records no version of its own.
