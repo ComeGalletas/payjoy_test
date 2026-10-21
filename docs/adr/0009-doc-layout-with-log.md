@@ -14,7 +14,7 @@ uses `docs/adr/`, `docs/PLAN.md`, `docs/TODO.md`, `CONTEXT.md`, `memory/MEMORY.m
 
 Use the `CLAUDE.md` layout. Decisions are ADRs in `docs/adr/`; there is no `docs/DECISIONS.md`.
 Keep `docs/LOG.md` as a dated journal of progress and anomalies (quota usage, upstream errors,
-test failures, tool versions), recorded as deviation 2 in `CLAUDE.md`.
+test failures, tool versions), recorded as a deviation in `CLAUDE.md`.
 
 ## Consequences
 

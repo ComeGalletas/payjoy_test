@@ -379,7 +379,7 @@ the same commit. Each task ends with DONE, DONE_WITH_CONCERNS, BLOCKED or NEEDS_
 `make acceptance TEST=<path>`; the observable outcome must also hold when checked by hand.
 Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md` on merge.
 
-### Phase 0 — Pre-work (`CLAUDE.md` rules relaxed until P0-04)
+### Phase 0 — Pre-work (`CLAUDE.md` git rules were relaxed until P0-04 closed)
 
 - **P0-01** Adapt `CLAUDE.md` to this project. *DONE 2026-10-20.*
 - **P0-02** Create `CONTEXT.md`, `memory/MEMORY.md`, `docs/TODO.md`, `docs/LOG.md`,
@@ -393,12 +393,28 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
 - **P0-04** Owner creates the repository and remote. Then: `.gitattributes`, `.gitignore`,
   `api/composer.json` (PHPUnit as require-dev; scripts `test`, `check`, `acceptance`),
   `api/phpunit.xml`, one smoke test, thin `Makefile` (`init`, `check`, `test-guards`,
-  `acceptance`), git hooks, branch protection on `main`. Delete deviation 1 from `CLAUDE.md`
-  (owner).
+  `acceptance`), git hooks, branch protection on `main`. Delete the Phase 0 deviation from
+  `CLAUDE.md` (owner-approved, done in the P0-04 close-out docs PR).
   *Acceptance:* `make init && make check` passes on a fresh clone; a direct push to `main` is
   rejected.
+  *DONE 2026-10-20 (PR #1). `main` requires a PR and the `check` status check, admins included.*
 - **P0-05** Owner adds `EXCHANGERATE_API_KEY` and `ADMIN_TOKEN` to `.env`.
   *Acceptance:* owner confirms; agents don't read `.env`.
+- **P0-06** Guard hardening follow-ups from the P0-04 review (proposed; needs both co-leads):
+  - `install-hooks.php` never overwrites a `.bak` that lacks the managed-hook marker; use a
+    timestamped name instead (`<hook>.bak.<YYYYMMDD-HHMMSS>`).
+  - `commit-msg` honours `core.commentChar` (default `#`) and always rejects a message whose first
+    non-blank line starts with the comment character (a hook can't tell which cleanup mode was
+    used, so this covers `--cleanup=verbatim`).
+  - Guard test fixtures ignore the developer's git config (`GIT_CONFIG_NOSYSTEM=1`,
+    `GIT_CONFIG_GLOBAL` pointing at an empty file).
+  - Remove the unused `GuardTestCase::pathWith()`.
+  - Pin `actions/checkout` and `actions/cache` to commit SHAs; fix the `setup-php` comment to the
+    real tag `2.40.0`.
+  *Acceptance:* `api/tests/Guards/` has a test for each behaviour change; `make check` and CI pass;
+  a fresh `make init FORCE=1` over a foreign hook, followed by a managed-hook update, still leaves
+  the foreign hook in a `.bak` file; `git grep pathWith` finds nothing; every `uses:` in
+  `.github/workflows/check.yml` is a 40-character SHA followed by a `# <real tag>` comment.
 
 ### Phase 1 — Deterministic MVP
 

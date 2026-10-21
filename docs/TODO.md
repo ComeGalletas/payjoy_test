@@ -5,15 +5,16 @@ The first unchecked item is the current work. From Phase 1 on, the lead ticks an
 is merged and adds its end status.
 
 **Current phase:** Phase 0 — Pre-work
-**Next item:** P0-04
+**Next item:** P0-05 (owner), then P0-06
 
 ## Phase 0 — Pre-work
 
 - [x] P0-01 Adapt `CLAUDE.md` — DONE (2026-10-20)
 - [x] P0-02 Doc set and initial ADRs — DONE (2026-10-20)
 - [x] P0-03 Install prerequisites (PHP 8.3 + extensions, CA bundle, Composer, git, make) — DONE_WITH_CONCERNS (2026-10-20; see LOG)
-- [ ] P0-04 Repository, Composer/PHPUnit skeleton, Makefile, hooks, branch protection
+- [x] P0-04 Repository, Composer/PHPUnit skeleton, Makefile, hooks, branch protection — DONE (2026-10-20; PR #1, follow-ups in P0-06)
 - [ ] P0-05 Owner adds API key and admin token to `.env`
+- [ ] P0-06 Guard hardening follow-ups from the P0-04 review (proposed)
 
 ## Phase 1 — Deterministic MVP
 

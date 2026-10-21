@@ -75,8 +75,10 @@ not a sandbox. Known limits and backstops: see `docs/GUARDRAILS.md` "Known limit
   tools or Git Bash instead.
 - Line endings are LF in the repo (`.gitattributes`: `* text=auto eol=lf`), so hooks and the
   Alpine container see the same files.
-- `make` is not native on Windows; it is installed in P0-03. Until the Makefile exists (P0-04),
-  run the suite with `vendor/bin/phpunit` from `api/`.
+- `make` is not native on Windows; GNU Make 4.4.1 is installed (P0-03). The Makefile calls
+  `composer.bat` on Windows and `composer` elsewhere; override with `make COMPOSER_BIN=...`.
+- Git hooks are installed only from the main checkout (`make init`); the first install over
+  existing unmanaged hooks needs `make init FORCE=1`.
 - Set `MSYS_NO_PATHCONV=1` when passing container paths through Git Bash (Phase 3 Docker work).
 - Dates in `docs/LOG.md` and ADRs are `YYYY-MM-DD`, America/Bogota.
 
@@ -94,14 +96,9 @@ not a sandbox. Known limits and backstops: see `docs/GUARDRAILS.md` "Known limit
 
 ## Deviations from the shared standards
 
-1. **Phase 0 pre-work (temporary).** Until P0-04 is done there is no repository, remote, hooks or
-   Makefile. The git and isolation rules (GR-004, GR-013, GR-017, GR-018) and the Commands table
-   cannot apply yet; owner-directed work happens directly in the working folder. GR-001, GR-002,
-   GR-005, GR-030 and GR-031 apply from day one. **Wins:** this deviation, until P0-04 closes;
-   then delete this item and the shared standards apply in full.
-2. **`docs/LOG.md` journal.** Kept in addition to the standard doc set, for dated progress and
+1. **`docs/LOG.md` journal.** Kept in addition to the standard doc set, for dated progress and
    anomalies (quota usage, upstream errors, test failures). **Wins:** additive; the standard doc
    set is otherwise unchanged.
-3. **`DATA_ROOT` / `BACKUP_ROOT` left open.** The app has no protected data folders yet. Both stay
+2. **`DATA_ROOT` / `BACKUP_ROOT` left open.** The app has no protected data folders yet. Both stay
    as placeholders in `.env.example`; tests and mocks point them at temporary directories.
    **Wins:** GR-001 still applies to any real value the owner sets.
