@@ -400,6 +400,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *DONE 2026-10-20 (PR #1). `main` requires a PR and the `check` status check, admins included.*
 - **P0-05** Owner adds `EXCHANGERATE_API_KEY` and `ADMIN_TOKEN` to `.env`.
   *Acceptance:* owner confirms; agents don't read `.env`.
+  *DONE_WITH_CONCERNS 2026-10-20: owner added `EXCHANGERATE_API_KEY`; `ADMIN_TOKEN` not set yet
+  (owner will use any random value; admin routes fail closed until then).*
 - **P0-06** Guard hardening follow-ups from the P0-04 review (approved by both co-leads):
   - `install-hooks.php` never overwrites a `.bak` that lacks the managed-hook marker; use a
     timestamped name instead (`<hook>.bak.<YYYYMMDD-HHMMSS>`).
@@ -415,7 +417,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   a fresh `make init FORCE=1` over a foreign hook, followed by a managed-hook update, still leaves
   the foreign hook in a `.bak` file; `git grep pathWith -- api` finds nothing; every `uses:` in
   `.github/workflows/check.yml` is a 40-character SHA followed by a `# <real tag>` comment.
-  *DONE 2026-10-20 (PR #3). Owner decision: keep "always reject a comment first line".*
+  *DONE 2026-10-20 (PR #3). Builder reported DONE_WITH_CONCERNS; the concerns were settled by the
+  owner's decision to keep "always reject a comment first line", and the rest moved to L-04.*
 
 ### Phase 1 — Deterministic MVP
 

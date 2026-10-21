@@ -4,13 +4,26 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-20 — P0-05 and P0-06 close-out review (PR #4)
+
+- PR #4 (P0-06 close-out) was merged by the owner as `b823ab8` before its tester and judge
+  finished; at the owner's request their results were posted on the PR afterwards. The merged head
+  `4381593` is the reviewed head. Tester: PASS 8/8. Judge: APPROVE WITH NITS (fixed in this PR:
+  status wording, GUARDRAILS rule wording, `auto` cost, LOG approval and timing details, TODO L-04
+  line).
+- P0-05: the owner added `EXCHANGERATE_API_KEY` to `.env`. `ADMIN_TOKEN` isn't needed yet; the owner
+  will set any random value. Until it is set, admin routes refuse every request (fail closed,
+  P1-01). Agents did not read `.env`.
+
 ## 2026-10-20 — P0-06 guard hardening (PR #3, head 912c7c2)
 
 - PR #2 (P0-04 close-out) merged by the owner as `0ac5569`. The owner approved the two `CLAUDE.md`
   host-quirk lines in chat: "I approve PR #2 including the two CLAUDE.md host-quirk lines".
-- P0-06 approved by both co-leads before work started ("start P0-06 once I confirm the merge").
-- Builder: DONE_WITH_CONCERNS, one commit `912c7c2`. Guard tests 53 → 80 (1244 assertions); about
-  25 s for `make check` on Windows, 1.3 s for the guards on Linux CI. Pinned
+- P0-06 approved before work started: the lead proposed it in PR #2; owner: "start P0-06 once I
+  confirm the merge".
+- Builder: DONE_WITH_CONCERNS, one commit `912c7c2`. Guard tests 53 → 80 (1244 assertions on
+  Windows, 1242 on Linux CI); `make check` took 25.3–27.7 s on Windows, the guards 1.3 s on Linux
+  CI. Pinned
   `actions/checkout@fbc6f39… # v5.1.0`, `actions/cache@0057852… # v4.3.0`, and kept
   `setup-php@eb7c497…` with its comment fixed to `2.40.0`.
 - Guard blocks, all reported and not worked around: two worktree-guard refusals (a complex probe,
