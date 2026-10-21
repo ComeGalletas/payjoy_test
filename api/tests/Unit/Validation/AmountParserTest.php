@@ -18,9 +18,13 @@ use PHPUnit\Framework\TestCase;
  */
 final class AmountParserTest extends TestCase
 {
-    /** Sweep inputs `normalize()` reads (non-null), measured 2026-10-21 after round 2. */
+    /**
+     * Sweep inputs `normalize()` reads (non-null), measured 2026-10-21. Sweep 2 was re-pinned in
+     * round 3 because its alphabet gained tab, CR and LF (402,233 inputs instead of 111,110); on
+     * the round-2 alphabet the count is still 5,472.
+     */
     private const SWEEP_1_READ = 2_730;
-    private const SWEEP_2_READ = 5_472;
+    private const SWEEP_2_READ = 40_368;
 
     /**
      * Rule 1: trim whitespace, then strip one `$`, `US$` or `USD` (any case) at each end.
@@ -77,7 +81,19 @@ final class AmountParserTest extends TestCase
         yield 'space, three-digit first group' => ['250 000', '250000'];
         yield 'no-break space as thousands' => ["1\u{00A0}000", '1000'];
         yield 'narrow no-break space as thousands' => ["1\u{202F}000", '1000'];
-        yield 'tab as thousands' => ["1\t000", '1000'];
+        // Round 3: only space, U+00A0 and U+202F separate inside a number; tab, CR and LF are
+        // trimmed at the ends but make an inner position unclear.
+        yield 'tab inside' => ["1\t000", null];
+        yield 'LF between two numbers' => ["200\n300", null];
+        yield 'CRLF inside' => ["1\r\n000", null];
+        yield 'LF inside' => ["1\n000", null];
+        yield 'CR inside' => ["1\r000", null];
+        yield 'space then tab inside' => ["1 \t000", null];
+        yield 'tab before the decimal comma' => ["1000\t,50", null];
+        yield 'tab and space at the ends' => [" 200\t", '200'];
+        yield 'trailing LF' => ["200\n", '200'];
+        yield 'tab and LF around a space-grouped number' => ["\t1 000\n", '1000'];
+        yield 'CRLF after a marker' => ["\$\r\n200", '200'];
         yield 'space thousands, comma decimal' => ['1 000,50', '1000.50'];
         yield 'space thousands, dot decimal' => ['1 000.50', '1000.50'];
         yield 'no-break space thousands, comma decimal' => ["1\u{00A0}000,5", '1000.50'];
@@ -181,6 +197,7 @@ final class AmountParserTest extends TestCase
         yield 'zero point five' => ['0,5', '0.50'];
         yield 'comma, three digits' => ['1,000', '1000'];
         yield 'comma, three digits after three' => ['200,505', '200505'];
+        yield 'comma, one-two-three-four' => ['1,234', '1234'];
         yield 'dot, three digits' => ['1.000', null];
         yield 'dot, three digits after three' => ['200.505', null];
         yield 'dot, one-five-hundred' => ['1.500', null];
@@ -329,14 +346,14 @@ final class AmountParserTest extends TestCase
     }
 
     /**
-     * Sweep 2: every sequence of 1–5 tokens over digits, separators, whitespace and currency
-     * markers (in two cases, plus a stray letter).
+     * Sweep 2: every sequence of 1–5 tokens over digits, separators, whitespace (space, NBSP,
+     * tab, CR, LF) and currency markers (in two cases, plus a stray letter).
      */
     public function testSweepWithWhitespaceAndMarkersReadsTheTypedValue(): void
     {
-        [$total, $read] = self::sweep(['0', '5', '.', ',', ' ', "\u{00A0}", '$', 'USD', 'us$', 'u'], 5);
+        [$total, $read] = self::sweep(['0', '5', '.', ',', ' ', "\u{00A0}", "\t", "\r", "\n", '$', 'USD', 'us$', 'u'], 5);
 
-        self::assertSame(111_110, $total);
+        self::assertSame(402_233, $total);
         self::assertSame(self::SWEEP_2_READ, $read);
     }
 
@@ -422,7 +439,9 @@ final class AmountParserTest extends TestCase
 
         $core = (string) preg_replace('/^[\s\x{00A0}]*(?:US\$|USD|\$)?[\s\x{00A0}]*/iu', '', $text);
         $core = (string) preg_replace('/[\s\x{00A0}]*(?:US\$|USD|\$)?[\s\x{00A0}]*$/iuD', '', $core);
-        self::assertMatchesRegularExpression('/^[0-9.,\s\x{00A0}]+$/uD', $core, "marker inside: {$label}");
+        // Inside the number only digits, separators and the three inner spaces may remain: no
+        // marker, and no tab, CR or LF.
+        self::assertMatchesRegularExpression('/^[0-9., \x{00A0}\x{202F}]+$/uD', $core, "marker or line break inside: {$label}");
     }
 
     private static function parser(): AmountParser

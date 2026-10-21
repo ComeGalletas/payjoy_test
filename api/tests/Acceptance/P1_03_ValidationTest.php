@@ -35,6 +35,9 @@ use PHPUnit\Framework\TestCase;
  *   thousands) and `5$5` (marker inside the number) are unclear; `1 000` → `1000`;
  * - ambiguous currency text (`peso`, `$`) is unclear;
  * - `03` installments → 3 in the bot.
+ *
+ * Round 3: `200\n300` (a line break inside the number) is unclear in the bot, and
+ * `fromQuery('03')` (`/convert`) still fails with reason `format`.
  */
 final class P1_03_ValidationTest extends TestCase
 {
@@ -89,8 +92,8 @@ final class P1_03_ValidationTest extends TestCase
      */
     public static function unclearAmounts(): iterable
     {
-        foreach (['1,2,3', '200.505', '200 3', '5$5'] as $text) {
-            yield $text => [$text];
+        foreach (['1,2,3', '200.505', '200 3', '5$5', "200\n300"] as $text) {
+            yield var_export($text, true) => [$text];
         }
     }
 
@@ -158,6 +161,19 @@ final class P1_03_ValidationTest extends TestCase
         $validator = new InstallmentsValidator(new ConfigRepository());
 
         self::assertSame(3, $validator->fromText('03'));
+    }
+
+    public function testLeadingZeroInstallmentsAreRejectedOnTheApi(): void
+    {
+        $validator = new InstallmentsValidator(new ConfigRepository());
+
+        try {
+            $validator->fromQuery('03');
+            self::fail('fromQuery(03) should be rejected');
+        } catch (ValidationFailed $error) {
+            self::assertSame('VALIDATION_INSTALLMENTS', $error->errorCode);
+            self::assertSame('format', $error->reason);
+        }
     }
 
     public function testSixtyOneInstallmentsAreRejected(): void

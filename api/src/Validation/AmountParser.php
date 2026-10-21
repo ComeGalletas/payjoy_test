@@ -15,13 +15,14 @@ use FxInstallments\Convert\UsdCents;
  * Whenever a reading could give a wrong number, it is unclear and the bot asks again.
  *
  * Rules, in order:
- * 1. Trim leading and trailing whitespace (space, tab, CR, LF, no-break space U+00A0, narrow
- *    no-break space U+202F). Then strip one currency marker (`US$`, `USD` or `$`, any case) at
- *    the start and one at the end, each with optional whitespace between it and the number.
- *    A marker anywhere else (`5$5`, `1USD000`, `usdusd5`, `US$$5`) or spelled with spaces
- *    (`U SD5`) is left in place, so rule 2 makes the text unclear.
- * 2. Anything left except ASCII digits, `.`, `,` and inner whitespace → unclear (so `1e3`,
- *    `-5`, `NaN`, unicode digits and NUL bytes are unclear).
+ * 1. Trim leading and trailing whitespace (`EdgeWhitespace`: space, tab, CR, LF, no-break
+ *    space U+00A0, narrow no-break space U+202F). Then strip one currency marker (`US$`, `USD`
+ *    or `$`, any case) at the start and one at the end, each with optional whitespace between
+ *    it and the number. A marker anywhere else (`5$5`, `1USD000`, `usdusd5`, `US$$5`) or
+ *    spelled with spaces (`U SD5`) is left in place, so rule 2 makes the text unclear.
+ * 2. Anything left except ASCII digits, `.`, `,` and inner spaces (space, U+00A0, U+202F) →
+ *    unclear. So `1e3`, `-5`, `NaN`, unicode digits, NUL bytes, and a tab, CR or LF inside the
+ *    number (`200\n300`, `1\t000`) are unclear; at the ends they are only trimmed.
  * 3. Both `.` and `,` present: the last one is the decimal separator, appears once and has 1–2
  *    digits after it; the other is a thousands separator with groups of exactly 3 digits.
  * 4. One kind, more than once: thousands separators only, groups of 3.
@@ -31,10 +32,10 @@ use FxInstallments\Convert\UsdCents;
  * 6. Leading or trailing separator, empty groups (two separators in a row, including a double
  *    space), or more than 2 decimals → unclear.
  *
- * Inner whitespace is a thousands separator only: every group after the first must be exactly
- * 3 digits (`1 000`, `1 000 000`; `200 3` and `2 50` are unclear). It may be followed by one
- * decimal `.` or `,` with 1–2 digits (`1 000,50` → 1000.50); combined with `.` or `,` used as a
- * second thousands separator it is unclear (`1 000.000`).
+ * An inner space (space, U+00A0 or U+202F) is a thousands separator only: every group after
+ * the first must be exactly 3 digits (`1 000`, `1 000 000`; `200 3` and `2 50` are unclear).
+ * It may be followed by one decimal `.` or `,` with 1–2 digits (`1 000,50` → 1000.50);
+ * combined with `.` or `,` used as a second thousands separator it is unclear (`1 000.000`).
  *
  * Thousands grouping also requires a first group of 1–3 digits that doesn't start with `0`, so
  * `0,500` and `1234,567` are unclear rather than read as 500 and 1234567.
@@ -45,8 +46,8 @@ final class AmountParser
     /** Longer input is unclear before any rule runs; real amounts are far shorter. */
     public const MAX_INPUT_BYTES = 64;
 
-    /** @var list<string> */
-    private const SPACES = [' ', "\t", "\r", "\n", "\u{00A0}", "\u{202F}"];
+    /** The only characters that may separate thousands inside a number. @var list<string> */
+    private const INNER_SPACES = [' ', "\u{00A0}", "\u{202F}"];
 
     /** Longest first, so `US$` isn't read as `US` plus `$`. @var list<string> */
     private const CURRENCY_MARKERS = ['US$', 'USD', '$'];
@@ -93,8 +94,9 @@ final class AmountParser
         }
 
         // Rule 1.
-        $text = self::stripMarker(self::stripMarker(self::trimSpaces($text), true), false);
-        $text = str_replace(self::SPACES, ' ', $text);
+        $text = self::stripMarker(self::stripMarker(EdgeWhitespace::trim($text), true), false);
+        // Only these become separators; a tab, CR or LF left inside fails rule 2.
+        $text = str_replace(self::INNER_SPACES, ' ', $text);
 
         // Rule 2.
         if (preg_match('/^[0-9., ]+$/D', $text) !== 1) {
@@ -221,28 +223,9 @@ final class AmountParser
     }
 
     /**
-     * Removes leading and trailing whitespace from SPACES (byte-safe on any input).
-     */
-    private static function trimSpaces(string $text): string
-    {
-        do {
-            $before = $text;
-            foreach (self::SPACES as $space) {
-                if (str_starts_with($text, $space)) {
-                    $text = substr($text, strlen($space));
-                }
-                if (str_ends_with($text, $space)) {
-                    $text = substr($text, 0, -strlen($space));
-                }
-            }
-        } while ($text !== $before);
-
-        return $text;
-    }
-
-    /**
      * Removes one currency marker (any case) at the start or the end, plus the whitespace
-     * between it and the number. ASCII-only comparison (`strncasecmp` is locale-independent).
+     * between it and the number. ASCII-only comparison (`strcasecmp` is locale-independent
+     * since PHP 8.2).
      */
     private static function stripMarker(string $text, bool $atStart): string
     {
@@ -253,7 +236,7 @@ final class AmountParser
             }
             $edge = $atStart ? substr($text, 0, $length) : substr($text, -$length);
             if (strcasecmp($edge, $marker) === 0) {
-                return self::trimSpaces($atStart ? substr($text, $length) : substr($text, 0, -$length));
+                return EdgeWhitespace::trim($atStart ? substr($text, $length) : substr($text, 0, -$length));
             }
         }
 

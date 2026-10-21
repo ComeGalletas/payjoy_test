@@ -11,7 +11,8 @@ use FxInstallments\Config\ConfigRepository;
  *
  * Text must be ASCII digits only: no sign, no decimal point, no exponent (`-1`, `3.5` and
  * `1e1` are rejected).
- * - `fromText()` (bot) trims surrounding spaces and accepts leading zeros (`03` → 3,
+ * - `fromText()` (bot) trims the same end whitespace as `AmountParser` (`EdgeWhitespace`:
+ *   space, tab, CR, LF, U+00A0, U+202F) and accepts leading zeros (`03` → 3,
  *   `007` → 7; `00` is 0, out of range), per the 2026-10-21 owner decision.
  * - `fromQuery()` (`/convert`) trims nothing and rejects leading zeros (`03`).
  *
@@ -22,8 +23,6 @@ use FxInstallments\Config\ConfigRepository;
  */
 final class InstallmentsValidator
 {
-    private const TRIM = " \t\r\n";
-
     public function __construct(private readonly ConfigRepository $config)
     {
     }
@@ -41,13 +40,13 @@ final class InstallmentsValidator
     }
 
     /**
-     * Bot input: surrounding spaces trimmed, then digits only; leading zeros allowed.
+     * Bot input: end whitespace trimmed, then digits only; leading zeros allowed.
      *
      * @throws ValidationFailed VALIDATION_INSTALLMENTS, reason format or out_of_range
      */
     public function fromText(string $text): int
     {
-        $digits = trim($text, self::TRIM);
+        $digits = EdgeWhitespace::trim($text);
         if (preg_match('/^[0-9]+$/D', $digits) !== 1) {
             throw ValidationFailed::installments(ValidationFailed::REASON_FORMAT);
         }

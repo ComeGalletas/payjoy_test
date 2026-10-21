@@ -28,6 +28,10 @@ final class InstallmentsValidatorTest extends TestCase
         yield 'leading zero on max' => ['060', 60];
         yield 'many leading zeros' => [str_repeat('0', 40) . '12', 12];
         yield 'leading zero and spaces' => [' 03 ', 3];
+        yield 'CRLF at the end' => ["3\r\n", 3];
+        yield 'no-break spaces' => ["\u{00A0}12\u{00A0}", 12];
+        yield 'narrow no-break space' => ["\u{202F}6", 6];
+        yield 'mixed end whitespace' => ["\u{00A0} \t3\n\u{202F}", 3];
     }
 
     #[DataProvider('validTexts')]
@@ -59,6 +63,10 @@ final class InstallmentsValidatorTest extends TestCase
         yield 'empty' => ['', $format];
         yield 'only spaces' => ['   ', $format];
         yield 'inner space' => ['1 2', $format];
+        yield 'inner no-break space' => ["1\u{00A0}2", $format];
+        yield 'inner tab' => ["1\t2", $format];
+        yield 'only no-break spaces' => ["\u{00A0}\u{202F}", $format];
+        yield 'vertical tab is not trimmed' => ["\v3", $format];
         yield 'word' => ['three', $format];
         yield 'fullwidth digit' => ['３', $format];
         yield 'NUL byte' => ["3\0", $format];
@@ -86,6 +94,8 @@ final class InstallmentsValidatorTest extends TestCase
     {
         yield 'leading space' => [' 3', ValidationFailed::REASON_FORMAT];
         yield 'trailing space' => ['3 ', ValidationFailed::REASON_FORMAT];
+        yield 'trailing LF' => ["3\n", ValidationFailed::REASON_FORMAT];
+        yield 'leading no-break space' => ["\u{00A0}3", ValidationFailed::REASON_FORMAT];
         yield 'leading zero' => ['03', ValidationFailed::REASON_FORMAT];
         yield 'zeros' => ['00', ValidationFailed::REASON_FORMAT];
         yield 'zero' => ['0', ValidationFailed::REASON_OUT_OF_RANGE];
