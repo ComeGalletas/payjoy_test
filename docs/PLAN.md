@@ -186,6 +186,9 @@ Reasons and consequences are in the ADR named in each row.
 
 ### 3c. Amount input in the bot (`Validation/AmountParser`)
 
+> **Refined in P1-03: the ADR 0013 amendment is authoritative** and changes rules 1 and 5 below
+> (markers only at the ends; inner spaces only as thousands; a single `.` + 3 digits is unclear).
+
 The bot speaks English, but users may type either separator. `AmountParser` returns a canonical
 string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
 
@@ -204,7 +207,7 @@ string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
 `VALIDATION_AMOUNT` and `meta.reason=unclear`. After `bot.max_retries` the session is abandoned.
 `/convert` does not use `AmountParser`; it accepts only the strict form.
 
-**These rules were refined in P1-03; the ADR 0013 amendment is authoritative.** In short: markers
+**Summary of the ADR 0013 amendment:** markers
 only at the ends; only space, NBSP and U+202F inside a number, as thousands in groups of 3; a single
 `.` followed by exactly 3 digits is unclear while a single `,` followed by 3 digits is thousands;
 the first thousands group is 1–3 digits with no leading `0`; more than 64 bytes is unclear; more
@@ -368,7 +371,7 @@ steps:
     expecting: currency
     buttons: [BRL, COP, MXN, EUR]
     retry: "I don't know that currency. Try a code like BRL or a country like Brazil."
-    clarify: "Several currencies use that name. Please type the code, like MXN or COP, or the country."
+    clarify: "Several currencies use that name or symbol. Please type the currency code, like MXN or COP."
   - id: installments
     ask: "How many monthly installments? (default 1)"
     expecting: installments
@@ -494,9 +497,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   (ADR 0018). Pass upstream's decimal text to `ScaledRate::fromDecimalString` where available; a
   rate `ScaledRate` rejects drops that one currency (logged), not the whole refresh. Fix the
   `ScaledRate` docblock: upstream numbers round-trip exactly for 15 or fewer significant digits,
-  not 17. Implement `Validation\CurrencyAllowList` from the rate table and `FallbackCurrencies`, and
-  re-run the resolver's shadowing check against the real list: with all codes allowed, words like
-  `all`, `top`, `cup`, `try` and `won` resolve as codes (ALL, TOP, CUP, TRY) or `not_allowed`.
+  not 17. Implement `Validation\CurrencyAllowList` from the rate table and `FallbackCurrencies`.
+  Decide what bare English words that are also codes should do once every code is allowed (`all`,
+  `top`, `cup`, `try` resolve as ALL, TOP, CUP, TRY; `won` gives `not_allowed`): the existing
+  shadowing test checks table entries only, so either add such words to the ambiguous list or
+  accept them as codes, and test the choice against the real list.
 - **P1-11** Request log and IP blocking (ADR 0016). Runs after P1-04 and before P1-05, so
   `/convert` is protected from its first release.
   - A request-log step that writes one `requests` row for every request, including blocked ones.
@@ -535,7 +540,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `riyals`, `leu`, `manat`, `som`) and country coverage (Uruguay, Bolivia, Paraguay, Venezuela,
   Central America, the Dominican Republic, Puerto Rico, Canada; `yuan` → CNY); document `£` → GBP
   while `pound` stays ambiguous; `normalize()` may return more than 7 integer digits, so call
-  `read()`.
+  `read()`; `ValidationFailed::messageForUser()` is the generic `ErrorCodes` text, so bot wording
+  comes from the flow YAML.
 - **P1-07** `resources/widget/` at `GET /bot/widget`, `channel=static`, `textContent` only, CSP,
   `nosniff`, `frame-ancestors`.
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
@@ -632,10 +638,12 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     file writes to it (no tables are created); check the schema before changing the journal mode.
   - The `ScaledRate` sweep calls `mt_srand` with a fixed seed; reseed in `tearDown` so later tests
     don't inherit the RNG state.
-  - `ConfigRepository` accepts `amount.max` ≤ 0 (every amount then fails `over_max`); reject it at
-    load time.
-  - The `AmountParser` sweep checks values but not swaps of one accepted input for another; the
-    pinned `SWEEP_*_READ` counts must change only with a rule change, explained in the commit.
+  - (P1-03) `ConfigRepository` accepts `amount.max` ≤ 0 (every amount then fails `over_max`);
+    reject it at load time.
+  - (P1-03) The `AmountParser` sweep checks values but not swaps of one accepted input for another;
+    the pinned `SWEEP_*_READ` counts must change only with a rule change, explained in the commit.
+  - (P1-03) `TextNormalizer` folds only precomposed Latin accents; decomposed forms (a letter plus
+    U+0301) fall through to `unknown`. Normalize to NFC if intl becomes available.
 
 ## 11. Working agreements for the agent
 

@@ -20,9 +20,9 @@ new ADR, and the affected sentence in its body points to the new ADR.
 | [0010](0010-portable-pdo-postgres-deferred.md) | Portable PDO now, Postgres support deferred | Accepted |
 | [0011](0011-minor-units-floor-split.md) | Minor units, floor split and English display | Accepted (storage clause superseded by 0017) |
 | [0012](0012-upstream-latest-local-math.md) | Upstream: one `/latest/USD` call per refresh, local math, stale fallback | Accepted |
-| [0013](0013-amount-input-parsing.md) | Amount input: strict API, lenient bot | Accepted |
+| [0013](0013-amount-input-parsing.md) | Amount input: strict API, lenient bot | Accepted (amended 2026-10-21) |
 | [0014](0014-phase1-scope-cut.md) | Phase 1 scope cut | Accepted |
-| [0015](0015-co-lead-dual-approval.md) | Co-lead dual approval; builder, tester and judge per task | Accepted |
+| [0015](0015-co-lead-dual-approval.md) | Co-lead dual approval; builder, tester and judge per task | Accepted (amended 2026-10-21) |
 | [0016](0016-request-log-and-ip-blocking.md) | Request log and IP blocking | Accepted (amended 2026-10-21) |
 | [0017](0017-integer-fixed-unit-storage.md) | Store money and rates as integers in fixed units | Accepted (amended 2026-10-21) |
 | [0018](0018-test-network-isolation.md) | Keeping tests off the network | Accepted |

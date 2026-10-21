@@ -1,6 +1,6 @@
 # 0015 — Co-lead dual approval; builder, tester and judge per task
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-10-21: merge order, see "Amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -37,3 +37,17 @@ record a second approving review on PRs that account opens.
 - Every merge has an independent test report and review on record in the PR.
 - More agent runs per task; small tasks still get all three roles.
 - If a second GitHub account is added later, switch to required reviews and supersede this ADR.
+
+## Amendment (2026-10-21): merge order
+
+**Context.** PRs #8 and #10 were merged on GitHub before the co-leads' approval comment was posted.
+The account is shared, so the record can't show who merged, and the merge landed before the
+approval it depended on was on the PR.
+
+**Decision** (owner).
+- **Builder PRs:** after the owner approves in chat, the lead posts the approval comment first,
+  then merges with `gh pr merge <n> --merge --match-head-commit <reviewed sha>`. The owner doesn't
+  merge builder PRs on GitHub.
+- **The lead's own PRs** (docs close-outs): the owner merges them, after the verdicts (GR-013).
+
+**Consequences.** Every builder merge has its approval comment on the PR before the merge commit.

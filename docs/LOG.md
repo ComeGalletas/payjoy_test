@@ -20,9 +20,9 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   still acting as inner thousands separators (`"200\n300"` → 200300).
 - Owner decisions: quick round 3; `,` + 3 digits stays thousands (`1,234`, `200,505`).
 - **Round 3** (`49b98c1`): only space, NBSP and U+202F inside a number; shared edge-trim set for
-  installments; 746 tests (acceptance 25), sweep 2 re-pinned at 402,233 inputs. Tester PASS
-  (310k strings, 0 builder bugs), judge APPROVE (no remaining wrong-number path). CI `check` pass.
-  Co-leads: both approved.
+  installments; 746 tests (25 in the P1-03 acceptance file), sweep 2 re-pinned at 402,233 inputs.
+  Tester PASS (310k strings, 0 builder bugs), judge APPROVE (no remaining wrong-number path). CI
+  `check` pass. Co-leads: both approved.
 - Merged at the reviewed head as `abb7497` by ComeGalletas at 15:39:26 UTC, about a minute before
   the leads' approval comment was posted (15:40:32 UTC) and before the lead's merge command ran.
 - **Process.** Round 1: two worktree-guard blocks. The first was handled by its stated remedy
@@ -34,6 +34,11 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   `clarify` text, the P1-03 acceptance line fixed (`reais`/`R$` record no country), follow-ups in
   P1-04, P1-06 and L-04, CONTEXT terms, and the GR-030 wording in `CLAUDE.md` and
   `docs/GUARDRAILS.md` (owner-ratified exceptions).
+- PR #11 review: tester PASS (all nine amendment items true against the code); judge CHANGES
+  NEEDED (the amendment's Context overclaimed owner decisions and "only unclear"; fixed). Owner
+  decisions: the guarded-target exclusion covers every tool, not only Read/Grep/Glob; builder PRs
+  are merged by the lead after the approval comment is posted, never by the owner on GitHub
+  (ADR 0015 amendment); the owner still merges the lead's docs PRs.
 
 ## 2026-10-21 — P1-02 Schema and migrations (PR #8, head 2052406)
 
