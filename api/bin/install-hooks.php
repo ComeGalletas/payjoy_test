@@ -7,9 +7,12 @@ declare(strict_types=1);
  *
  * - Main checkout (`git rev-parse --git-dir` equals `--git-common-dir`): copies .githooks/* into
  *   `git rev-parse --git-path hooks` and makes them executable. A hook that is already identical
- *   is left alone. A differing hook that carries the marker line below is renamed to <name>.bak
+ *   is left alone. A differing hook that carries the marker line below is copied to a backup
  *   first. A differing hook without the marker is not ours: the script refuses, writes nothing and
- *   exits 1, unless --force is given (then that hook is also kept as <name>.bak).
+ *   exits 1, unless --force is given (then that hook is also backed up).
+ * - Backups are named <name>.bak.<YYYYMMDD-HHMMSS> (UTC), with -1, -2, ... appended when that
+ *   name is taken. A backup is created with an exclusive open, so an existing file of any name,
+ *   including an old plain <name>.bak, is never overwritten or deleted. The path is printed.
  * - Linked worktree (the two differ): the hooks dir is shared with the main checkout, so nothing
  *   is written. The installed hooks are only compared byte for byte with this branch's
  *   .githooks/*; a missing or differing hook prints a warning. Exits 0 either way.
@@ -99,6 +102,35 @@ function canonical(string $path): string
     return PHP_OS_FAMILY === 'Windows' ? strtolower($normal) : $normal;
 }
 
+/**
+ * Writes $contents to a new backup file next to $target and returns its path. The file is opened
+ * with mode 'x' (create, fail if it exists), so no existing file is ever replaced.
+ */
+function writeBackup(string $target, string $contents): string
+{
+    $base = $target . '.bak.' . gmdate('Ymd-His');
+    for ($attempt = 0; $attempt < 1000; $attempt++) {
+        $backup = $attempt === 0 ? $base : "{$base}-{$attempt}";
+        if (file_exists($backup)) {
+            continue;
+        }
+        $handle = @fopen($backup, 'xb');
+        if ($handle === false) {
+            if (file_exists($backup)) {
+                continue; // Taken between the check and the open.
+            }
+            fail("could not create backup {$backup}");
+        }
+        $written = fwrite($handle, $contents);
+        if (!fclose($handle) || $written !== strlen($contents)) {
+            fail("could not write backup {$backup}; {$target} was left unchanged");
+        }
+
+        return $backup;
+    }
+    fail("could not find a free backup name for {$target} (tried {$base} to {$base}-999)");
+}
+
 function fail(string $message, int $code = 1): never
 {
     fwrite(STDERR, "install-hooks: {$message}" . PHP_EOL);
@@ -163,7 +195,7 @@ if ($foreign !== []) {
         'refusing to overwrite hook(s) not managed by this project: ' . implode(', ', $foreign)
         . " in {$hooksDir} (no '" . MANAGED_MARKER . "' line). Nothing was written."
         . PHP_EOL . '  Move them away, or run `make init FORCE=1` (php api/bin/install-hooks.php --force)'
-        . ' to replace them; the old file is kept as <name>.bak.',
+        . ' to replace them; the old file is kept as <name>.bak.<YYYYMMDD-HHMMSS>.',
     );
 }
 
@@ -178,13 +210,11 @@ foreach ($plan as $name => $action) {
         continue;
     }
     if ($action === 'backup') {
-        $backup = $target . '.bak';
-        if (file_exists($backup) && !unlink($backup)) {
-            fail("could not remove old {$backup}");
+        $previous = file_get_contents($target);
+        if ($previous === false) {
+            fail("could not read {$target}");
         }
-        if (!rename($target, $backup)) {
-            fail("could not rename {$target} to {$backup}");
-        }
+        $backup = writeBackup($target, $previous);
         echo "install-hooks: kept the previous {$name} as {$backup}" . PHP_EOL;
     }
     if (file_put_contents($target, $sources[$name]) !== strlen($sources[$name])) {

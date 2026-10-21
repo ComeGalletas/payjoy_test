@@ -23,7 +23,7 @@ TEST_PATH = $(patsubst $(API)/%,%,$(patsubst ./%,%,$(subst \,/,$(strip $(TEST)))
 
 ## init [FORCE=1]: install Composer dependencies in api/, then install the git hooks (main
 ## checkout) or only verify them (linked worktree). FORCE=1 replaces hooks this project
-## did not install, keeping them as <name>.bak.
+## did not install, keeping them as <name>.bak.<YYYYMMDD-HHMMSS>.
 init:
 	$(COMPOSER_BIN) --working-dir=$(API) install --no-interaction --no-progress
 	$(PHP) $(API)/bin/install-hooks.php $(if $(FORCE),--force)
