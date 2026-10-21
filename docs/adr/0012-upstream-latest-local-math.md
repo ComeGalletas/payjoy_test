@@ -17,14 +17,14 @@ the key.
 
 - Call `/latest/USD` only when `now ≥ next_update_unix`; one call refreshes every rate (~30 calls a
   month). Its codes are the currency allow-list; `/codes` is used only for names. The stored
-  `next_update_unix` has a floor, and the breaker must be closed (amendment items 1 and 4).
+  `next_update_unix` has a floor, and the breaker must be closed (amendment items 4 and 6).
 - Always compute `converted = amount × rate` locally.
 - On refresh failure, serve a cached table younger than `rates.max_stale_hours` with `stale: true`.
   Every response carries `rate_as_of`; the age is measured from it (amendment item 5). A static
   `FallbackCurrencies` list validates codes on a cold start.
 - `UpstreamBreaker` stops calls after `quota-reached` (until next month, UTC) and after
-  `invalid-key` or `inactive-account` (until `php api/bin/upstream.php reset`). Extended by the
-  amendment below: every other failed refresh starts a growing backoff.
+  `invalid-key` (until `php api/bin/upstream.php reset`). The amendment below adds
+  `inactive-account` to the reset case and a growing backoff after every other failed refresh.
 - The client catches every exception and maps it to an error code; exception text never leaves
   it. Tests inject a mocked handler; the test bootstrap forbids real network calls and uses a fake
   key.
@@ -67,8 +67,8 @@ design, which the tester and judge accepted in round 2.
 3. **Strength order: auth > quota > backoff.** An open trip of equal or greater strength is never
    replaced. So a slow request that fails late can't shorten an auth or quota block, and one outage
    isn't counted twice: a failure while a backoff is still open doesn't move the schedule on; only a
-   failure after the backoff has ended raises `failures`. An expired trip is replaced. A success clears a backoff (open or not) or
-   an expired trip, but leaves an open quota or auth block alone.
+   failure after the backoff has ended raises `failures`. An expired trip is replaced. A success
+   clears a backoff (open or not) or an expired trip, but leaves an open quota or auth block alone.
 4. **Refresh floor.** The stored `next_update_unix` is
    `max(upstream's time_next_update_unix, fetched_at + 300)` (`RateCache::MIN_REFRESH_SECONDS`).
    This stops a late upstream, whose next-update time has already passed, from causing a call on
@@ -103,5 +103,5 @@ design, which the tester and judge accepted in round 2.
     `refresh_day_of_month` from `/quota` (P1-08).
   - While a backoff started by `unsupported-code` on `/latest/USD` is open, every lookup without a
     usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`. That is a 400 ("That currency is not
-    supported right now") for every currency. Whether to keep the 400 or answer 503 is decided
-    before P1-05 starts.
+    supported right now") for every currency. The owner and lead decide before P1-05 starts
+    whether to keep the 400 or answer 503.

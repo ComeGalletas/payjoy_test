@@ -13,8 +13,9 @@ end to end.
 ## Decision
 
 PHP 8.3 with no framework. A single entry point (`public/index.php`) and a tiny router. Composer
-dependencies are limited to `guzzlehttp/guzzle` (upstream HTTP; version per the amendment), `vlucas/phpdotenv` (`.env`),
-`symfony/yaml` (flow definitions), and `phpunit/phpunit` (tests) as require-dev only. Required
+dependencies are limited to `guzzlehttp/guzzle` (upstream HTTP; version per the amendment),
+`vlucas/phpdotenv` (`.env`), `symfony/yaml` (flow definitions), and `phpunit/phpunit` (tests) as
+require-dev only. Required
 extensions: `pdo_sqlite`, `curl`, `mbstring`, `openssl`; `apcu` optional from Phase 3 (ADR 0014).
 
 ## Consequences

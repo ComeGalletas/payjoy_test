@@ -165,8 +165,7 @@ Reasons and consequences are in the ADR named in each row.
   3-letter codes to positive numbers) before storing.
 - **Allow-list:** the currency codes in the latest stored rate table. When the cache is empty,
   `Rates/FallbackCurrencies` (static ISO 4217 list plus upstream's non-ISO territory codes)
-  validates codes so users still get
-  `VALIDATION_CURRENCY` vs an upstream error correctly.
+  validates codes so users still get `VALIDATION_CURRENCY` vs an upstream error correctly.
 - **Always compute locally.** `converted = amount × rate`; upstream `conversion_result` is not used.
 - **Stale fallback.** If the refresh fails and a cached table younger than
   `rates.max_stale_hours` exists, serve it with `stale: true`; otherwise return the mapped error.
