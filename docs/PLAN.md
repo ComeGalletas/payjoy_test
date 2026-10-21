@@ -400,7 +400,7 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *DONE 2026-10-20 (PR #1). `main` requires a PR and the `check` status check, admins included.*
 - **P0-05** Owner adds `EXCHANGERATE_API_KEY` and `ADMIN_TOKEN` to `.env`.
   *Acceptance:* owner confirms; agents don't read `.env`.
-- **P0-06** Guard hardening follow-ups from the P0-04 review (proposed; needs both co-leads):
+- **P0-06** Guard hardening follow-ups from the P0-04 review (approved by both co-leads):
   - `install-hooks.php` never overwrites a `.bak` that lacks the managed-hook marker; use a
     timestamped name instead (`<hook>.bak.<YYYYMMDD-HHMMSS>`).
   - `commit-msg` honours `core.commentChar` (default `#`) and always rejects a message whose first
@@ -413,8 +413,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
     real tag `2.40.0`.
   *Acceptance:* `api/tests/Guards/` has a test for each behaviour change; `make check` and CI pass;
   a fresh `make init FORCE=1` over a foreign hook, followed by a managed-hook update, still leaves
-  the foreign hook in a `.bak` file; `git grep pathWith` finds nothing; every `uses:` in
+  the foreign hook in a `.bak` file; `git grep pathWith -- api` finds nothing; every `uses:` in
   `.github/workflows/check.yml` is a 40-character SHA followed by a `# <real tag>` comment.
+  *DONE 2026-10-20 (PR #3). Owner decision: keep "always reject a comment first line".*
 
 ### Phase 1 — Deterministic MVP
 
@@ -517,6 +518,14 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 - **L-01** `bin/export-typebot.php` — starter Typebot JSON from the YAML.
 - **L-02** Telegram / WhatsApp webhook channel for the static flow.
 - **L-03** Postgres metrics: `Dialect`, `db/schema.pgsql.sql`, `PostgresTest` (§8).
+- **L-04** Tooling backlog from the P0-06 review:
+  - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
+  - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
+    leave a truncated hook.
+  - `make init FORCE=0` should not force (`$(if $(FORCE),…)` treats any non-empty value as true).
+  - Decide how `git merge --squash` commits get a valid subject (git's default "Squashed commit of
+    the following:" is rejected by `commit-msg`).
+  - Optionally prune managed hook backups (those carrying the marker).
 
 ## 11. Working agreements for the agent
 

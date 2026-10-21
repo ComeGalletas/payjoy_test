@@ -4,6 +4,30 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-20 — P0-06 guard hardening (PR #3, head 912c7c2)
+
+- PR #2 (P0-04 close-out) merged by the owner as `0ac5569`. The owner approved the two `CLAUDE.md`
+  host-quirk lines in chat: "I approve PR #2 including the two CLAUDE.md host-quirk lines".
+- P0-06 approved by both co-leads before work started ("start P0-06 once I confirm the merge").
+- Builder: DONE_WITH_CONCERNS, one commit `912c7c2`. Guard tests 53 → 80 (1244 assertions); about
+  25 s for `make check` on Windows, 1.3 s for the guards on Linux CI. Pinned
+  `actions/checkout@fbc6f39… # v5.1.0`, `actions/cache@0057852… # v4.3.0`, and kept
+  `setup-php@eb7c497…` with its comment fixed to `2.40.0`.
+- Guard blocks, all reported and not worked around: two worktree-guard refusals (a complex probe,
+  a CI poll) and one permission-classifier denial (`git restore --source=origin/main`, flagged as
+  irreversible local destruction). The tester did the old-code check in its own clone instead.
+- Tester: PASS. Mutation check: 19 of 80 guard tests fail with the `0ac5569` installer and hook.
+  Judge: APPROVE WITH NITS. CI `check`: pass, 12 s. Co-leads: both approved.
+- **Corrections:** the lead's brief contradicted the spec (it asked for a `;` comment line above
+  the subject to be accepted); the builder correctly followed the spec. The lead also assumed git
+  strips comments before `commit-msg`; it doesn't, so the hook rejects a subject typed below git's
+  comment block. The builder's concern that `rebase -i` squash is rejected was also wrong: squash
+  doesn't run `commit-msg`.
+- Owner decision: keep "always reject a message whose first non-blank line is a comment".
+- Merged with `--match-head-commit 912c7c2` → `eae17fa`. Main checkout `make init`: new
+  `commit-msg` installed, previous kept as `commit-msg.bak.20261021-005243`; `pre-push` unchanged.
+- Backlog from the review recorded as L-04 in `docs/PLAN.md`.
+
 ## 2026-10-20 — P0-04 round 2 and merge (PR #1, head 47a6c80)
 
 - Builder round 2: one new commit `47a6c80` fixing A, C–I; guard tests 27 → 53. Hook install now
