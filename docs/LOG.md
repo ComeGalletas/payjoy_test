@@ -4,6 +4,36 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — P1-02 Schema and migrations (PR #8, head 2052406)
+
+- **Round 1** (`152b277`). Builder: DONE_WITH_CONCERNS; seven tables with integer and text columns
+  only, an append-only migration list (`app_state.schema_version`), a P1-01 upgrade that converts
+  `amount_usd` to cents, generated `schema.sql`, `--prune`, `floatParam` removed, `UsdCents` and
+  `ScaledRate` helpers, a rate-limiter race test through a seam. Unit+Acceptance 151 → 243, guards
+  80. Schema-apply policy chosen by the builder: migrate explicitly, the app fails closed on an old
+  schema (ADR 0019).
+- Tester round 1: FAIL. `ScaledRate::fromRate()` truncated rates ≥ 100,000 (`round()` returns values
+  ≥ 1e15 unchanged; `439537.6134` → `…133999999`); reproduced by the lead. Judge round 1: APPROVE
+  WITH NITS. Co-leads: CHANGES NEEDED; the owner said "send back the PR and make the fixes and ADR
+  changes".
+- **Live rate data** (lead, `open.er-api.com/v6/latest/USD`, 2026-10-21, 166 codes): at most 6
+  decimals and 7 integer digits; largest rate IRR ≈ 1,731,936.86, above the round-1 2^53 limit.
+- **Round 2** (`2052406`). `rate_scaled` built from decimal text with integer arithmetic, limit
+  below 900,000,000; migrations 1–3 pinned by sha256; `currentVersion()` narrowed with a new
+  `SchemaCorrupt` error. Unit+Acceptance 318 (362,137 assertions), guards 80; `make check` ≈ 33 s,
+  the sweep ≈ 2.5 s. Builder sweep: 340k rates, 0 mismatches. Tester round 2: PASS, its own bcmath
+  reference found 0 mismatches over 250k rates, and every mutation was caught. Judge round 2:
+  APPROVE WITH NITS. CI `check`: pass, 23 s. Co-leads: both approved.
+- Merged at the reviewed head as `b02a155` by ComeGalletas at 13:49:08 UTC, before the lead's own
+  merge command ran and about 20 s before the leads' approval comment was posted.
+- **Process.** Round 1: two worktree-guard blocks, each handled by applying the stated remedy once
+  in Bash; a scratch file was then written with the Write tool, accepted because the dedicated file
+  tools are the normal way to create files. Round 2: no blocks. Briefs now say file tools are always
+  allowed.
+- Lead docs: ADRs 0019 and 0020, ADR 0016 and 0017 amendments, INV-10, the corrected PLAN §3a
+  magnitude claim (the real worst case is 1,000,000 USD in IRR, ≈ 1.73 × 10^14 minor units), and
+  the review follow-ups placed in P1-04, P1-09, L-03 and L-04.
+
 ## 2026-10-20 — P1-01 Foundation (PR #6, head 9c1eeeb)
 
 - Builder: DONE_WITH_CONCERNS, one commit `9c1eeeb`. Unit+Acceptance 6 → 151 tests (606
