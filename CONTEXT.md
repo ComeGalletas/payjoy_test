@@ -49,7 +49,12 @@ name, add it here in the same commit that introduces it.
 | **trusted proxy** | `TRUSTED_PROXY`: the one peer whose `X-Forwarded-For` header is believed. |
 | **rate-limit window** | A fixed one-minute UTC window (`window_start`) in which an IP's requests are counted against `ratelimit.per_minute`. |
 | **preflight** | A CORS `OPTIONS` request; answered with a 200 envelope, with `Access-Control-*` headers only for an allowed origin. |
-| **IP block** | A row in `ip_blocks`: requests from that IP get 403 `IP_BLOCKED` until `expires_at`. Automatic (`block.*` thresholds) or manual (`bin/ip.php`). |
+| **IP block** | A row in `ip_blocks`: requests from that IP get 403 `IP_BLOCKED` until `expires_at` or until unblocked. An **automatic block** comes from a `block.*` threshold; a **manual block** from `php api/bin/ip.php block`. |
+| **unblock** | `php api/bin/ip.php unblock`: ends a block now (`expires_at = now`) and keeps the row one window, so the requests before it never count again. |
+| **clean slate** | After a block ends or is lifted, only requests from its end on count toward the next block (ADR 0016 second amendment). |
+| **rate-limited minute** | A rate-limit window in which an IP went over `ratelimit.per_minute` (at least one 429). `block.rate_limit_hits` counts these, not 429 responses. |
+| **error response (for blocking)** | A non-blocked 4xx other than 429; what `block.error_responses` counts. 5xx never count. |
+| **block exemption** | An address never blocked automatically: loopback, the trusted proxy itself, and anything that isn't a valid IP. It can still be blocked by hand. |
 | **cents** / `amount_usd_cents` | A USD amount stored as an exact integer number of cents (ADR 0017). |
 | **scaled rate** / `rate_scaled` | A rate stored as `round(rate × 10^10)` (ADR 0017). |
 | **config key** | A setting such as `installments.max`; read-only defaults in Phases 1–2, editable via `PUT /config` in Phase 3. |
@@ -79,7 +84,7 @@ name, add it here in the same commit that introduces it.
 | Term | Meaning |
 |---|---|
 | **event** | One append-only row in `events`, written only through `Metrics`. |
-| **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query, exception class. |
+| **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query (percent-encoded, as in the request log), exception class. |
 | **request log** | The `requests` table: one row per incoming request with the raw client IP, kept `requests.retention_days` (ADR 0016). |
 | **migration** / **migration list** | One numbered schema change in the append-only list in `Db/Migrations`; run with `bin/migrate.php` (ADR 0020). |
 | **schema version** | `app_state.schema_version`, the last migration applied; the app refuses a database behind the code (ADR 0019). |

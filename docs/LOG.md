@@ -4,6 +4,49 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — P1-11 Request log and IP blocking (PR #14, head 6ce7df5)
+
+- PR #13 (P1-04 close-out) merged by the owner as `b963187`.
+- Owner decision before P1-05: while an `unsupported-code` backoff is open, lookups answer 503,
+  not 400 (ADR 0012 amendment; P1-05 applies it).
+- **Round 1** (`f527792`). Builder: DONE_WITH_CONCERNS. It built the request log
+  (`Metrics/RequestLog`), the block check before routing, automatic blocking (`Http/IpBlocking`),
+  block rows per the ADR 0016 amendment (`Http/IpBlocks`) and `bin/ip.php`, and listed 12
+  decisions the ADR left open. No schema change. Unit+Acceptance went from 1123 to 1243 tests;
+  guards stayed at 80.
+- Tester round 1: FAIL on two minor bugs. A path cut by bytes could end in half a UTF-8
+  character, and `unblock` then `--prune` lost the clean slate. Dropping the transaction in
+  `IpBlocks` went uncaught. Judge round 1: APPROVE WITH NITS, but one 35-request burst in a minute
+  blocked an IP, and everyone behind a carrier NAT, for an hour.
+- Owner decisions: 429s count as distinct rate-limited minutes; prune keeps an ended block one
+  window longer; `ip.block` and `ip.unblock` events that never hold the IP; a friendlier 403 text.
+  Fail-open and the exemptions were ratified as built. Co-lead addition: 429s no longer count
+  toward `block.error_responses`.
+- **Round 2** (`47dbb66`): the four decisions, percent-encoded path and method, a transaction
+  test; 1282 tests. Tester: PASS on the code, with one flaky CLI test (`time()` read twice around
+  a subprocess). Judge: CHANGES NEEDED, because counting minutes over `requests` made each 429
+  scan grow with the flood.
+- Owner decision: round 3 before merge.
+- **Round 3** (`6ce7df5`): rate-limited minutes read from `rate_limits` (one primary-key range,
+  at most `block.window_minutes` rows), each response checks only its own threshold,
+  `block.window_minutes` capped at 1440, the flaky test fixed, the cut keeps a character's
+  escapes together; 1295 tests. Tester: PASS, all mutations caught. Its report to the lead
+  measured about 2 ms per 429 at 10, 5,000 and 50,000 logged rows, and about 4 ms per 404 that led
+  to a block with 20,000 rows in the window. Judge: APPROVE WITH NITS.
+- Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
+  as `a3a376b` (22:36:36 UTC).
+- **Process.** The builder hit two worktree-guard refusals in round 1 (PR #14 body), and the tester
+  one in each of rounds 1 and 3 (its reports to the lead). Each was handled within the GR-030
+  exceptions: the stated remedy once in the same tool, or the Edit, Write or Grep tool. No guarded
+  target was touched.
+- Upstream: 0 real calls.
+- Lead docs: ADR 0016 second amendment (what counts toward a block, clean slate, settings, block
+  rows and the new prune boundary, exemptions, fail-open, the 403, block events, order, stored
+  path and method, `bin/ip.php`, cost and flood consequences, known limits); the 503 decision in
+  the ADR 0012 amendment; PLAN §3, §3b, §5 and §6; follow-ups in P1-05, P1-07, P1-08, P1-09,
+  P3-01 and L-04; CONTEXT terms (unblock, rate-limited minute, error response for blocking,
+  block exemption; automatic and manual blocks).
+
 ## 2026-10-21 — P1-04 Rates: client, cache, breaker (PR #12, head cf85902)
 
 - PR #11 (P1-03 close-out) merged by the owner as `8496080`.

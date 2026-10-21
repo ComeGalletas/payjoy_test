@@ -116,10 +116,14 @@ Reasons and consequences are in the ADR named in each row.
 - **Abuse limits.** Per-IP limit on `/convert` and `/bot/message` (`ratelimit.per_minute`, stored in
   SQLite) → `RATE_LIMITED` (429). `X-Forwarded-For` is trusted only when `TRUSTED_PROXY` is set and
   matches the peer. CORS on `/bot/message` only for `cors.allowed_origins`.
-- **Request log and blocking (ADR 0016).** Every request, including blocked ones, writes a
-  `requests` row with the raw client IP; the query string is never stored. An IP over the `block.*`
-  thresholds is blocked: the Kernel answers 403 `IP_BLOCKED` with `Connection: close` before
-  routing. Raw IPs live only in `requests` and `ip_blocks`.
+- **Request log and blocking (ADR 0016 and its amendments).** Every request, including blocked
+  ones, writes a `requests` row with the raw client IP; the query string is never stored, and path
+  and method are stored percent-encoded. An IP over a `block.*` threshold is blocked: the Kernel
+  answers 403 `IP_BLOCKED` with `Connection: close` before routing. `block.rate_limit_hits` counts
+  rate-limited minutes, `block.error_responses` counts 4xx other than 429; 5xx and blocked
+  requests never count. Loopback, the trusted proxy and non-IPs are never blocked automatically,
+  and a failed block check lets the request through. Raw IPs live only in `requests` and
+  `ip_blocks`; `ip.block` and `ip.unblock` events never hold them.
 - **Rounding.** Only `InstallmentCalculator::display()` rounds money or rates;
   `Metrics/ReportFormatter` may format report aggregates. Nowhere else, including the widget JS.
 - Tests first for validators, `AmountParser`, installment math and display. PHPUnit stays green.
@@ -182,7 +186,8 @@ Reasons and consequences are in the ADR named in each row.
   - An open trip is never replaced by one of equal or lower strength (auth > quota > backoff).
   - While blocked, serve stale (`result=blocked`, `stale=true`) or return `UPSTREAM_QUOTA`,
     `UPSTREAM_AUTH`, or for a backoff the code of the failed refresh that opened it.
-- **Error mapping:** `unsupported-code` → `UPSTREAM_UNSUPPORTED_CODE` (400); `quota-reached` →
+- **Error mapping:** `unsupported-code` → `UPSTREAM_UNSUPPORTED_CODE` (400; from P1-05, 503 while
+  an `unsupported-code` backoff is open, ADR 0012 amendment item 9); `quota-reached` →
   `UPSTREAM_QUOTA` (503); `invalid-key`, `inactive-account` → `UPSTREAM_AUTH` (503); timeout →
   `UPSTREAM_TIMEOUT` (503); bad JSON or types → `UPSTREAM_MALFORMED` (503). Generic
   `message_for_user` only.
@@ -292,18 +297,21 @@ a PHP array (`Convert/CurrencyCountryMap`), not a table.
 
 **Retention:** `bin/migrate.php --prune` deletes `rate_limits` rows older than a day, closed
 `sessions` older than 30 days, `requests` rows older than `requests.retention_days` (30) and
-expired `ip_blocks`. `events` are kept.
+`ip_blocks` that ended at least `block.window_minutes` ago (ADR 0016 second amendment). `events`
+are kept.
 
-Event types (Phase 1): `upstream.call`, `upstream.breaker_reset`, `api.request`, `bot.session_start`, `bot.step`
-(valid/invalid), `bot.session_completed`, `bot.session_abandoned`, `error`. Phase 2 adds
-`llm.call`; Phase 3 adds `config.changed`.
+Event types (Phase 1): `upstream.call`, `upstream.breaker_reset`, `ip.block`, `ip.unblock`,
+`api.request`, `bot.session_start`, `bot.step` (valid/invalid), `bot.session_completed`,
+`bot.session_abandoned`, `error`. Phase 2 adds `llm.call`; Phase 3 adds `config.changed`. The
+`ip.*` events never hold the IP; their meta is listed per event in the ADR 0016 second amendment,
+item 8.
 
 Error codes (stable strings) and HTTP status:
 
 | Code | HTTP |
 |---|---|
 | `VALIDATION_AMOUNT`, `VALIDATION_CURRENCY`, `VALIDATION_INSTALLMENTS` | 400 |
-| `UPSTREAM_UNSUPPORTED_CODE` | 400 |
+| `UPSTREAM_UNSUPPORTED_CODE` | 400; 503 while an `unsupported-code` backoff is open (from P1-05, ADR 0012 amendment item 9) |
 | `UPSTREAM_TIMEOUT`, `UPSTREAM_QUOTA`, `UPSTREAM_AUTH`, `UPSTREAM_MALFORMED` | 503 |
 | `ADMIN_UNAUTHORIZED` | 401 |
 | `IP_BLOCKED` | 403 |
@@ -335,7 +343,9 @@ Config keys (read-only defaults in `Config/defaults.php` during Phases 1–2):
 `health.quota_cache_minutes=60`, `llm.enabled=false`, `llm.confidence_threshold=0.8`,
 `requests.retention_days=30`, `block.window_minutes=10`, `block.rate_limit_hits=5`,
 `block.error_responses=100`, `block.duration_minutes=60` (the `block.*` values are first guesses,
-to be tuned against real traffic).
+to be tuned against real traffic). Ranges: `block.window_minutes` 1–1440,
+`block.duration_minutes` 1–525600, the two counts at least 1. `block.rate_limit_hits` counts
+rate-limited minutes, not 429 responses.
 
 ## 7. User interfaces for the MVP
 
@@ -526,7 +536,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
     follow the ADR 0016 amendment: active while `now < expires_at`; select-then-write in one
     transaction; a manual block replaces an automatic one, never the reverse while active; a new
     automatic block on an active automatic one extends it to the later expiry.
-  - `IP_BLOCKED` added to `ErrorCodes`; `requests` and expired `ip_blocks` pruned (P1-02 tables).
+  - `IP_BLOCKED` added to `ErrorCodes`; `requests` pruned, and ended `ip_blocks` pruned one window
+    after they end (P1-02 tables; ADR 0016 second amendment).
   *Acceptance:* `tests/Acceptance/P1_11_RequestLogTest.php` — every request, including 404s, 429s
   and blocked ones, writes exactly one `requests` row with the client IP (the trusted-proxy XFF hop
   when configured), method, path without query and status; the configured number of 429s blocks
@@ -534,6 +545,10 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   with `Connection: close`, its handler never runs and no `error` event is written; the block
   expires after `block.duration_minutes`; `bin/ip.php unblock` restores access; rows older than 30
   days are pruned.
+  *DONE 2026-10-21 (PR #14, three rounds). Decisions in the ADR 0016 second amendment: 429s count
+  as rate-limited minutes, not responses (owner), so "the configured number of 429s" above means
+  rate-limited minutes; ended blocks are pruned one window late; `ip.block` and `ip.unblock`
+  events; the 403 text; exemptions and fail-open.*
 - **P1-05** `Convert/`: `MinorUnits`, `InstallmentCalculator` (§3a), `ConvertService` (local
   math, `rate_as_of`, `stale`) → `GET /convert`.
   *Acceptance:* `tests/Acceptance/P1_05_ConvertTest.php` — `amount=200&cy=BRL&installments=3` at
@@ -544,9 +559,17 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `VALIDATION_AMOUNT` (checked in `ConvertService`, before `display()`; §3a).
   Also (from the P1-04 review): while a backoff started by `unsupported-code` on `/latest/USD` is
   open, every lookup without a usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`, a 400 for
-  every currency. Decide before P1-05 starts (owner and lead, recorded in a lead docs PR): keep
-  the 400, or answer 503 with `UPSTREAM_UNSUPPORTED_CODE`. P1-05's acceptance test covers the
-  choice.
+  every currency. **Owner decision (2026-10-21):** while such a backoff is open (including the
+  failed refresh that opens it), a lookup without a usable stale table answers 503 (ADR 0012
+  amendment item 9). A currency missing from a usable table (`not_in_table`) stays 400
+  `UPSTREAM_UNSUPPORTED_CODE`, so don't remap the code globally in `ErrorCodes`. *Lead suggestion,
+  not owner-decided:* give the 503 a generic upstream message, not "That currency is not supported
+  right now". A new error code changes the stable-string contract and needs a lead ADR note before
+  merge. The builder lists the choice. `P1_05_ConvertTest` covers it: a lookup during an
+  `unsupported-code` backoff, without a usable stale table, answers 503 for a valid currency, and a
+  `not_in_table` lookup still answers 400.
+  Also (from P1-11): blocking assumes one global `ratelimit.per_minute`; don't give `/convert` its
+  own limit without updating the rate-limited-minute count (ADR 0016 second amendment).
 - **P1-06** `Flow/`: YAML loader, `FlowEngine` (§9 rules), `SessionStore` (server ids, TTL, expiry
   sweep), `POST /bot/message`, `bin/bot.php`.
   *Acceptance:* `tests/Acceptance/P1_06_FlowTest.php` — a scripted CLI session (`200` → `brazil` →
@@ -566,6 +589,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   need the capitals rule (`CurrencySynonyms::CODE_WORDS`). If Bolivia → BOB is added to
   `CurrencyCountryMap`, `CurrencyCodeWordsTest` fails until `bob` leaves `CODE_WORDS` (a mapped
   currency's code must stay a code); decide what lowercase `bob` then means.
+  Also (from P1-11): blocking assumes one global `ratelimit.per_minute`; don't give `/bot/message`
+  its own limit without updating the rate-limited-minute count (ADR 0016 second amendment).
 - **P1-07** `resources/widget/` at `GET /bot/widget`, `channel=static`, `textContent` only, CSP,
   `nosniff`, `frame-ancestors`.
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
@@ -573,6 +598,10 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `<script>` typed into the chat shows as text.
   Also: remove `X-Powered-By` from every response; make the `Authorization: Bearer` parsing strict
   (no trailing newline accepted).
+  Also (from P1-11): the built-in widget at `/bot/widget` is same-origin, so a blocked user gets the
+  403 envelope; show its `message_for_user` verbatim. A widget embedded from another origin gets
+  the 403 without CORS headers, so `fetch` fails; show a generic "try again later" for any network
+  failure.
 - **P1-08** `Metrics/ReportQuery`, `ReportFormatter`, `CsvWriter` → `GET /reports` (json/csv) and
   `bin/report.php` (table/csv/json); `GET /health` (public and admin views).
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
@@ -590,6 +619,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   - Include the backoff count in the admin `/health` breaker state.
   - The download-progress abort in `ExchangeRateClient` is unit-tested only (`MockHandler` never
     calls `progress`); say so in its docblock.
+  Also (from P1-11): reports may count `ip.block` and `ip.unblock` events (by `block_source` and
+  `reason`) and blocked requests (`requests.blocked`); neither ever shows an IP.
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
   IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
   the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
@@ -598,6 +629,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   what `migrate.php` prints and how to repair on `SchemaCorrupt`; that `ScaledRate::fromRate`
   needs `ini_set`, which must not be in `disable_functions`), `docs/REPORTS.md`. Add an acceptance
   test that the CLI exits 1 on a corrupt schema version.
+  Also (from P1-11): the README privacy note covers `php api/bin/ip.php list` (manual blocks
+  without an expiry keep an IP until removed), ended blocks kept one window after their end, and
+  block events that never hold an IP. `INSTALL_LOCAL.md` says that behind a same-host proxy
+  `TRUSTED_PROXY` must be set, or every client looks like loopback and is never blocked
+  automatically, and that changing `ratelimit.per_minute` reinterprets the last window's counts.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
@@ -630,6 +666,14 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   `docs/INSTALL_DOCKER.md`. nginx reads a deny list exported from `ip_blocks` and returns 444 to
   blocked IPs, closing the connection without a response; nginx's access log for those requests is
   imported into `requests` with `blocked = 1`, so INV-08 still holds (ADR 0016).
+  Also (from P1-11): canonicalize addresses in `ClientIp` (`inet_ntop(inet_pton())`, deciding on
+  `::ffff:a.b.c.d` from dual-stack sockets), so manual blocks and `rate_limits` keys match the
+  proxy's `X-Forwarded-For` hop (merge with the L-04 `inet_pton` item for `TRUSTED_PROXY`); exempt
+  the Typebot host from automatic blocking (a config list) or retune `block.error_responses`, since
+  all bot traffic comes from it and it doesn't forward users' IPs; with nginx in front,
+  `TRUSTED_PROXY` must be nginx's container address, so check that the API doesn't see the Docker
+  bridge gateway for every client; add a covering index on `requests` (migration 4) if tuning
+  shows the `error_responses` scan matters.
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,
@@ -682,6 +726,17 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     the pinned `SWEEP_*_READ` counts must change only with a rule change, explained in the commit.
   - (P1-03) `TextNormalizer` folds only precomposed Latin accents; decomposed forms (a letter plus
     U+0301) fall through to `unknown`. Normalize to NFC if intl becomes available.
+  - (P1-11) The Kernel and `RateLimiter` read the clock separately, so at a minute boundary a 429
+    can land in a minute the block check doesn't read yet (delays a block by one request). Pass
+    one clock reading through, or read up to the next minute.
+  - (P1-11) `Http\IpBlocking` and `Db\Retention` depend on each other (`RATE_LIMIT_DAYS`,
+    `assertWindowMinutes()`); move the block settings into a small holder (or Config).
+  - (P1-11) The docblock of `Http\IpBlock` still says `--prune` deletes rows with
+    `expires_at <= now`; it now waits one window after the end.
+  - (P1-11) `bin/upstream.php` and `migrate.php --prune` still create a missing SQLite file before
+    refusing it (`Database::fromEnvironment`); `bin/ip.php` already refuses without creating.
+  - (P1-11) The unique-clash retry in `IpBlocks` can't happen on SQLite and is untested; cover it
+    in L-03's `PostgresTest`, where concurrent inserts can clash.
 
 ## 11. Working agreements for the agent
 
