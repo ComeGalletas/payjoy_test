@@ -24,6 +24,7 @@ final class ErrorCodes
     public const UPSTREAM_AUTH = 'UPSTREAM_AUTH';
     public const UPSTREAM_MALFORMED = 'UPSTREAM_MALFORMED';
     public const ADMIN_UNAUTHORIZED = 'ADMIN_UNAUTHORIZED';
+    public const IP_BLOCKED = 'IP_BLOCKED';
     public const NOT_FOUND = 'NOT_FOUND';
     public const RATE_LIMITED = 'RATE_LIMITED';
     public const BOT_MAX_RETRIES = 'BOT_MAX_RETRIES';
@@ -50,6 +51,8 @@ final class ErrorCodes
         self::UPSTREAM_AUTH => [503, self::UPSTREAM_UNAVAILABLE_MESSAGE],
         self::UPSTREAM_MALFORMED => [503, self::UPSTREAM_UNAVAILABLE_MESSAGE],
         self::ADMIN_UNAUTHORIZED => [401, 'Admin authorization is required.'],
+        // Minimal on purpose (ADR 0016): a blocked client learns nothing about why or for how long.
+        self::IP_BLOCKED => [403, 'Access denied.'],
         self::NOT_FOUND => [404, 'Not found.'],
         self::RATE_LIMITED => [429, 'Too many requests. Please wait a minute and try again.'],
         // Bot wording lives only in the flow file (docs/PLAN.md §9), so bot codes carry no text.

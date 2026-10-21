@@ -125,11 +125,15 @@ final class P1_01_FoundationTest extends TestCase
         self::assertSame('NOT_FOUND', self::decode($notFound)['error']['code']);
 
         // The writes really failed: nothing reached the file, and each failure left a short note.
+        // Since P1-11 each request also writes a request-log row, which fails the same way.
         $count = TestEnvironment::connect($databasePath)->query('SELECT COUNT(*) FROM events')->fetchColumn();
         self::assertSame(0, (int) $count);
+        self::assertSame(0, (int) TestEnvironment::connect($databasePath)->query('SELECT COUNT(*) FROM requests')->fetchColumn());
         self::assertSame([
             'fx-installments metrics: event api.request not recorded (PDOException)',
+            'fx-installments request log: request not recorded (PDOException)',
             'fx-installments metrics: event error not recorded (PDOException)',
+            'fx-installments request log: request not recorded (PDOException)',
         ], $log->getArrayCopy());
     }
 

@@ -52,6 +52,15 @@ final class EntryPointEndToEndTest extends TestCase
         $event = TestEnvironment::connect($databasePath)->query('SELECT error_code, meta FROM events')->fetch();
         self::assertSame('NOT_FOUND', $event['error_code']);
         self::assertSame('{"http_status":404,"method":"GET","path":"/no/such/route"}', $event['meta']);
+
+        // ...and wrote the request log row (P1-11): peer address, no query string.
+        self::assertSame(
+            [['ip' => '127.0.0.1', 'method' => 'GET', 'path' => '/no/such/route', 'status' => 404, 'blocked' => 0]],
+            array_map(
+                static fn (array $row): array => array_replace($row, ['status' => (int) $row['status'], 'blocked' => (int) $row['blocked']]),
+                TestEnvironment::connect($databasePath)->query('SELECT ip, method, path, status, blocked FROM requests')->fetchAll(),
+            ),
+        );
     }
 
     public function testADatabaseBehindTheCodeFailsClosedWithInternal(): void
