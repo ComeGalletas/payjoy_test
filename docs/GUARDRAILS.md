@@ -47,9 +47,17 @@ Rules about the app itself, enforced by the test suite inside `make check`.
   co-lead approvals are recorded as PR comments (ADR 0015).
 - Git hooks live in the shared `.git/hooks`, installed only from the main checkout. Worktrees use
   whatever the main checkout installed; `make init` in a worktree warns when they differ.
-- Until P0-06, a second `make init` after `FORCE=1` can overwrite the `.bak` copy of a foreign hook.
-- Until P0-06, `commit-msg` assumes `#` is the comment character, and a commit made with
-  `--cleanup=verbatim` whose first line starts with `#` passes the subject check.
+- Hook backups (`<hook>.bak.<YYYYMMDD-HHMMSS>`) are never overwritten, but they accumulate in
+  `.git/hooks`; nothing prunes them (L-04).
+- git runs `commit-msg` before comment cleanup, so the hook always rejects a message whose first
+  non-blank line is a comment. A subject typed below git's comment block, or a commit template that
+  starts with a comment, is rejected; type the subject on line 1. `core.commentChar=auto` is
+  treated as `#`.
+- `git rebase -i` squash and fixup don't run `commit-msg`, so squashed messages aren't checked;
+  `reword` is. CI doesn't check subjects either.
+- The default `git merge --squash` message ("Squashed commit of the following:") is rejected; give
+  the commit a `<ID>: …` subject (L-04).
+- `install-hooks.php` writes hooks in place, not atomically (L-04).
 - PreToolUse hooks match command text; indirect paths (variables, generated scripts) can slip past
   them. GR-030 forbids trying, and review is the backstop.
 - Owner sessions run with `AGENT_GUARD_OFF=1` and rely on review instead of guards.
