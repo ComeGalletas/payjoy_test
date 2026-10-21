@@ -36,8 +36,9 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
   as `a3a376b` (22:36:36 UTC).
 - **Process.** The builder hit two worktree-guard refusals in round 1 (PR #14 body), and the tester
-  one in each of rounds 1 and 3 (its reports to the lead). Each was handled within the GR-030 exceptions: the stated remedy once in the same
-  tool, or the Edit, Write or Grep tool. No guarded target was touched.
+  one in each of rounds 1 and 3 (its reports to the lead). Each was handled within the GR-030
+  exceptions: the stated remedy once in the same tool, or the Edit, Write or Grep tool. No guarded
+  target was touched.
 - Upstream: 0 real calls.
 - Lead docs: ADR 0016 second amendment (what counts toward a block, clean slate, settings, block
   rows and the new prune boundary, exemptions, fail-open, the 403, block events, order, stored

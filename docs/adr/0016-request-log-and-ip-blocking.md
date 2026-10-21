@@ -18,8 +18,8 @@ abusive IPs must be cut off instead.
 
 - **Request log.** Every request writes one row to a separate `requests` table: `ts`, raw client
   IP (resolved with the P1-01 trusted-proxy rule), `method`, `path` (truncated to 200 characters,
-  query string never stored; both stored percent-encoded, see "Second amendment"), `status`,
-  `latency_ms`, `blocked`. Business events stay in `events`.
+  query string never stored), `status`, `latency_ms`, `blocked`. Path and method are stored
+  percent-encoded (see "Second amendment" item 10). Business events stay in `events`.
 - **Retention.** `requests` rows older than `requests.retention_days` (default 30) are deleted by
   `bin/migrate.php --prune`.
 - **Error events.** The P1-01 policy stays for requests that reach routing: every error response
@@ -87,9 +87,10 @@ item 4, the 403 text (item 7) and that blocks are recorded as events that never 
 (item 8). The owner ratified items 5 and 6 as built. The co-leads added that 429s don't count
 toward `block.error_responses`. The round-2 judge found that counting rate-limited minutes over
 `requests` made a flood's cost grow with the flood, so the co-leads' round-3 brief required
-counting them from `rate_limits` and checking only the threshold a response can move. Everything
-else, including the event meta and the rules in items 2 and 3, is the builder's design, which the
-tester and judge accepted.
+counting them from `rate_limits` and skipping the error count on a 429; the builder extended the
+latter so another 4xx skips `rate_limit_hits`. The co-leads also asked for the `block_source` and
+`by` event keys. Everything else, including the rest of the event meta and the rules in items 2
+and 3, is the builder's design, which the tester and judge accepted.
 
 **Decision.**
 1. **What counts toward a block:**
@@ -101,9 +102,9 @@ tester and judge accepted.
    - **Co-lead decision:** `block.error_responses` counts **error responses**: non-blocked 4xx
      responses other than 429, so a burst can't block through this threshold either. 5xx never
      count, since they are our failure or upstream's, not the client's.
-   - **Co-lead round-3 brief:** each response checks only the threshold it can move. A 429 checks
-     `rate_limit_hits`, any other 4xx checks `error_responses`. The block's `reason` is the
-     threshold that was reached.
+   - Each response checks only the threshold it can move (co-lead round-3 brief for the 429 half,
+     extended by the builder): a 429 checks `rate_limit_hits`, any other 4xx checks
+     `error_responses`. The block's `reason` is the threshold that was reached.
    - Blocked requests never count toward a block and never extend one.
    - A threshold is reached at `>=`. In `requests`, a row exactly `block.window_minutes` old has
      left the window.
@@ -129,8 +130,9 @@ tester and judge accepted.
 7. **The 403 (owner decision):** `IP_BLOCKED` says "Too many unusual requests came from your
    network. Please try again later.", with `Connection: close` and no `Retry-After`, so the
    duration isn't revealed.
-8. **Block events (owner decision; the meta is the builder's),** with `events.source = api`, never
-   the IP and never the operator's reason text:
+8. **Block events (owner decision: source, reason and duration, never the IP; the co-leads added
+   `block_source` and `by`; the rest of the meta is the builder's),** with `events.source = api`,
+   never the IP and never the operator's reason text:
    - `ip.block` when an automatic block starts or is extended: meta `block_source = auto`,
      `reason` (`rate_limit_hits` or `error_responses`), `duration_minutes` (the configured
      duration, which is also the time to the new expiry), `extended`.

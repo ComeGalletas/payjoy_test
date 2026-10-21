@@ -672,8 +672,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   the Typebot host from automatic blocking (a config list) or retune `block.error_responses`, since
   all bot traffic comes from it and it doesn't forward users' IPs; with nginx in front,
   `TRUSTED_PROXY` must be nginx's container address, so check that the API doesn't see the Docker
-  bridge gateway for every client; add a covering index on `requests` (migration 4) if tuning shows the `error_responses` scan
-  matters.
+  bridge gateway for every client; add a covering index on `requests` (migration 4) if tuning
+  shows the `error_responses` scan matters.
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,

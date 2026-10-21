@@ -90,7 +90,8 @@ in round 2.
    answers 503, not 400. The fault is upstream's, not the user's (lead's rationale); a 400 there
    would also count toward `block.error_responses` (ADR 0016) and could block users for an
    upstream fault. The failed refresh that opens the backoff answers after the backoff is recorded,
-   so it gets the 503 too (lead's reading). A currency missing from a usable table (`not_in_table`,
+   so it gets the 503 too (lead's reading), unless the breaker write itself failed and no backoff
+   exists. A currency missing from a usable table (`not_in_table`,
    raised by `RateCache`) stays a 400 `UPSTREAM_UNSUPPORTED_CODE`. P1-05 applies this; its
    acceptance test covers it.
 
