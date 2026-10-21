@@ -31,14 +31,18 @@ name, add it here in the same commit that introduces it.
 | **message_for_user** | Generic, safe text front-ends show verbatim. Never contains upstream bodies or secrets. |
 | **error code** | A stable string from `Metrics/ErrorCodes` (`VALIDATION_AMOUNT`, `UPSTREAM_QUOTA`…). |
 | **upstream** | ExchangeRate-API. Only `Rates/ExchangeRateClient` talks to it. |
-| **upstream call** | One HTTP request to upstream; recorded as `upstream.call` with result `hit`, `miss`, `stale` or `blocked`. |
-| **refresh** | One `/latest/USD` call that rewrites every row of `rate_cache`; happens only when `now ≥ next_update_unix`. |
-| **breaker** | `UpstreamBreaker`: stops upstream calls after `quota-reached` (until next month) or `invalid-key` (until reset). |
+| **upstream call** | One HTTP request to upstream. Every rate lookup writes an `upstream.call` event with result `hit`, `miss`, `stale` or `blocked`; only `miss` and `stale` lookups called upstream, and a `no_key` miss did not. |
+| **refresh** | One `/latest/USD` call that rewrites every row of `rate_cache`; happens only when `now ≥ next_update_unix` and the breaker is closed. |
+| **stored table** | The rows the last successful refresh wrote to `rate_cache` (`RateTable`): rates, `rate_as_of`, `next_update_unix`, `fetched_at`. |
+| **dropped currency** | A rate that a refresh skipped because it failed a check; listed in the `miss` event's `meta.dropped`, by code only when the key was a valid code. The rest of the table is still stored. |
+| **breaker** | `UpstreamBreaker`: stops upstream calls after any failed refresh. Its trip is `quota` (until the 1st of next month, UTC), `auth` (until `bin/upstream.php reset`) or `backoff` (ADR 0012 amendment). |
+| **backoff** | The breaker's trip after any failed refresh other than quota or auth: 1, 5, 10, 20, 40, then 60 minutes per consecutive failure, cleared by a successful refresh. |
 | **quota** | The free-tier monthly request budget (1,500), read from upstream `/quota` for the admin health view. |
 | **allow-list** | Currency codes in the latest stored rate table. Input not on it never reaches upstream. |
-| **fallback currency list** | Static ISO code list (`FallbackCurrencies`) used to validate codes when the cache is empty. |
+| **fallback currency list** | Static list (`FallbackCurrencies`) of ISO 4217 currency codes plus upstream's non-ISO territory codes (FOK, GGP, IMP, JEP, KID, TVD); validates codes when the cache is empty. |
 | **synonym table** | Static map from currency names and symbols, in English and Spanish (`reais`, `R$`, `euro`), to a currency code (`CurrencySynonyms`). Country names live in the currency-country map, except countries with more than one currency (`Panama`), which are on the ambiguous list. |
 | **ambiguous currency text** | Text that several currencies share (`$`, `peso`, `dollar`, `libra`); always unclear, never guessed. |
+| **code word** | An English word that is also a currency code (`CurrencySynonyms::CODE_WORDS`: `all bob cup kid mad mop sos top try`). Typed in capitals it is the code (`TRY`); in any other case it is ambiguous (`try`, `Try`). |
 | **currency-country map** | PHP array (`CurrencyCountryMap`) linking country names to currencies. A country is recorded only when the user typed one. |
 | **admin token** | `ADMIN_TOKEN` from `.env`, sent only as `Authorization: Bearer`; unset means all admin requests are refused. |
 | **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` equals `REMOTE_ADDR`. |
