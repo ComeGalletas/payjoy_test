@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-20
 - **Deciders:** owner
-- **Supersedes:** the storage clause of 0011 ("stored as `REAL` / `DOUBLE PRECISION`")
+- **Supersedes:** the storage half of 0011's first decision bullet ("The API and storage keep full
+  precision"); the API half stands
 
 ## Context
 
@@ -22,7 +23,8 @@ columns (not exact in SQLite, breaks ADR 0010); keeping `REAL` with the string b
 - USD amounts are stored as integer cents: `amount_usd_cents INTEGER`. The canonical amount string
   (`^\d{1,7}(\.\d{1,2})?$`) is converted to cents with integer arithmetic, never through a float.
 - Exchange rates are stored as `rate_scaled BIGINT = round(rate × 10^10)`, a fixed scale of ten
-  decimals. The largest values (about 42,000 × 10^10) fit easily in 64 bits.
+  decimals. The largest rates (LBP, about 89,500 × 10^10 ≈ 9 × 10^14) fit easily in 64 bits and
+  stay below 2^53, so even the float product before rounding is exact.
 - Calculations stay as in ADR 0011: `converted = amount × rate` is a PHP float, and splitting and
   display use integer minor units. Only storage changes.
 - `Database::floatParam()` is removed once nothing binds floats.

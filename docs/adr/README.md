@@ -2,7 +2,9 @@
 
 One file per decision: `NNNN-<slug>.md`, numbered in order, never renumbered. An accepted ADR
 beats `docs/PLAN.md` until a later ADR supersedes it. To change a decision, write a new ADR that
-names the one it supersedes and set the old one's status to `Superseded by NNNN`.
+names the one it supersedes and set the old one's status to `Superseded by NNNN`. When a new ADR
+replaces only part of an old one, the old one stays `Accepted` with a note naming the part and the
+new ADR, and the affected sentence in its body points to the new ADR.
 
 | ADR | Title | Status |
 |---|---|---|

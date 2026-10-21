@@ -11,22 +11,25 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   v5.7.0 (with graham-campbell/result-type 1.2.0, phpoption 1.10.0, symfony polyfill-ctype 1.37.0,
   polyfill-mbstring 1.43.0, polyfill-php80 1.43.0). Schema shipped only `events` and `rate_limits`,
   as the lead decided; the rest is P1-02.
-- Tester: PASS 11/11; mutations caught (empty-token auth 4 failures, limit 31 → 7, exception text
-  in the 500 → 2 unit tests, Metrics rethrow → 7). Judge: APPROVE WITH NITS. CI `check`: pass,
+- Tester: PASS 11/11; each mutation was caught (empty-token auth: 4 failing tests; changing the
+  limit to 31: 7; exception text in the 500: 2 unit tests; Metrics rethrow: 7). Judge: APPROVE WITH NITS. CI `check`: pass,
   19 s. Co-leads: both approved; the owner merged it as `9d30675`.
 - Builder finding: PDO binds PHP floats as 14-digit strings, losing precision; the stopgap
   `Database::floatParam()` is replaced by integer storage (ADR 0017, in P1-02).
 - Gate scripts: the Composer `test` and `acceptance` scripts now pass `-d allow_url_fopen=0`
-  (ADR 0018). The owner merged PR #6 with this change; GR-006 now lists the gate scripts as
-  owner-owned.
+  (ADR 0018). The owner confirmed the change and ADR 0018 explicitly during the PR #7 review;
+  GR-006 now lists the `Makefile` and the gate scripts as owner-owned.
 - **Process breaches, both logged:** after a harness block on a Bash call, the builder followed the
   block message's advice by switching to PowerShell instead of stopping, as the brief required; it
-  also retried the Composer download about 8 times against the brief's 3. No harm resulted. Briefs
+  also retried the Composer download about 8 times (its own count) against the brief's 3. No harm resulted. Briefs
   now say: follow the guard's stated remedy in the same tool, otherwise stop.
 - Owner decisions during review: every request is recorded with its raw IP for 30 days and abusive
   IPs are blocked (ADR 0016, new task P1-11 before P1-05); money and rates are stored as integers
-  in fixed units (ADR 0017). ADR 0018 records the test network isolation. CLAUDE.md deviation 3
-  (ADR timing) awaits the owner's OK in the docs PR.
+  in fixed units (ADR 0017). ADR 0018 records the test network isolation.
+- PR #7 review (judge: CHANGES NEEDED, tester: PASS 10/10). The owner then confirmed: automatic
+  blocking; blocked requests write only their `requests` row, no `error` event, and nginx 444 drops
+  are imported in P3-01; 30-day retention of `requests`; ADR 0018 and the gate scripts; CLAUDE.md
+  deviation 3 (ADR timing). The judge's findings were fixed in the same PR.
 
 ## 2026-10-20 — P0-05 and P0-06 close-out review (PR #4)
 

@@ -454,7 +454,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   - Apply ADR 0017: `events.amount_usd` becomes `amount_usd_cents INTEGER`; `Metrics` takes cents;
     remove `Database::floatParam()` once nothing binds floats.
   - Decide and document when the schema is applied (P1-01 applies it on every first connection).
-  - Index `rate_limits(window_start)` and `requests(ts)` so `--prune` doesn't scan.
+  - Index `rate_limits(window_start)` and `requests(ts)` so `--prune` doesn't scan, and
+    `requests(ip, ts)` for the per-IP counts behind automatic blocking (P1-11).
   - Add a test of two connections racing in the rate limiter (the unique-clash retry path).
   *Acceptance:* `tests/Acceptance/P1_02_MigrateTest.php` — migrating an empty file creates all
   seven tables; running it twice is a no-op; `--prune` removes only expired rows in each table; no
@@ -476,13 +477,17 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
 - **P1-11** Request log and IP blocking (ADR 0016). Runs after P1-04 and before P1-05, so
   `/convert` is protected from its first release.
   - A request-log step that writes one `requests` row for every request, including blocked ones.
-  - A block check in the Kernel, before routing: 403 `IP_BLOCKED`, `Connection: close`, no handler.
+  - A block check in the Kernel, before routing: 403 `IP_BLOCKED`, `Connection: close`, no handler,
+    and no `error` event (the `requests` row with `blocked = 1` is the only write).
   - Automatic blocking from the `block.*` thresholds; `bin/ip.php block|unblock|list`.
   - `IP_BLOCKED` added to `ErrorCodes`; `requests` and expired `ip_blocks` pruned (P1-02 tables).
   *Acceptance:* `tests/Acceptance/P1_11_RequestLogTest.php` — every request, including 404s, 429s
-  and blocked ones, writes exactly one `requests` row with IP, method, path without query and
-  status; the configured number of 429s blocks the IP; a blocked IP gets 403 `IP_BLOCKED` and its
-  handler never runs; `bin/ip.php unblock` restores access; rows older than 30 days are pruned.
+  and blocked ones, writes exactly one `requests` row with the client IP (the trusted-proxy XFF hop
+  when configured), method, path without query and status; the configured number of 429s blocks
+  the IP, and so does the configured number of error responses; a blocked IP gets 403 `IP_BLOCKED`
+  with `Connection: close`, its handler never runs and no `error` event is written; the block
+  expires after `block.duration_minutes`; `bin/ip.php unblock` restores access; rows older than 30
+  days are pruned.
 - **P1-05** `Convert/`: `MinorUnits`, `InstallmentCalculator` (§3a), `ConvertService` (local
   math, `rate_as_of`, `stale`) → `GET /convert`.
   *Acceptance:* `tests/Acceptance/P1_05_ConvertTest.php` — `amount=200&cy=BRL&installments=3` at
@@ -508,7 +513,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
   step and channel match; days split on `reports.timezone`; a currency named `=CMD()` is escaped in
   CSV; public `/health` shows only `status`.
-- **P1-09** `db/seed_demo.php`; `docs/README.md`, `docs/INSTALL_LOCAL.md` (incl. CA bundle setup),
+- **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
+  IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup),
   `docs/REPORTS.md`.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
@@ -538,7 +544,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 - **P3-01** `docker-compose.yml`: `api` + `--profile typebot` (builder, viewer, postgres) +
   `--profile ollama`; `api/Dockerfile` (`php:8.3-fpm-alpine` + nginx); SQLite on a named volume;
   `docs/INSTALL_DOCKER.md`. nginx reads a deny list exported from `ip_blocks` and returns 444 to
-  blocked IPs, closing the connection without a response (ADR 0016).
+  blocked IPs, closing the connection without a response; nginx's access log for those requests is
+  imported into `requests` with `blocked = 1`, so INV-08 still holds (ADR 0016).
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,

@@ -16,7 +16,7 @@ owned by the owner (GR-006). Update the Status column as each layer lands.
 | GR-002 | Never read or edit `.env` | Claude Code settings deny `Read`/`Edit` on `.env`; PreToolUse hook on shell commands naming `.env`; `.env` in `.gitignore` | Secret scan in `make check` | Brief only |
 | GR-004 | Edit only inside your own worktree | PreToolUse hook comparing target paths with the session's worktree root | PR diff review | Partial: `install-hooks.php` writes nothing from a linked worktree. The agent harness's worktree isolation also helps, but it is not a project-owned layer (and was worked around once, see LOG 2026-10-20) |
 | GR-005 | Only the owner changes `CLAUDE.md` / `AGENTS.md` | PreToolUse hook unless `AGENT_GUARD_OFF=1`; CODEOWNERS | Branch protection requires owner review | Brief only |
-| GR-006 | Guard, hook, settings, policy files belong to the owner | Same hook and CODEOWNERS as GR-005, covering `.claude/`, hooks, `docs/GUARDRAILS.md`, CI config and the Composer gate scripts (`test`, `acceptance`, `check`; ADR 0018) | Branch protection | Brief only |
+| GR-006 | Guard, hook, settings, policy files belong to the owner | Same hook and CODEOWNERS as GR-005, covering `.claude/`, hooks, `docs/GUARDRAILS.md`, CI config, the `Makefile` and the Composer gate scripts (`test`, `acceptance`, `check`; ADR 0018; owner-confirmed 2026-10-20) | Branch protection | Brief only |
 | GR-013 | Never push to main; never merge your own PR | Branch protection on `main`; pre-push hook rejecting `main` | Remote rejects direct pushes | Partial: no-push-to-main is enforced (protection requires a PR and the `check` status check, admins included, no force-push or deletion; `pre-push` rejects pushes and deletes of `main`). Never-merge-your-own-PR is process only (single account, 0 required reviews; ADR 0015) |
 | GR-017 | Never bypass git hooks | PreToolUse hook blocking `--no-verify`, `commit -n`, `SKIP=`, `core.hooksPath` | CI re-runs `make check` | Partial: CI `check` is required on `main` and backstops a bypassed `pre-push`; nothing backstops a bypassed `commit-msg` (CI doesn't check subjects); the PreToolUse flag blocker is not built |
 | GR-018 | No `git reset --hard`, `git clean -f`, `rm -rf` | PreToolUse hook on shell commands | Remote keeps pushed history | Brief only |
@@ -36,7 +36,7 @@ Rules about the app itself, enforced by the test suite inside `make check`.
 | INV-05 | Unvalidated input never reaches an upstream URL | Unit tests on `ExchangeRateClient` with a mocked HTTP handler |
 | INV-06 | Tests never reach the network or load the real key | `-d allow_url_fopen=0` in the Composer gate scripts and a stream-wrapper guard that fails the run even when the exception is swallowed (P1-01, ADR 0018); curl and Guzzle added in P1-04 |
 | INV-07 | A failed metrics write never fails the user's request | Acceptance test in P1-01 against a read-only database |
-| INV-08 | Every request, including blocked ones, writes exactly one `requests` row; the query string is never stored | Acceptance test in P1-11 (ADR 0016) |
+| INV-08 | Every request, including blocked ones, writes exactly one `requests` row; the query string is never stored. From P3-01, requests nginx drops with 444 are recorded by importing nginx's access log | Acceptance test in P1-11; import test in P3-01 (ADR 0016) |
 | INV-09 | No database column stores a float; money is integer cents, rates are integers scaled by 10^10 | Acceptance test in P1-02 that inspects every column type (ADR 0017) |
 
 ## Known limits
