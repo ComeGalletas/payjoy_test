@@ -6,12 +6,14 @@ namespace FxInstallments\Tests\Unit\Metrics;
 
 use ArrayObject;
 use Closure;
+use FxInstallments\Convert\UsdCents;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
 use FxInstallments\Metrics\Metrics;
 use FxInstallments\Tests\Support\FakeClock;
 use FxInstallments\Tests\Support\TestEnvironment;
 use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -36,7 +38,7 @@ final class MetricsTest extends TestCase
             'step' => 'amount',
             'currency' => 'BRL',
             'country' => 'Brazil',
-            'amount_usd' => 200.5,
+            'amount_usd_cents' => 20050,
             'installments' => 3,
             'latency_ms' => 12,
             'meta' => ['reason' => 'unclear', 'text' => 'ação', 'ratio' => 1.0],
@@ -53,7 +55,7 @@ final class MetricsTest extends TestCase
             'step' => 'amount',
             'currency' => 'BRL',
             'country' => 'Brazil',
-            'amount_usd' => 200.5,
+            'amount_usd_cents' => 20050,
             'installments' => 3,
             'status' => 'ok',
             'error_code' => null,
@@ -63,12 +65,54 @@ final class MetricsTest extends TestCase
         self::assertCount(0, $this->log);
     }
 
-    public function testAmountsAreStoredUnrounded(): void
+    public function testAmountsAreStoredAsExactIntegerCents(): void
     {
         $pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
-        $this->metrics(Connection::wrap($pdo))->record('api.request', ['amount_usd' => 1045.82 / 3]);
+        $metrics = $this->metrics(Connection::wrap($pdo));
 
-        self::assertSame(1045.82 / 3, $pdo->query('SELECT amount_usd FROM events')->fetchColumn());
+        self::assertTrue($metrics->record('api.request', ['amount_usd_cents' => UsdCents::fromCanonical('9999999.99')]));
+        self::assertTrue($metrics->record('api.request', ['amount_usd_cents' => null]));
+
+        self::assertSame(
+            [['amount_usd_cents' => 999_999_999, 'type' => 'integer'], ['amount_usd_cents' => null, 'type' => 'null']],
+            $pdo->query('SELECT amount_usd_cents, typeof(amount_usd_cents) AS type FROM events ORDER BY id')->fetchAll(),
+        );
+        self::assertCount(0, $this->log);
+    }
+
+    /**
+     * @return iterable<string, array{string, mixed}>
+     */
+    public static function nonIntegerValues(): iterable
+    {
+        yield 'float amount' => ['amount_usd_cents', 200.5];
+        yield 'whole float amount' => ['amount_usd_cents', 20050.0];
+        yield 'numeric string amount' => ['amount_usd_cents', '20050'];
+        yield 'decimal string amount' => ['amount_usd_cents', '200.50'];
+        yield 'bool amount' => ['amount_usd_cents', true];
+        yield 'the old amount_usd column' => ['amount_usd', 200.5];
+        yield 'float installments' => ['installments', 3.0];
+        yield 'string latency' => ['latency_ms', '12'];
+        yield 'float in a text column' => ['currency', 1.5];
+    }
+
+    #[DataProvider('nonIntegerValues')]
+    public function testNonIntegerAmountsAndFloatsAreRejected(string $field, mixed $value): void
+    {
+        $pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
+
+        self::assertFalse($this->metrics(Connection::wrap($pdo))->record('api.request', [$field => $value]));
+
+        self::assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM events')->fetchColumn());
+        self::assertSame(['fx-installments metrics: event api.request not recorded (InvalidArgumentException)'], $this->log->getArrayCopy());
+    }
+
+    public function testFloatsInsideMetaAreStillAllowed(): void
+    {
+        $pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
+
+        self::assertTrue($this->metrics(Connection::wrap($pdo))->record('api.request', ['meta' => ['rate' => 5.2291]]));
+        self::assertSame('{"rate":5.2291}', $pdo->query('SELECT meta FROM events')->fetchColumn());
     }
 
     public function testErrorEventsDefaultToErrorStatus(): void

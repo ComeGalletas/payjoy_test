@@ -21,4 +21,5 @@ return [
     'health.quota_cache_minutes' => 60,
     'llm.enabled' => false,
     'llm.confidence_threshold' => 0.8,
+    'requests.retention_days' => 30,
 ];

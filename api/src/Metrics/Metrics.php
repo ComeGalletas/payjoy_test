@@ -6,14 +6,16 @@ namespace FxInstallments\Metrics;
 
 use Closure;
 use FxInstallments\Db\Connection;
-use FxInstallments\Db\Database;
 use InvalidArgumentException;
 use Throwable;
 
 /**
  * The single event writer (docs/PLAN.md §3, §5). Every event is one append-only row in
- * `events`: `ts` is a UTC epoch integer, `meta` is JSON text, amounts are stored unrounded
- * (floats are bound with Database::floatParam, never PDO's 14-digit default).
+ * `events`: `ts` is a UTC epoch integer, `meta` is JSON text, and the amount is an exact
+ * integer number of cents, `amount_usd_cents` (ADR 0017). No column takes a float (INV-09):
+ * a float in any field, or anything but an int in an integer column, is rejected, so an amount
+ * can't be stored rounded by PDO's float-to-string binding. Use UsdCents::fromCanonical() to
+ * get the cents. Floats inside `meta` are fine: it is JSON text.
  *
  * A failed write never fails the caller (INV-07): every Throwable is caught and a short note
  * goes to the fallback logger (PHP's error_log by default). The note names the event type and
@@ -26,9 +28,12 @@ final class Metrics
     public const CHANNELS = ['static', 'cli', 'typebot'];
 
     private const COLUMNS = [
-        'source', 'channel', 'session_id', 'step', 'currency', 'country', 'amount_usd',
+        'source', 'channel', 'session_id', 'step', 'currency', 'country', 'amount_usd_cents',
         'installments', 'status', 'error_code', 'latency_ms', 'meta',
     ];
+
+    /** Integer columns: an int or null, never a float or a numeric string. */
+    private const INT_COLUMNS = ['amount_usd_cents', 'installments', 'latency_ms'];
 
     private const JSON_FLAGS = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PRESERVE_ZERO_FRACTION;
@@ -56,9 +61,9 @@ final class Metrics
 
     /**
      * Records one event. $fields may hold any `events` column except id, ts and event_type:
-     * source (default 'api'), channel, session_id, step, currency, country, amount_usd,
-     * installments, status (default 'error' when error_code is set, else 'ok'), error_code,
-     * latency_ms, and meta (an array, stored as JSON).
+     * source (default 'api'), channel, session_id, step, currency, country, amount_usd_cents
+     * (int), installments (int), status (default 'error' when error_code is set, else 'ok'),
+     * error_code, latency_ms (int), and meta (an array, stored as JSON).
      *
      * Returns true when the row was written. It never throws.
      *
@@ -74,11 +79,7 @@ final class Metrics
                 implode(', ', $columns),
                 implode(', ', array_fill(0, count($columns), '?')),
             );
-            $values = array_map(
-                static fn (mixed $value): mixed => is_float($value) ? Database::floatParam($value) : $value,
-                array_values($row),
-            );
-            $this->db->pdo()->prepare($sql)->execute($values);
+            $this->db->pdo()->prepare($sql)->execute(array_values($row));
 
             return true;
         } catch (Throwable $e) {
@@ -120,6 +121,13 @@ final class Metrics
             || ($channel !== null && !in_array($channel, self::CHANNELS, true))
             || !in_array($status, ['ok', 'error'], true)) {
             throw new InvalidArgumentException('Invalid source, channel or status');
+        }
+
+        foreach ($fields as $column => $value) {
+            $mustBeInt = in_array($column, self::INT_COLUMNS, true);
+            if (is_float($value) || ($mustBeInt && $value !== null && !is_int($value))) {
+                throw new InvalidArgumentException('amount_usd_cents, installments and latency_ms must be ints; no field takes a float');
+            }
         }
 
         $meta = $fields['meta'] ?? null;

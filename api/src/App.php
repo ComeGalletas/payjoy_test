@@ -8,7 +8,7 @@ use Closure;
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
-use FxInstallments\Db\Schema;
+use FxInstallments\Db\Migrator;
 use FxInstallments\Http\AdminAuth;
 use FxInstallments\Http\Cors;
 use FxInstallments\Http\Kernel;
@@ -45,8 +45,13 @@ final class App
     }
 
     /**
-     * The app as configured by the environment: DB_DSN (default api/var/app.db), with the schema
-     * applied when the database is first opened.
+     * The app as configured by the environment: DB_DSN (default api/var/app.db).
+     *
+     * The app never changes the schema; `php bin/migrate.php` does, at install and on every
+     * deploy. When the database is first opened, a version check (one indexed SELECT on
+     * app_state) throws SchemaOutOfDate if the database is behind the code, and nothing runs
+     * against it. public/index.php opens the database before routing, so every request then
+     * fails closed with 500 INTERNAL.
      */
     public static function fromEnvironment(string $apiRoot): self
     {
@@ -54,7 +59,7 @@ final class App
             new ConfigRepository(),
             new Connection(static function () use ($apiRoot): PDO {
                 $pdo = Database::fromEnvironment($apiRoot);
-                Schema::apply($pdo);
+                (new Migrator($pdo))->assertCurrent();
 
                 return $pdo;
             }),

@@ -10,7 +10,7 @@ use FxInstallments\App;
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
-use FxInstallments\Db\Schema;
+use FxInstallments\Db\Migrator;
 use PDO;
 use RuntimeException;
 
@@ -55,12 +55,12 @@ final class TestEnvironment
     }
 
     /**
-     * A fresh SQLite file under the test root with the schema applied.
+     * A fresh SQLite file under the test root, migrated to the latest schema version.
      */
     public static function freshDatabasePath(): string
     {
         $path = self::tempDir('db') . '/test.db';
-        Schema::apply(Database::connect('sqlite:' . $path));
+        (new Migrator(Database::connect('sqlite:' . $path)))->migrate();
 
         return $path;
     }

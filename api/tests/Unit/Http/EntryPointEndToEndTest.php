@@ -20,6 +20,9 @@ final class EntryPointEndToEndTest extends TestCase
     /** @var resource|null */
     private $server = null;
 
+    /** The server's stdout and stderr, where index.php's error_log lines go. */
+    private string $log = '';
+
     protected function tearDown(): void
     {
         if (is_resource($this->server)) {
@@ -31,7 +34,8 @@ final class EntryPointEndToEndTest extends TestCase
 
     public function testAnUnknownPathReturnsTheNotFoundEnvelope(): void
     {
-        $databasePath = TestEnvironment::tempDir('e2e-db') . '/e2e.db';
+        // Migrated first, as bin/migrate.php does at install: the app never migrates.
+        $databasePath = TestEnvironment::freshDatabasePath();
         $port = $this->startServer($databasePath);
 
         [$status, $headers, $body] = self::get($port, '/no/such/route?token=abc');
@@ -44,10 +48,31 @@ final class EntryPointEndToEndTest extends TestCase
             json_decode($body, true, flags: JSON_THROW_ON_ERROR),
         );
 
-        // index.php applied the schema to the configured database and recorded the error.
+        // index.php used the configured database and recorded the error.
         $event = TestEnvironment::connect($databasePath)->query('SELECT error_code, meta FROM events')->fetch();
         self::assertSame('NOT_FOUND', $event['error_code']);
         self::assertSame('{"http_status":404,"method":"GET","path":"/no/such/route"}', $event['meta']);
+    }
+
+    public function testADatabaseBehindTheCodeFailsClosedWithInternal(): void
+    {
+        // Never migrated: index.php must not apply the schema, and must not route either.
+        $databasePath = TestEnvironment::tempDir('e2e-db') . '/behind.db';
+        $port = $this->startServer($databasePath);
+
+        [$status, $headers, $body] = self::get($port, '/no/such/route');
+
+        self::assertSame(500, $status);
+        self::assertStringStartsWith('application/json', $headers['content-type'] ?? '');
+        self::assertSame(
+            ['ok' => false, 'error' => ['code' => 'INTERNAL', 'message_for_user' => 'Something went wrong on our side. Please try again later.']],
+            json_decode($body, true, flags: JSON_THROW_ON_ERROR),
+        );
+        self::assertSame([], TestEnvironment::connect($databasePath)->query('SELECT name FROM sqlite_master')->fetchAll());
+        self::assertStringContainsString(
+            'fx-installments INTERNAL before routing: FxInstallments\Db\SchemaOutOfDate at ',
+            (string) file_get_contents($this->log),
+        );
     }
 
     private function startServer(string $databasePath): int
@@ -61,7 +86,7 @@ final class EntryPointEndToEndTest extends TestCase
         $port = (int) substr($address, strrpos($address, ':') + 1);
 
         $public = dirname(__DIR__, 3) . '/public';
-        $log = TestEnvironment::tempDir('e2e-log') . '/server.log';
+        $log = $this->log = TestEnvironment::tempDir('e2e-log') . '/server.log';
         $env = getenv();
         $env['APP_ENV'] = 'test';
         $env['DB_DSN'] = 'sqlite:' . $databasePath;
