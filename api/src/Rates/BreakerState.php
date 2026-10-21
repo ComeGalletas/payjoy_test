@@ -17,8 +17,8 @@ use JsonException;
  *   until `bin/upstream.php reset`.
  * - `backoff`: after any other failed refresh (UPSTREAM_TIMEOUT, UPSTREAM_MALFORMED,
  *   UPSTREAM_UNSUPPORTED_CODE); open for UpstreamBreaker::backoffSeconds($failures), at most
- *   one hour. `failures` counts consecutive failed refreshes (owner decision 2026-10-21:
- *   5, 10, 20, 40, then 60 minutes); it is 0 for the other kinds.
+ *   one hour. `failures` counts consecutive failed refreshes (owner decisions 2026-10-21:
+ *   1, 5, 10, 20, 40, then 60 minutes); it is 0 for the other kinds.
  *
  * The constructor rejects any other combination, so a hand-edited or corrupt row can't
  * produce an open-ended or mislabelled block: fromJson() returns null for it and the breaker

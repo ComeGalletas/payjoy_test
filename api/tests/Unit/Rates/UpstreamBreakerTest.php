@@ -127,21 +127,21 @@ final class UpstreamBreakerTest extends TestCase
     }
 
     #[DataProvider('transientErrors')]
-    public function testOtherFailuresBackOffForFiveMinutes(string $code, string $reason): void
+    public function testOtherFailuresBackOffForOneMinute(string $code, string $reason): void
     {
         $start = $this->clock->now;
         $state = $this->breaker->trip(new UpstreamError($code, $reason));
 
         self::assertNotNull($state);
         self::assertSame(BreakerState::BACKOFF, $state->kind);
-        self::assertSame($start + 300, $state->until);
+        self::assertSame($start + 60, $state->until);
         self::assertSame($code, $this->breaker->blocking()?->errorCode);
         self::assertSame($code, $state->error()->errorCode);
         self::assertSame('blocked_backoff', $state->error()->reason);
 
-        $this->clock->now = $start + 299;
+        $this->clock->now = $start + 59;
         self::assertNotNull($this->breaker->blocking());
-        $this->clock->now = $start + 300;
+        $this->clock->now = $start + 60;
         self::assertNull($this->breaker->blocking());
         self::assertSame(BreakerState::BACKOFF, $this->breaker->state()?->kind, 'the expired trip stays visible');
     }
@@ -256,10 +256,10 @@ final class UpstreamBreakerTest extends TestCase
         )));
     }
 
-    public function testConsecutiveFailuresBackOff5102040Then60Minutes(): void
+    public function testConsecutiveFailuresBackOff15102040Then60Minutes(): void
     {
         $waits = [];
-        foreach (range(1, 7) as $failure) {
+        foreach (range(1, 8) as $failure) {
             $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
             self::assertNotNull($state);
             self::assertSame($failure, $state->failures);
@@ -268,12 +268,13 @@ final class UpstreamBreakerTest extends TestCase
             $this->clock->now = (int) $state->until;
         }
 
-        self::assertSame([5, 10, 20, 40, 60, 60, 60], $waits);
-        self::assertSame([300, 600, 1200, 2400, 3600, 3600], array_map(UpstreamBreaker::backoffSeconds(...), range(1, 6)));
+        self::assertSame([1, 5, 10, 20, 40, 60, 60, 60], $waits);
+        self::assertSame([60, 300, 600, 1200, 2400, 3600, 3600], array_map(UpstreamBreaker::backoffSeconds(...), range(1, 7)));
+        self::assertSame(60, UpstreamBreaker::backoffSeconds(0), 'fewer than one failure counts as the first');
         self::assertSame(3600, UpstreamBreaker::backoffSeconds(1000));
     }
 
-    public function testASuccessfulRefreshResetsTheBackoffToFiveMinutes(): void
+    public function testASuccessfulRefreshResetsTheBackoffToOneMinute(): void
     {
         foreach (range(1, 3) as $ignored) {
             $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_MALFORMED, 'json'));
@@ -286,7 +287,7 @@ final class UpstreamBreakerTest extends TestCase
 
         $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
         self::assertSame(1, $state?->failures);
-        self::assertSame(300, (int) $state?->until - $state->since);
+        self::assertSame(60, (int) $state?->until - $state->since);
     }
 
     public function testASuccessLeavesAnOpenQuotaOrAuthBlockButClearsAnExpiredOne(): void
@@ -332,7 +333,7 @@ final class UpstreamBreakerTest extends TestCase
         self::assertSame(1, $this->breaker->state()?->failures);
     }
 
-    public function testAnExpiredQuotaBlockStartsTheBackoffAtFiveMinutes(): void
+    public function testAnExpiredQuotaBlockStartsTheBackoffAtOneMinute(): void
     {
         $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_QUOTA, 'quota-reached'));
         $this->clock->now = self::utc('2026-11-01 00:00:00');
@@ -340,7 +341,7 @@ final class UpstreamBreakerTest extends TestCase
         $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
 
         self::assertSame(1, $state?->failures);
-        self::assertSame(300, (int) $state?->until - $state->since);
+        self::assertSame(60, (int) $state?->until - $state->since);
     }
 
     #[DataProvider('corruptValues')]

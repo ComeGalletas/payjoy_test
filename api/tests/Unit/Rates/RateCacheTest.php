@@ -97,7 +97,8 @@ final class RateCacheTest extends TestCase
             $upstream = new MockUpstream([$failure(), MockUpstream::latest(), MockUpstream::latest()]);
             $cache = $this->cache($upstream);
 
-            foreach ([0, 60, 120, 240, 299] as $offset) {
+            // Five lookups inside the first (1-minute) backoff.
+            foreach ([0, 10, 20, 40, 59] as $offset) {
                 $this->clock->now = MockUpstream::NEXT_UPDATE + $offset;
                 try {
                     $result = $cache->rate('BRL');
@@ -120,7 +121,7 @@ final class RateCacheTest extends TestCase
         $cache = new RateCache(new RateStore($readOnly), $upstream->client(), new UpstreamBreaker($writable, $clock), new Metrics($writable, $clock), 48, $clock);
 
         self::assertSame(52_291_000_000, $cache->rate('BRL')->rateScaled, 'the fetched rate is served once');
-        foreach ([1, 60, 120, 299] as $offset) {
+        foreach ([1, 20, 40, 59] as $offset) {
             $this->clock->now = MockUpstream::LAST_UPDATE + 3600 + $offset;
             $error = $this->failure(fn () => $cache->rate('BRL'));
             self::assertSame('blocked_backoff', $error->reason);
@@ -155,17 +156,17 @@ final class RateCacheTest extends TestCase
                 $callTimes[] = $minute;
             }
         }
-        // Failures at 0, 5, 15, 35, 75, 135; the call at 195 succeeds.
-        self::assertSame([0, 5, 15, 35, 75, 135, 195], $callTimes);
+        // Failures at 0, 1, 6, 16, 36, 76 (waits 1, 5, 10, 20, 40, 60); the call at 136 succeeds.
+        self::assertSame([0, 1, 6, 16, 36, 76, 136], $callTimes);
         self::assertNull((new UpstreamBreaker(Connection::wrap($this->pdo)))->state(), 'the success cleared the backoff');
 
-        // Once the table is due again, the next failure waits 5 minutes, not 60.
+        // Once the table is due again, the next failure waits 1 minute, not 60.
         $this->clock->now = $start + 10 * 86400;
         $error = $this->failure(fn () => $cache->rate('BRL'));
         self::assertSame(ErrorCodes::UPSTREAM_MALFORMED, $error->errorCode, 'the table is too old to serve stale');
         $state = (new UpstreamBreaker(Connection::wrap($this->pdo)))->state();
         self::assertSame(1, $state?->failures);
-        self::assertSame(300, (int) $state?->until - $state->since);
+        self::assertSame(60, (int) $state?->until - $state->since);
         self::assertSame(8, $upstream->calls());
     }
 
@@ -330,7 +331,7 @@ final class RateCacheTest extends TestCase
         self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM rate_cache')->fetchColumn());
     }
 
-    public function testAfterAFailedRefreshLookupsBackOffForFiveMinutes(): void
+    public function testAfterAFailedRefreshLookupsBackOffForTheFirstBackoff(): void
     {
         $this->seed();
         $this->clock->now = MockUpstream::NEXT_UPDATE;

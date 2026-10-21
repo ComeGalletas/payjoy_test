@@ -20,9 +20,10 @@ use Throwable;
  * - `quota-reached` → blocked until 00:00 UTC on the first day of the next month;
  * - `invalid-key`, `inactive-account` → blocked until `php api/bin/upstream.php reset`;
  * - every other failed refresh (timeout, connect error, malformed answer, `unsupported-code`
- *   on `/latest/USD`, a `rate_cache` write that failed) → a backoff that doubles with each
- *   consecutive failure: 5, 10, 20, 40, then 60 minutes at most (owner decision 2026-10-21).
- *   A successful refresh (succeeded()) clears it, so the next failure waits 5 minutes again;
+ *   on `/latest/USD`, a `rate_cache` write that failed) → a backoff that grows with each
+ *   consecutive failure: 1, 5, 10, 20, 40, then 60 minutes at most (owner decisions
+ *   2026-10-21). A successful refresh (succeeded()) clears it, so the next failure waits
+ *   1 minute again;
  * - a missing key (`no_key`) doesn't trip it: no call was made.
  *
  * A trip never replaces an open one of equal or greater strength (auth > quota > backoff), so
@@ -33,10 +34,16 @@ final class UpstreamBreaker
 {
     public const STATE_KEY = 'upstream_breaker';
 
-    /** The first backoff, after one failed refresh. */
-    public const BACKOFF_SECONDS = 300;
+    /**
+     * The backoff after the 1st, 2nd, … consecutive failed refresh; from the last entry on,
+     * every further failure waits MAX_BACKOFF_SECONDS.
+     */
+    public const BACKOFF_SCHEDULE = [60, 300, 600, 1200, 2400, 3600];
 
-    /** The longest backoff, from the fifth consecutive failure on. */
+    /** The first backoff, after one failed refresh. */
+    public const BACKOFF_SECONDS = self::BACKOFF_SCHEDULE[0];
+
+    /** The longest backoff, from the sixth consecutive failure on. */
     public const MAX_BACKOFF_SECONDS = 3600;
 
     private const STRENGTH = [BreakerState::BACKOFF => 1, BreakerState::QUOTA => 2, BreakerState::AUTH => 3];
@@ -122,7 +129,7 @@ final class UpstreamBreaker
 
     /**
      * Records a successful refresh: clears a backoff (open or not) or an expired trip, so the
-     * next failure starts the backoff at five minutes again. An open quota or auth block is
+     * next failure starts the backoff at one minute again. An open quota or auth block is
      * left alone (no refresh can succeed while it blocks; another process may just have set
      * it). Writes nothing when there is nothing to clear.
      */
@@ -166,17 +173,14 @@ final class UpstreamBreaker
     }
 
     /**
-     * The backoff after $failures consecutive failed refreshes: 300 × 2^(failures − 1)
-     * seconds, at most MAX_BACKOFF_SECONDS.
+     * The backoff after $failures consecutive failed refreshes: BACKOFF_SCHEDULE[failures − 1]
+     * seconds, then MAX_BACKOFF_SECONDS once the schedule runs out.
      */
     public static function backoffSeconds(int $failures): int
     {
         $failures = max(1, $failures);
-        if ($failures > 5) {
-            return self::MAX_BACKOFF_SECONDS;
-        }
 
-        return min(self::MAX_BACKOFF_SECONDS, self::BACKOFF_SECONDS * 2 ** ($failures - 1));
+        return self::BACKOFF_SCHEDULE[$failures - 1] ?? self::MAX_BACKOFF_SECONDS;
     }
 
     /**
