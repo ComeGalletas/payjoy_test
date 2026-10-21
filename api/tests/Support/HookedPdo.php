@@ -17,8 +17,11 @@ use PDOStatement;
  */
 final class HookedPdo extends PDO
 {
-    /** @var list<array{string, bool}> */
+    /** @var list<array{string, bool}> first word, transaction open */
     public array $prepared = [];
+
+    /** @var list<string> the full SQL of every statement prepared */
+    public array $sql = [];
 
     private ?string $hookPrefix = null;
     private ?Closure $hook = null;
@@ -33,6 +36,7 @@ final class HookedPdo extends PDO
         $pdo->exec('PRAGMA busy_timeout = ' . Database::BUSY_TIMEOUT_MS);
         $pdo->query('PRAGMA journal_mode = WAL')?->fetchAll();
         $pdo->prepared = [];
+        $pdo->sql = [];
 
         return $pdo;
     }
@@ -51,6 +55,7 @@ final class HookedPdo extends PDO
             $hook();
         }
         $this->prepared[] = [(string) strtok($query, ' '), $this->inTransaction()];
+        $this->sql[] = $query;
 
         return parent::prepare($query, $options);
     }

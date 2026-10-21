@@ -74,8 +74,16 @@ final class RequestLogTest extends TestCase
         // 197 ASCII + "é" (%C3%A9): the cut at 200 would land inside "%C3" or "%A9".
         yield 'cut would split the 1st escape after its %' => ['/' . str_repeat('d', 198) . "\u{e9}", '/' . str_repeat('d', 198)];
         yield 'cut would split the 1st escape after %C' => ['/' . str_repeat('d', 197) . "\u{e9}", '/' . str_repeat('d', 197)];
-        yield 'cut would split the 2nd escape' => ['/' . str_repeat('d', 194) . "\u{e9}", '/' . str_repeat('d', 194) . '%C3'];
+        // Round 3: no partial UTF-8 character either; the cut backs off to its first escape.
+        yield 'cut would leave half of é' => ['/' . str_repeat('d', 194) . "\u{e9}", '/' . str_repeat('d', 194)];
         yield 'cut right after an escape keeps it' => ['/' . str_repeat('d', 193) . "\u{e9}", '/' . str_repeat('d', 193) . '%C3%A9'];
+        yield 'cut would leave 2 of the 3 bytes of €' => ['/' . str_repeat('d', 193) . "\u{20ac}", '/' . str_repeat('d', 193)];
+        yield 'cut would leave 1 of the 3 bytes of €' => ['/' . str_repeat('d', 196) . "\u{20ac}", '/' . str_repeat('d', 196)];
+        yield 'cut after the whole € keeps it' => ['/' . str_repeat('d', 190) . "\u{20ac}x", '/' . str_repeat('d', 190) . '%E2%82%AC'];
+        yield 'cut would leave 3 of the 4 bytes of an emoji' => ['/' . str_repeat('d', 190) . "\u{1F600}", '/' . str_repeat('d', 190)];
+        yield 'cut after a whole é before another' => ['/' . str_repeat('d', 190) . "\u{e9}\u{e9}", '/' . str_repeat('d', 190) . '%C3%A9'];
+        yield 'a lone invalid byte at the cut is kept' => ['/' . str_repeat('d', 196) . "\xFF\xFF", '/' . str_repeat('d', 196) . '%FF'];
+        yield 'a client-escaped partial character is backed off too' => ['/' . str_repeat('d', 194) . '%C3%A9', '/' . str_repeat('d', 194)];
         yield 'a client escape at the cut is not split either' => ['/' . str_repeat('d', 198) . '%41', '/' . str_repeat('d', 198)];
         yield 'a lone % at the cut is kept' => ['/' . str_repeat('d', 198) . '%zz', '/' . str_repeat('d', 198) . '%'];
     }
@@ -154,38 +162,33 @@ final class RequestLogTest extends TestCase
         self::assertFalse($log->record(self::NOW, '203.0.113.7', 'GET', '/', 200, 1, false));
     }
 
-    public function testClientErrorCountsAreRateLimitedMinutesAndOther4xx(): void
+    public function testOtherClientErrorsAreUnblocked4xxExcept429SinceTheGivenTime(): void
     {
         $log = $this->requestLog();
         $ip = '203.0.113.7';
-        $minute = intdiv(self::NOW, 60) * 60;
         foreach ([
-            [$minute - 1, 429, false],     // the minute before, and before $since below
-            [$minute, 429, false],         // minute 0, three times: counts once
-            [$minute + 30, 429, false],
-            [$minute + 59, 429, false],
-            [$minute + 60, 429, false],    // minute 1
-            [$minute + 60, 429, true],     // blocked: never counted
-            [$minute + 180, 429, true],    // a minute with only a blocked 429: not counted
-            [$minute, 404, false],
-            [$minute + 5, 400, false],
-            [$minute + 5, 499, false],
-            [$minute + 5, 403, true],      // blocked: never counted
-            [$minute + 5, 500, false],     // 5xx: not a client error
-            [$minute + 5, 503, false],
-            [$minute + 5, 200, false],
-            [$minute + 5, 399, false],
+            [self::NOW - 1, 404, false],   // before $since
+            [self::NOW, 404, false],
+            [self::NOW + 5, 400, false],
+            [self::NOW + 5, 401, false],
+            [self::NOW + 5, 499, false],
+            [self::NOW + 5, 429, false],   // 429s are rate-limited minutes, counted elsewhere
+            [self::NOW + 5, 404, true],    // blocked: never counted
+            [self::NOW + 5, 403, true],
+            [self::NOW + 5, 500, false],   // 5xx: not a client error
+            [self::NOW + 5, 503, false],
+            [self::NOW + 5, 200, false],
+            [self::NOW + 5, 399, false],
         ] as [$ts, $status, $blocked]) {
             $log->record($ts, $ip, 'GET', '/', $status, 1, $blocked);
         }
-        $log->record($minute + 120, '198.51.100.1', 'GET', '/', 429, 1, false);
+        $log->record(self::NOW, '198.51.100.1', 'GET', '/', 404, 1, false);
 
-        self::assertSame([2, 3], $log->clientErrorCountsSince($ip, $minute));
-        self::assertSame([3, 3], $log->clientErrorCountsSince($ip, $minute - 1));
-        self::assertSame([2, 0], $log->clientErrorCountsSince($ip, $minute + 6));
-        self::assertSame([1, 0], $log->clientErrorCountsSince($ip, $minute + 60));
-        self::assertSame([0, 0], $log->clientErrorCountsSince($ip, $minute + 61));
-        self::assertSame([0, 0], $log->clientErrorCountsSince('192.0.2.1', 0));
+        self::assertSame(4, $log->otherClientErrorsSince($ip, self::NOW));
+        self::assertSame(5, $log->otherClientErrorsSince($ip, self::NOW - 1));
+        self::assertSame(3, $log->otherClientErrorsSince($ip, self::NOW + 1));
+        self::assertSame(0, $log->otherClientErrorsSince($ip, self::NOW + 6));
+        self::assertSame(0, $log->otherClientErrorsSince('192.0.2.1', 0));
     }
 
     private function requestLog(): RequestLog

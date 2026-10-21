@@ -42,7 +42,7 @@ final class Retention
         if ($requestRetentionDays < 1) {
             throw new InvalidArgumentException('requests.retention_days must be at least 1');
         }
-        IpBlocking::assertMinutes('block.window_minutes', $blockWindowMinutes);
+        IpBlocking::assertWindowMinutes($blockWindowMinutes);
     }
 
     /**

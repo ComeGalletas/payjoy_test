@@ -303,11 +303,11 @@ final class P1_11_RequestLogTest extends TestCase
         $events = $this->pdo->query("SELECT * FROM events WHERE event_type LIKE 'ip.%' ORDER BY id")->fetchAll();
         self::assertSame(
             [
-                ['ip.block', 'api', '{"source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}'],
-                ['ip.block', 'api', '{"source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}'],
-                ['ip.block', 'api', '{"source":"manual","reason":"given","duration_minutes":5}'],
-                ['ip.unblock', 'api', '{"source":"auto","was_active":true}'],
-                ['ip.unblock', 'api', '{"source":null,"was_active":false}'],
+                ['ip.block', 'api', '{"block_source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}'],
+                ['ip.block', 'api', '{"block_source":"auto","reason":"error_responses","duration_minutes":60,"extended":false}'],
+                ['ip.block', 'api', '{"block_source":"manual","reason":"given","duration_minutes":5,"by":"cli"}'],
+                ['ip.unblock', 'api', '{"block_source":"auto","was_active":true,"by":"cli"}'],
+                ['ip.unblock', 'api', '{"block_source":null,"was_active":false,"by":"cli"}'],
             ],
             array_map(static fn (array $row): array => [$row['event_type'], $row['source'], $row['meta']], $events),
         );

@@ -118,14 +118,14 @@ final class RetentionTest extends TestCase
     {
         yield 'zero' => [0];
         yield 'negative' => [-10];
-        yield 'over a year' => [IpBlocking::MAX_MINUTES + 1];
+        yield 'over a day (rate_limits are kept a day)' => [IpBlocking::MAX_WINDOW_MINUTES + 1];
     }
 
     #[DataProvider('invalidBlockWindows')]
     public function testTheBlockWindowIsValidatedAsIpBlockingDoes(int $minutes): void
     {
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('block.window_minutes must be between 1 and 525600');
+        $this->expectExceptionMessage('block.window_minutes must be between 1 and 1440');
         new Retention($this->pdo, 30, $minutes);
     }
 

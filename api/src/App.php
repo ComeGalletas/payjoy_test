@@ -121,7 +121,14 @@ final class App
      */
     public function ipBlocking(): IpBlocking
     {
-        return IpBlocking::fromConfig($this->ipBlocks(), $this->requestLog(), $this->metrics, $this->config, Env::nonEmpty('TRUSTED_PROXY'));
+        return IpBlocking::fromConfig(
+            $this->ipBlocks(),
+            $this->requestLog(),
+            $this->rateLimiter(),
+            $this->metrics,
+            $this->config,
+            Env::nonEmpty('TRUSTED_PROXY'),
+        );
     }
 
     /**

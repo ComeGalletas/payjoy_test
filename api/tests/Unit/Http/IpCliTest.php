@@ -75,7 +75,9 @@ final class IpCliTest extends TestCase
     public function testListShowsActiveBlocksAndCountsThoseWithoutAnExpiry(): void
     {
         $insert = $this->pdo->prepare('INSERT INTO ip_blocks (ip, reason, source, blocked_at, expires_at) VALUES (?, ?, ?, ?, ?)');
-        $insert->execute(['198.51.100.1', 'rate_limit_hits', 'auto', gmmktime(10, 0, 0, 10, 21, 2026), time() + 600]);
+        // Computed once: two time() calls around the subprocess can straddle a second.
+        $expiresAt = time() + 600;
+        $insert->execute(['198.51.100.1', 'rate_limit_hits', 'auto', gmmktime(10, 0, 0, 10, 21, 2026), $expiresAt]);
         $insert->execute(['198.51.100.2', 'abuse report', 'manual', gmmktime(9, 0, 0, 10, 21, 2026), null]);
         $insert->execute(['198.51.100.3', 'old', 'manual', gmmktime(8, 0, 0, 10, 21, 2026), time() - 1]);
 
@@ -84,7 +86,7 @@ final class IpCliTest extends TestCase
         self::assertSame(0, $exit);
         self::assertSame(
             "198.51.100.2  manual  since 2026-10-21T09:00:00Z  until never  reason: abuse report\n"
-            . '198.51.100.1  auto  since 2026-10-21T10:00:00Z  until ' . gmdate('Y-m-d\TH:i:s\Z', time() + 600) . "  reason: rate_limit_hits\n"
+            . '198.51.100.1  auto  since 2026-10-21T10:00:00Z  until ' . gmdate('Y-m-d\TH:i:s\Z', $expiresAt) . "  reason: rate_limit_hits\n"
             . "ip: 2 active block(s), 1 manual without an expiry (review them: they keep a raw IP until unblocked)\n",
             $out,
         );
@@ -148,10 +150,10 @@ final class IpCliTest extends TestCase
         $events = $this->pdo->query('SELECT * FROM events ORDER BY id')->fetchAll();
         self::assertSame(
             [
-                ['ip.block', 'api', 'ok', '{"source":"manual","reason":"default","duration_minutes":null}'],
-                ['ip.block', 'api', 'ok', '{"source":"manual","reason":"given","duration_minutes":15}'],
-                ['ip.unblock', 'api', 'ok', '{"source":"manual","was_active":true}'],
-                ['ip.unblock', 'api', 'ok', '{"source":null,"was_active":false}'],
+                ['ip.block', 'api', 'ok', '{"block_source":"manual","reason":"default","duration_minutes":null,"by":"cli"}'],
+                ['ip.block', 'api', 'ok', '{"block_source":"manual","reason":"given","duration_minutes":15,"by":"cli"}'],
+                ['ip.unblock', 'api', 'ok', '{"block_source":"manual","was_active":true,"by":"cli"}'],
+                ['ip.unblock', 'api', 'ok', '{"block_source":null,"was_active":false,"by":"cli"}'],
             ],
             array_map(static fn (array $row): array => [$row['event_type'], $row['source'], $row['status'], $row['meta']], $events),
         );

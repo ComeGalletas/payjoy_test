@@ -6,7 +6,6 @@ namespace FxInstallments\Metrics;
 
 use Closure;
 use FxInstallments\Db\Connection;
-use PDO;
 use Throwable;
 
 /**
@@ -17,7 +16,8 @@ use Throwable;
  * - The path never carries the query string: anything from the first `?` or `#` is dropped.
  * - Path and method are stored as pure ASCII: every byte outside 0x21-0x7E is percent-encoded
  *   (`é` is `%C3%A9`, `\xFF` is `%FF`, a space is `%20`), then the value is cut to 200 (path)
- *   or 16 (method) characters without splitting a `%XX` escape. So a stored path is always
+ *   or 16 (method) characters without splitting a `%XX` escape or the escapes of one UTF-8
+ *   character. So a stored path is always
  *   valid UTF-8 (portable to Postgres TEXT) and "200 characters" holds. The Kernel's `error`
  *   event uses the same rules (storedPath(), storedMethod()).
  * - A failed write never fails the request (the INV-07 policy of Metrics): every Throwable is
@@ -73,29 +73,26 @@ final class RequestLog
     }
 
     /**
-     * The counts behind automatic blocking, over the requests from $ip with `ts >= $since` that
-     * were not blocked (blocked requests, 403 IP_BLOCKED, never count):
+     * The count behind `block.error_responses`: requests from $ip with `ts >= $since` that were
+     * not blocked and got a 4xx other than 429. (Rate-limited minutes come from rate_limits,
+     * RateLimiter::rateLimitedWindows().) Throws on a database failure.
      *
-     * - rate-limited minutes: the number of distinct fixed one-minute UTC windows (`ts / 60`,
-     *   RateLimiter's `window_start`) with at least one 429;
-     * - other client errors: the number of 4xx responses other than 429.
-     *
-     * Integer `ts / 60` is integer division on SQLite and Postgres alike (ADR 0010). Throws on
-     * a database failure.
-     *
-     * @return array{int, int} [rate-limited minutes, other 4xx responses]
+     * Cost: one range read of the `requests_ip_ts` index over the IP's rows since $since, which
+     * visits its other rows in that range too (2xx, 429, 5xx). IpBlocking only calls this on a
+     * non-429 4xx, and fewer than `block.error_responses` such responses fit in a window before
+     * the IP is blocked, so the work per window is at most `block.error_responses` scans of the
+     * window: linear in the IP's traffic, not quadratic. Blocked requests lie before the block's
+     * end, which `$since` excludes.
      */
-    public function clientErrorCountsSince(string $ip, int $since): array
+    public function otherClientErrorsSince(string $ip, int $since): int
     {
         $select = $this->db->pdo()->prepare(
-            'SELECT COUNT(DISTINCT CASE WHEN status = 429 THEN ts / 60 END) AS rate_limited_minutes,'
-            . ' SUM(CASE WHEN status <> 429 THEN 1 ELSE 0 END) AS other_client_errors'
-            . ' FROM requests WHERE ip = ? AND ts >= ? AND blocked = 0 AND status >= 400 AND status < 500',
+            'SELECT COUNT(*) FROM requests WHERE ip = ? AND ts >= ? AND blocked = 0'
+            . ' AND status >= 400 AND status < 500 AND status <> 429',
         );
         $select->execute([substr($ip, 0, self::MAX_IP), $since]);
-        $row = $select->fetch(PDO::FETCH_ASSOC);
 
-        return is_array($row) ? [(int) $row['rate_limited_minutes'], (int) $row['other_client_errors']] : [0, 0];
+        return (int) $select->fetchColumn();
     }
 
     /**
@@ -116,7 +113,8 @@ final class RequestLog
 
     /**
      * Percent-encodes every byte outside 0x21-0x7E, then cuts to $max characters, moving the
-     * cut back before a `%XX` escape it would split (the value's own escapes included).
+     * cut back before a `%XX` escape it would split (the value's own escapes included), and
+     * then back before the escapes of a UTF-8 character it would leave incomplete.
      */
     private static function asciiCut(string $value, int $max): string
     {
@@ -137,7 +135,36 @@ final class RequestLog
             }
         }
 
-        return substr($encoded, 0, $cut);
+        return substr($encoded, 0, self::withoutPartialCharacter($encoded, $cut));
+    }
+
+    /**
+     * Where to cut so the escapes before $cut don't end in an incomplete UTF-8 sequence: walks
+     * back over at most four trailing `%XX` escapes to the sequence's lead byte and, if the
+     * sequence has fewer bytes than the lead announces, cuts before the lead.
+     */
+    private static function withoutPartialCharacter(string $encoded, int $cut): int
+    {
+        $at = $cut;
+        $continuations = 0;
+        while ($continuations < 4 && $at >= 3 && preg_match('/^%[0-9A-Fa-f]{2}$/', substr($encoded, $at - 3, 3)) === 1) {
+            $byte = (int) hexdec(substr($encoded, $at - 2, 2));
+            $at -= 3;
+            if (($byte & 0xC0) !== 0x80) {
+                $length = match (true) {
+                    $byte >= 0xF8 => 1, // never a UTF-8 lead byte: stands alone
+                    $byte >= 0xF0 => 4,
+                    $byte >= 0xE0 => 3,
+                    $byte >= 0xC0 => 2,
+                    default => 1,
+                };
+
+                return $continuations + 1 < $length ? $at : $cut;
+            }
+            $continuations++;
+        }
+
+        return $cut;
     }
 
     private function noteFailure(Throwable $e): void

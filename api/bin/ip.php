@@ -117,9 +117,10 @@ try {
         $metrics->record('ip.block', [
             'source' => 'api',
             'meta' => [
-                'source' => IpBlock::MANUAL,
+                'block_source' => IpBlock::MANUAL,
                 'reason' => $reasonGiven ? 'given' : 'default',
                 'duration_minutes' => $minutes,
+                'by' => 'cli',
             ],
         ]);
         fwrite(STDOUT, sprintf(
@@ -135,8 +136,9 @@ try {
         $metrics->record('ip.unblock', [
             'source' => 'api',
             'meta' => [
-                'source' => $lifted?->source,
+                'block_source' => $lifted?->source,
                 'was_active' => $lifted !== null,
+                'by' => 'cli',
             ],
         ]);
         fwrite(STDOUT, $lifted === null
