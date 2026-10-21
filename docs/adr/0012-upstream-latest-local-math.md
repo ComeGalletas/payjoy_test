@@ -102,6 +102,7 @@ design, which the tester and judge accepted in round 2.
   - The quota block ends on the 1st (UTC). Upstream actually refreshes the quota on
     `refresh_day_of_month` from `/quota` (P1-08).
   - While a backoff started by `unsupported-code` on `/latest/USD` is open, every lookup without a
-    usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`. That is a 400 ("That currency is not
-    supported right now") for every currency. The owner and lead decide before P1-05 starts
-    whether to keep the 400 or answer 503.
+    usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`, today a 400 ("That currency is not
+    supported right now") for every currency. **Owner decision (2026-10-21): answer 503 instead.**
+    The fault is upstream's, not the user's, and `/latest/USD` is the code's only source. P1-05
+    applies it, with a generic upstream message, and its acceptance test covers it.
