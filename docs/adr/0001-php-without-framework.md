@@ -34,11 +34,13 @@ extensions: `pdo_sqlite`, `curl`, `mbstring`, `openssl`; `apcu` optional from Ph
   2026-10-18.
 - Its dependencies came in with it: `guzzlehttp/psr7` 3.2.0 (2026-10-17), `guzzlehttp/promises`
   3.1.0 (2026-10-18), `psr/http-client` 1.0.3, `psr/http-factory` 1.1.0, `psr/http-message` 2.0,
-  and `symfony/polyfill-php82` 1.43.0. None of them needs its own ADR; they leave with Guzzle.
+  `symfony/deprecation-contracts` 3.7.1 and `symfony/polyfill-php82` 1.43.0. Dependencies that
+  arrive with an approved package don't count as added under "Adding a dependency needs a new
+  ADR"; they leave with Guzzle.
 - Only `Rates/ExchangeRateClient` uses Guzzle, and the client is injected (ADR 0012). Tests use
   a mocked handler only (ADR 0018).
 
 **Consequences.**
 - Guzzle 8.3.0, psr7 3.2.0 and promises 3.1.0 were 3–4 days old when locked, so fixes may follow
-  soon. Look for 8.3.x patch releases before P1-10 and again before any release.
+  soon. P1-10 checks for 8.3.x patch releases, and so does every later release.
 - Moving to another major version, or dropping Guzzle, needs a new ADR.

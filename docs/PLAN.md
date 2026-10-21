@@ -159,12 +159,13 @@ Reasons and consequences are in the ADR named in each row.
 - `Rates/ExchangeRateClient` calls `GET /v6/{key}/latest/USD`: one call refreshes every rate. It
   runs only on a cache miss, i.e. when `now ≥ next_update_unix` — about 30 calls a month,
   regardless of traffic. The stored `next_update_unix` is at least `fetched_at + 300`, so a late
-  upstream can't cause a call per lookup (ADR 0012 amendment). `/codes` is called only to refresh currency names; `/quota` only for the
-  admin health view, cached `health.quota_cache_minutes`.
+  upstream can't cause a call per lookup (ADR 0012 amendment). `/codes` is called only to refresh
+  currency names; `/quota` only for the admin health view, cached `health.quota_cache_minutes`.
 - Timeout 4 s. Check `"result":"success"` and validate types (`conversion_rates` is a map of
   3-letter codes to positive numbers) before storing.
 - **Allow-list:** the currency codes in the latest stored rate table. When the cache is empty,
-  `Rates/FallbackCurrencies` (static ISO list) validates codes so users still get
+  `Rates/FallbackCurrencies` (static ISO 4217 list plus upstream's non-ISO territory codes)
+  validates codes so users still get
   `VALIDATION_CURRENCY` vs an upstream error correctly.
 - **Always compute locally.** `converted = amount × rate`; upstream `conversion_result` is not used.
 - **Stale fallback.** If the refresh fails and a cached table younger than
@@ -175,13 +176,13 @@ Reasons and consequences are in the ADR named in each row.
   refresh trips it except `no_key`.
   - After `quota-reached`, stop calling until the first day of the next month (UTC).
   - After `invalid-key` or `inactive-account`, stop until an operator runs
-    `php bin/upstream.php reset`, which records an `upstream.breaker_reset` event.
+    `php api/bin/upstream.php reset`, which records an `upstream.breaker_reset` event.
   - After any other failure, including `unsupported-code` on `/latest/USD` and a failed
     `rate_cache` write, back off for 1, 5, 10, 20, 40, then 60 minutes per consecutive failure. A
     successful refresh clears the backoff.
-  - A stronger open trip is never replaced by a weaker one (auth > quota > backoff).
+  - An open trip is never replaced by one of equal or lower strength (auth > quota > backoff).
   - While blocked, serve stale (`result=blocked`, `stale=true`) or return `UPSTREAM_QUOTA`,
-    `UPSTREAM_AUTH`, or for a backoff the code of the failure that started it.
+    `UPSTREAM_AUTH`, or for a backoff the code of the failed refresh that opened it.
 - **Error mapping:** `unsupported-code` → `UPSTREAM_UNSUPPORTED_CODE` (400); `quota-reached` →
   `UPSTREAM_QUOTA` (503); `invalid-key`, `inactive-account` → `UPSTREAM_AUTH` (503); timeout →
   `UPSTREAM_TIMEOUT` (503); bad JSON or types → `UPSTREAM_MALFORMED` (503). Generic
@@ -544,7 +545,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `VALIDATION_AMOUNT` (checked in `ConvertService`, before `display()`; §3a).
   Also (from the P1-04 review): while a backoff started by `unsupported-code` on `/latest/USD` is
   open, every lookup without a usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`, a 400 for
-  every currency; consider answering 503 there.
+  every currency. Decide before P1-05 starts (owner and lead, recorded in a lead docs PR): keep
+  the 400, or answer 503 with `UPSTREAM_UNSUPPORTED_CODE`. P1-05's acceptance test covers the
+  choice.
 - **P1-06** `Flow/`: YAML loader, `FlowEngine` (§9 rules), `SessionStore` (server ids, TTL, expiry
   sweep), `POST /bot/message`, `bin/bot.php`.
   *Acceptance:* `tests/Acceptance/P1_06_FlowTest.php` — a scripted CLI session (`200` → `brazil` →
@@ -561,8 +564,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `read()`; `ValidationFailed::messageForUser()` is the generic `ErrorCodes` text, so bot wording
   comes from the flow YAML.
   Also (from the P1-04 review): decide whether Spanish or Portuguese words that are also codes
-  need the capitals rule (`CurrencySynonyms::CODE_WORDS`); mapping Bolivia must settle `bob`, which
-  a test forces.
+  need the capitals rule (`CurrencySynonyms::CODE_WORDS`). If Bolivia → BOB is added to
+  `CurrencyCountryMap`, `CurrencyCodeWordsTest` fails until `bob` leaves `CODE_WORDS` (a mapped
+  currency's code must stay a code); decide what lowercase `bob` then means.
 - **P1-07** `resources/widget/` at `GET /bot/widget`, `channel=static`, `textContent` only, CSP,
   `nosniff`, `frame-ancestors`.
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
@@ -580,7 +584,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from the P1-04 review):
   - Count real upstream calls as `miss` plus `stale` events, minus those with `reason=no_key`. A
     `blocked` lookup makes no call, and a blocked lookup that served stale has `result=blocked`,
-    `stale=true`.
+    `stale=true`. This counts `/latest/USD` calls only: give `/codes` and `/quota` calls their own
+    events, or state in the report that they are excluded (P1-10 checks quota used).
   - Cache `/quota` for `health.quota_cache_minutes`. The quota block ends on the 1st (UTC), but
     upstream refreshes the quota on `refresh_day_of_month`; show both or follow upstream.
   - Include the backoff count in the admin `/health` breaker state.

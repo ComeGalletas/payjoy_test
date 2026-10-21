@@ -4,7 +4,10 @@ One file per decision: `NNNN-<slug>.md`, numbered in order, never renumbered. An
 beats `docs/PLAN.md` until a later ADR supersedes it. To change a decision, write a new ADR that
 names the one it supersedes and set the old one's status to `Superseded by NNNN`. When a new ADR
 replaces only part of an old one, the old one stays `Accepted` with a note naming the part and the
-new ADR, and the affected sentence in its body points to the new ADR.
+new ADR, and the affected sentence in its body points to the new ADR. A decision that is extended
+or refined without being reversed gets a dated "Amendment" section in the same ADR; its status
+becomes `Accepted (amended YYYY-MM-DD)`, and the changed sentences in its body point to the
+amendment.
 
 | ADR | Title | Status |
 |---|---|---|

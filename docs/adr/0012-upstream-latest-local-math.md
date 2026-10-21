@@ -16,14 +16,15 @@ the key.
 ## Decision
 
 - Call `/latest/USD` only when `now ≥ next_update_unix`; one call refreshes every rate (~30 calls a
-  month). Its codes are the currency allow-list; `/codes` is used only for names.
+  month). Its codes are the currency allow-list; `/codes` is used only for names. The stored
+  `next_update_unix` has a floor, and the breaker must be closed (amendment items 1 and 4).
 - Always compute `converted = amount × rate` locally.
 - On refresh failure, serve a cached table younger than `rates.max_stale_hours` with `stale: true`.
-  Every response carries `rate_as_of`. A static `FallbackCurrencies` list validates codes on a cold
-  start.
+  Every response carries `rate_as_of`; the age is measured from it (amendment item 5). A static
+  `FallbackCurrencies` list validates codes on a cold start.
 - `UpstreamBreaker` stops calls after `quota-reached` (until next month, UTC) and after
-  `invalid-key` (until `bin/upstream.php reset`). Extended by the amendment below: every other
-  failed refresh starts a growing backoff.
+  `invalid-key` or `inactive-account` (until `php api/bin/upstream.php reset`). Extended by the
+  amendment below: every other failed refresh starts a growing backoff.
 - The client catches every exception and maps it to an error code; exception text never leaves
   it. Tests inject a mocked handler; the test bootstrap forbids real network calls and uses a fake
   key.
@@ -38,12 +39,15 @@ the key.
 
 **Context.** Building P1-04 (PR #12, three rounds) showed that stopping only after quota and key
 errors leaves quota use bounded by traffic. During a timeout or a malformed answer, every lookup
-would call upstream again, with up to 4 s of waiting each. The round-1 tester also found that an
-`unsupported-code` answer from `/latest/USD` never tripped anything. The round-1 judge noted that a
-flat 5-minute backoff still costs 288 calls a day, so a persistent fault would use the whole monthly
-quota in about 5 days. The owner then made two decisions on 2026-10-21. First, the backoff grows
-from 5 minutes, doubling up to 1 hour. Second, it starts at 1 minute instead. The rest of this
-amendment is the builder's design, which the tester and judge accepted.
+would call upstream again, with up to 4 s of waiting each. The round-1 builder added a flat
+5-minute backoff for other failures. The round-1 tester found that an `unsupported-code` answer
+from `/latest/USD` bypassed it. The round-1 judge found that a failed `rate_cache` write did too,
+and that the flat backoff still costs 288 calls a day, so a persistent fault would use the whole
+monthly quota in about 5 days. The co-leads' round-2 brief then required every failed refresh to
+trip the breaker. The owner made two decisions on 2026-10-21. First, the backoff grows from
+5 minutes to 1 hour and resets on a successful refresh. Second, it starts at 1 minute: 1, 5, 10,
+20, 40, 60. The rest (strength order, refresh floor, stale age, state validation) is the builder's
+design, which the tester and judge accepted in round 2.
 
 **Decision.**
 1. **Three kinds of trip**, stored as one `app_state` row (`upstream_breaker`, JSON,
@@ -55,14 +59,15 @@ amendment is the builder's design, which the tester and judge accepted.
      non-2xx answers, bad JSON or shapes, oversized bodies, any other `error-type`,
      `unsupported-code` on `/latest/USD`, and a fetched table that couldn't be stored in
      `rate_cache` (`reason=store_failed`; the fetched rate is still served for that request).
-   - A missing key (`no_key`) trips nothing, because no call was made.
+   - A missing or malformed key (`no_key`) trips nothing, because no call was made.
 2. **Backoff schedule (owner decisions).** After the 1st, 2nd, … consecutive failed refresh,
    calls stop for **1, 5, 10, 20, 40, then 60 minutes**, and 60 minutes for every failure after
    that (`UpstreamBreaker::BACKOFF_SCHEDULE`). `BreakerState::failures` counts the consecutive
    failures. A successful refresh clears the backoff, so the next failure waits 1 minute again.
 3. **Strength order: auth > quota > backoff.** An open trip of equal or greater strength is never
    replaced. So a slow request that fails late can't shorten an auth or quota block, and one outage
-   isn't counted twice. An expired trip is replaced. A success clears a backoff (open or not) or
+   isn't counted twice: a failure while a backoff is still open doesn't move the schedule on; only a
+   failure after the backoff has ended raises `failures`. An expired trip is replaced. A success clears a backoff (open or not) or
    an expired trip, but leaves an open quota or auth block alone.
 4. **Refresh floor.** The stored `next_update_unix` is
    `max(upstream's time_next_update_unix, fetched_at + 300)` (`RateCache::MIN_REFRESH_SECONDS`).
@@ -72,8 +77,9 @@ amendment is the builder's design, which the tester and judge accepted.
    `fetched_at`. A table is usable while its age is strictly less than `rates.max_stale_hours`.
 6. **While blocked**, a usable stale table is served with `stale: true`. The `upstream.call` event
    then has `result=blocked`, `stale=true`. Without one, the lookup returns `UPSTREAM_QUOTA`,
-   `UPSTREAM_AUTH`, or, for a backoff, the code of the failure that started it.
-7. **Reset is recorded.** `bin/upstream.php reset` writes an `upstream.breaker_reset` event
+   `UPSTREAM_AUTH`, or, for a backoff, the code of the failed refresh that opened the current
+   backoff.
+7. **Reset is recorded.** `php api/bin/upstream.php reset` writes an `upstream.breaker_reset` event
    (`cleared`, `was_open`, `by=cli`; never the key).
 8. **Stored state is validated.** A row whose kind and code don't match, a backoff longer than
    1 hour or with no failures, a quota block ending after the next 1st, or an auth trip with an
@@ -97,4 +103,5 @@ amendment is the builder's design, which the tester and judge accepted.
     `refresh_day_of_month` from `/quota` (P1-08).
   - While a backoff started by `unsupported-code` on `/latest/USD` is open, every lookup without a
     usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`. That is a 400 ("That currency is not
-    supported right now") for every currency. P1-05 should consider a 503 there.
+    supported right now") for every currency. Whether to keep the 400 or answer 503 is decided
+    before P1-05 starts.

@@ -27,9 +27,12 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
     `table()`; temp databases cleaned up on Windows.
   - 1123 tests, 80 guards. Tester: PASS 12/12, every mutation caught. Judge: APPROVE WITH NITS.
 - Owner decision: the backoff starts at 1 minute (1, 5, 10, 20, 40, 60).
-- **Round 3** (`cf85902`, lead): only the schedule constant, its docblocks and the tests changed.
-  1123 tests, 80 guards; CI `check` passed (run 39650531350). The owner approved it without a
-  separate tester and judge recheck.
+- **Round 3** (`cf85902`): the owner asked the lead to make this change directly ("do the change
+  yourself"). That was an owner-approved, one-off exception to the lead's edit scope (CLAUDE.md
+  Roles) and to the ADR 0015 rerun of tester and judge on a new head; it is not a precedent. Only
+  the schedule constant, `backoffSeconds()`, docblocks and tests changed. 1123 tests, 80 guards;
+  CI `check` passed (run 39650531350). The owner approved it without a separate tester and judge
+  recheck.
 - Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
   as `7cfe567` (18:13:45 UTC), following the ADR 0015 amendment's order.
 - Upstream: 0 real calls. Every test uses a mocked handler.

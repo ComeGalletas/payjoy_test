@@ -31,11 +31,11 @@ name, add it here in the same commit that introduces it.
 | **message_for_user** | Generic, safe text front-ends show verbatim. Never contains upstream bodies or secrets. |
 | **error code** | A stable string from `Metrics/ErrorCodes` (`VALIDATION_AMOUNT`, `UPSTREAM_QUOTA`…). |
 | **upstream** | ExchangeRate-API. Only `Rates/ExchangeRateClient` talks to it. |
-| **upstream call** | One HTTP request to upstream. Every rate lookup writes an `upstream.call` event with result `hit`, `miss`, `stale` or `blocked`; only `miss` and `stale` lookups called upstream, and a `no_key` miss did not. |
+| **upstream call** | One HTTP request to upstream. Every rate lookup writes an `upstream.call` event with result `hit`, `miss`, `stale` or `blocked`; only `miss` and `stale` lookups called upstream, except those with `reason=no_key`. |
 | **refresh** | One `/latest/USD` call that rewrites every row of `rate_cache`; happens only when `now ≥ next_update_unix` and the breaker is closed. |
 | **stored table** | The rows the last successful refresh wrote to `rate_cache` (`RateTable`): rates, `rate_as_of`, `next_update_unix`, `fetched_at`. |
 | **dropped currency** | A rate that a refresh skipped because it failed a check; listed in the `miss` event's `meta.dropped`, by code only when the key was a valid code. The rest of the table is still stored. |
-| **breaker** | `UpstreamBreaker`: stops upstream calls after any failed refresh. Its trip is `quota` (until the 1st of next month, UTC), `auth` (until `bin/upstream.php reset`) or `backoff` (ADR 0012 amendment). |
+| **breaker** | `UpstreamBreaker`: stops upstream calls after any failed refresh except `no_key`. Its trip is `quota` (until the 1st of next month, UTC), `auth` (until `php api/bin/upstream.php reset`) or `backoff` (ADR 0012 amendment). |
 | **backoff** | The breaker's trip after any failed refresh other than quota or auth: 1, 5, 10, 20, 40, then 60 minutes per consecutive failure, cleared by a successful refresh. |
 | **quota** | The free-tier monthly request budget (1,500), read from upstream `/quota` for the admin health view. |
 | **allow-list** | Currency codes in the latest stored rate table. Input not on it never reaches upstream. |
