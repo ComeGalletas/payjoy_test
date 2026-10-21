@@ -29,10 +29,11 @@ use InvalidArgumentException;
  *   and below MAX_RATE (900,000,000), so the scaled value is below MAX_SCALED (9 × 10^18) and
  *   fits a signed 64-bit integer (PHP int, Postgres BIGINT) with margin.
  *
- * toRate() is `scaled / 10^10` as a float, because the calculation is float by design
- * (ADR 0011). It is the float nearest to the stored decimal while the scaled value is below
- * 2^53 (rates below about 900,719.92); above that the int-to-float conversion itself rounds,
- * so the result is only approximate (relative error below 2^-52).
+ * toRate() is the stored decimal as a float, because the calculation is float by design
+ * (ADR 0011). Since P1-05 it parses toDecimalString()'s exact text (PHP's string-to-float
+ * conversion is correctly rounded), so it is the float nearest to the stored decimal for every
+ * rate, also above 2^53 scaled (rates from about 900,719.92, such as IRR), where the earlier
+ * `scaled / 10^10` was only approximate.
  */
 final class ScaledRate
 {
@@ -128,15 +129,29 @@ final class ScaledRate
     }
 
     /**
-     * The stored rate as a float: the nearest float while $scaled < 2^53, approximate above.
+     * The stored rate as a float: the float nearest to its exact decimal value.
      */
     public static function toRate(int $scaled): float
+    {
+        return (float) self::toDecimalString($scaled);
+    }
+
+    /**
+     * The stored rate's exact decimal text, built with integer arithmetic: up to ten decimals,
+     * trailing zeros trimmed, no exponent, no grouping (`52291000000` → `5.2291`,
+     * `895000000000000` → `89500`, `1` → `0.0000000001`).
+     *
+     * @throws InvalidArgumentException when $scaled is not positive or not below MAX_SCALED
+     */
+    public static function toDecimalString(int $scaled): string
     {
         if ($scaled < 1 || $scaled >= self::MAX_SCALED) {
             throw new InvalidArgumentException('A scaled rate must be positive and below MAX_SCALED');
         }
+        $whole = intdiv($scaled, self::SCALE);
+        $fraction = rtrim(str_pad((string) ($scaled % self::SCALE), self::DECIMALS, '0', STR_PAD_LEFT), '0');
 
-        return (float) $scaled / self::SCALE;
+        return $fraction === '' ? (string) $whole : "{$whole}.{$fraction}";
     }
 
     /**

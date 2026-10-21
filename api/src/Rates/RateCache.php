@@ -28,6 +28,10 @@ use Throwable;
  * - Every failed refresh trips the breaker (UpstreamBreaker), including one whose answer was
  *   fine but whose `rate_cache` write failed (the fetched rate is still served once); every
  *   successful one clears its backoff. So upstream calls are bounded by time, not traffic.
+ * - While a backoff opened by `unsupported-code` is open (and for the failed refresh that
+ *   opened it), the UPSTREAM_UNSUPPORTED_CODE error thrown is marked
+ *   `duringUnsupportedCodeBackoff`, so `/convert` answers 503 (ADR 0012 amendment item 9). A
+ *   currency missing from a usable table (`not_in_table`) stays a plain 400.
  *
  * Every lookup writes one `upstream.call` event (source `upstream`) with `meta.result` = `hit`,
  * `miss`, `stale` or `blocked`, `meta.endpoint` = `latest` and `meta.stale`; a failed refresh
@@ -94,6 +98,9 @@ final class RateCache
                 return $this->serve($table, $currency, 'blocked', true, $started, $meta);
             }
             $error = $blocking->error();
+            if (self::isUnsupportedCodeBackoff($blocking, $error->errorCode)) {
+                $error = $error->duringBackoff();
+            }
             $this->record($currency, 'blocked', false, $started, $error, $meta);
             throw $error;
         }
@@ -105,6 +112,7 @@ final class RateCache
             if ($error->httpStatus !== null) {
                 $meta['http_status'] = $error->httpStatus;
             }
+            $trip = null;
             try {
                 $trip = $this->breaker->trip($error);
                 if ($trip !== null) {
@@ -115,6 +123,11 @@ final class RateCache
             }
             if ($table !== null && $this->usableStale($table, $currency, $now)) {
                 return $this->serve($table, $currency, 'stale', true, $started, ['refresh_error' => $error->errorCode] + $meta);
+            }
+            // The refresh that opened an `unsupported-code` backoff answers after it is
+            // recorded, so it gets the backoff's 503 too; without a recorded backoff it doesn't.
+            if (self::isUnsupportedCodeBackoff($trip, $error->errorCode)) {
+                $error = $error->duringBackoff();
             }
             $this->record($currency, 'miss', false, $started, $error, $meta);
             throw $error;
@@ -154,6 +167,23 @@ final class RateCache
         }
 
         return $this->serve($fresh, $currency, 'miss', false, $started, $meta);
+    }
+
+    /**
+     * ADR 0012 amendment item 9: an UPSTREAM_UNSUPPORTED_CODE error answered while $trip, a
+     * backoff opened by `unsupported-code`, is in force is marked so the API answers 503. Any
+     * other error, or no such backoff (a failed breaker write, another kind of trip), stays as
+     * it is.
+     *
+     * Only the error code goes in, never the exception: an app frame's arguments must not hold
+     * an exception, whose trace holds its callers' arguments (the INV-03 leak test dumps them).
+     */
+    private static function isUnsupportedCodeBackoff(?BreakerState $trip, string $errorCode): bool
+    {
+        return $trip !== null
+            && $trip->kind === BreakerState::BACKOFF
+            && $trip->errorCode === ErrorCodes::UPSTREAM_UNSUPPORTED_CODE
+            && $errorCode === ErrorCodes::UPSTREAM_UNSUPPORTED_CODE;
     }
 
     private function usableStale(RateTable $table, string $currency, int $now): bool

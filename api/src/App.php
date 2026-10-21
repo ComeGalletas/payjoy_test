@@ -6,10 +6,12 @@ namespace FxInstallments;
 
 use Closure;
 use FxInstallments\Config\ConfigRepository;
+use FxInstallments\Convert\ConvertService;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
 use FxInstallments\Db\Migrator;
 use FxInstallments\Http\AdminAuth;
+use FxInstallments\Http\ConvertEndpoint;
 use FxInstallments\Http\Cors;
 use FxInstallments\Http\IpBlocking;
 use FxInstallments\Http\IpBlocks;
@@ -23,6 +25,9 @@ use FxInstallments\Rates\RateCache;
 use FxInstallments\Rates\RateStore;
 use FxInstallments\Rates\RateTableAllowList;
 use FxInstallments\Rates\UpstreamBreaker;
+use FxInstallments\Validation\AmountValidator;
+use FxInstallments\Validation\CurrencyValidator;
+use FxInstallments\Validation\InstallmentsValidator;
 use PDO;
 
 /**
@@ -81,12 +86,33 @@ final class App
     }
 
     /**
-     * The production route table. P1-01 ships none: every path is NOT_FOUND until the endpoint
-     * tasks (P1-05 onwards) register theirs here.
+     * The production route table: `GET /convert` (P1-05) behind the rate limiter. Every other
+     * path is NOT_FOUND. Building it touches neither the database nor the upstream client.
      */
     public function router(): Router
     {
-        return new Router();
+        $router = new Router();
+        $router->get(ConvertEndpoint::PATH, $this->convertEndpoint(), [$this->rateLimiter()]);
+
+        return $router;
+    }
+
+    public function convertEndpoint(): ConvertEndpoint
+    {
+        return new ConvertEndpoint(fn (): ConvertService => $this->convertService(), $this->metrics);
+    }
+
+    /**
+     * The conversion service on the real allow-list and the rate cache.
+     */
+    public function convertService(): ConvertService
+    {
+        return new ConvertService(
+            new AmountValidator($this->config),
+            new CurrencyValidator($this->currencyAllowList()),
+            new InstallmentsValidator($this->config),
+            $this->rates(),
+        );
     }
 
     /**

@@ -65,6 +65,20 @@ final class ErrorCodes
     ];
 
     /**
+     * The answer for UPSTREAM_UNSUPPORTED_CODE while a breaker backoff opened by
+     * `unsupported-code` on `/latest/USD` is open (ADR 0012 amendment item 9, owner decision
+     * 2026-10-21): 503 with the generic upstream text, because the fault is upstream's, and a
+     * 400 would count toward automatic blocking (ADR 0016). The code's own entry above stays
+     * 400: a currency missing from a usable table (`not_in_table`) still gets it.
+     *
+     * @return array{int, string} [HTTP status, message_for_user]
+     */
+    public static function unsupportedCodeDuringBackoff(): array
+    {
+        return [503, self::UPSTREAM_UNAVAILABLE_MESSAGE];
+    }
+
+    /**
      * @return list<string>
      */
     public static function all(): array

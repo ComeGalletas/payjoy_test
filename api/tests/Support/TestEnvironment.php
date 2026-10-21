@@ -83,12 +83,13 @@ final class TestEnvironment
     /**
      * An App on its own fresh database (or on $pdo when given), with an optional fixed clock and
      * config overrides. Its error-log notes go to $log (PHPUnit would report error_log() output
-     * as unexpected test output).
+     * as unexpected test output). $upstream gives it a mocked rate client (ADR 0018); without
+     * one, any rate lookup builds the real client and the no-network guard fails the test.
      *
      * @param array<string, mixed> $config
      * @param ArrayObject<int, string>|null $log
      */
-    public static function app(?FakeClock $clock = null, array $config = [], ?PDO $pdo = null, ?ArrayObject $log = null): App
+    public static function app(?FakeClock $clock = null, array $config = [], ?PDO $pdo = null, ?ArrayObject $log = null, ?MockUpstream $upstream = null): App
     {
         $pdo ??= self::connect(self::freshDatabasePath());
         $log ??= new ArrayObject();
@@ -100,6 +101,7 @@ final class TestEnvironment
             static function (string $line) use ($log): void {
                 $log[] = $line;
             },
+            $upstream?->client(),
         );
     }
 

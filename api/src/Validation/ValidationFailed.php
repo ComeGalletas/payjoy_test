@@ -22,6 +22,11 @@ final class ValidationFailed extends RuntimeException
     public const REASON_OVER_MAX = 'over_max';
     /** The bot couldn't read the amount unambiguously; the flow asks for a clarification. */
     public const REASON_UNCLEAR = 'unclear';
+    /**
+     * The converted total would reach 2^53 minor units, where integers stop being exact in a
+     * float (docs/PLAN.md §3a; checked by ConvertService before display()).
+     */
+    public const REASON_TOO_LARGE = 'too_large';
 
     // Currency (REASON_FORMAT also applies)
     public const REASON_NOT_ALLOWED = 'not_allowed';
@@ -31,6 +36,8 @@ final class ValidationFailed extends RuntimeException
 
     // Installments (REASON_FORMAT also applies)
     public const REASON_OUT_OF_RANGE = 'out_of_range';
+    /** Fewer minor units in the converted total than installments (docs/PLAN.md §3a). */
+    public const REASON_BELOW_MINOR_UNIT = 'below_minor_unit';
 
     private function __construct(public readonly string $errorCode, public readonly string $reason)
     {

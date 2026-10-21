@@ -75,6 +75,28 @@ final class JsonResponseTest extends TestCase
         self::assertStringContainsString('"message_for_user":"Too many installments for this amount."', $response->body());
     }
 
+    public function testErrorAcceptsAnErrorStatusOverride(): void
+    {
+        [$status, $message] = ErrorCodes::unsupportedCodeDuringBackoff();
+        $response = JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $message, $status);
+
+        self::assertSame(503, $response->status());
+        self::assertSame(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $response->errorCode());
+        self::assertSame(
+            ['ok' => false, 'error' => ['code' => 'UPSTREAM_UNSUPPORTED_CODE', 'message_for_user' => $message]],
+            json_decode($response->body(), true, flags: JSON_THROW_ON_ERROR),
+        );
+
+        foreach ([200, 302, 399, 600] as $bad) {
+            try {
+                JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, null, $bad);
+                self::fail("accepted status {$bad}");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
     public function testEventOnlyCodesCannotBeSent(): void
     {
         $this->expectException(LogicException::class);

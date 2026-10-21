@@ -56,14 +56,22 @@ final class JsonResponse
     /**
      * An error envelope for a code from ErrorCodes, with that code's HTTP status. The message
      * defaults to the code's generic message_for_user.
+     *
+     * $status overrides the code's status for the one documented case where a code has two:
+     * UPSTREAM_UNSUPPORTED_CODE during its backoff (ErrorCodes::unsupportedCodeDuringBackoff(),
+     * UpstreamError::status()). It must be a 4xx or 5xx status.
      */
-    public static function error(string $code, ?string $messageForUser = null): self
+    public static function error(string $code, ?string $messageForUser = null, ?int $status = null): self
     {
-        $status = ErrorCodes::httpStatus($code);
+        $codeStatus = ErrorCodes::httpStatus($code);
         $message = $messageForUser ?? ErrorCodes::messageForUser($code);
-        if ($status === null || $message === null) {
+        if ($codeStatus === null || $message === null) {
             throw new LogicException("Error code {$code} is recorded as an event only and has no API response");
         }
+        if ($status !== null && ($status < 400 || $status > 599)) {
+            throw new InvalidArgumentException("An error response needs a 4xx or 5xx status, got {$status}");
+        }
+        $status ??= $codeStatus;
         $body = json_encode(
             ['ok' => false, 'error' => ['code' => $code, 'message_for_user' => $message]],
             self::JSON_FLAGS,
