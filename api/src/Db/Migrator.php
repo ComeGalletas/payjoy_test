@@ -73,21 +73,57 @@ final class Migrator
     }
 
     /**
-     * The recorded schema version; 0 when app_state does not exist (an empty or P1-01 database).
+     * The recorded schema version; 0 only when app_state does not exist (an empty or P1-01
+     * database). Every other database error (locked, not a database, I/O) propagates.
      *
-     * The probe runs outside any transaction: a failed statement would abort a Postgres one.
+     * @throws SchemaCorrupt when app_state exists but schema_version is missing or not a
+     *         non-negative integer: the database fails closed instead of counting as version 0
      */
     public function currentVersion(): int
     {
-        try {
-            $select = $this->pdo->prepare('SELECT value FROM app_state WHERE key = ?');
-            $select->execute([self::VERSION_KEY]);
-            $value = $select->fetchColumn();
-        } catch (PDOException) {
+        if (!$this->appStateExists()) {
             return 0;
         }
+        $select = $this->pdo->prepare('SELECT value FROM app_state WHERE key = ?');
+        $select->execute([self::VERSION_KEY]);
+        $value = $select->fetchColumn();
+        if ($value === false) {
+            throw new SchemaCorrupt('app_state exists but has no schema_version row');
+        }
+        if (is_int($value)) {
+            $value = (string) $value;
+        }
+        if (!is_string($value) || preg_match('/^(0|[1-9]\d{0,8})$/D', $value) !== 1) {
+            throw new SchemaCorrupt('app_state.schema_version is not a non-negative integer');
+        }
 
-        return $value === false ? 0 : (int) $value;
+        return (int) $value;
+    }
+
+    /**
+     * Whether app_state exists. SQLite: asked of sqlite_master. Other drivers (Postgres, L-03):
+     * a probe outside any transaction, where only "undefined table" (SQLSTATE 42P01) means no;
+     * every other error is rethrown.
+     */
+    private function appStateExists(): bool
+    {
+        if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+            $select = $this->pdo->prepare("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?");
+            $select->execute(['app_state']);
+
+            return (int) $select->fetchColumn() > 0;
+        }
+
+        try {
+            $this->pdo->query('SELECT 1 FROM app_state WHERE 1 = 0');
+        } catch (PDOException $e) {
+            if ((string) $e->getCode() === '42P01') {
+                return false;
+            }
+            throw $e;
+        }
+
+        return true;
     }
 
     public function latestVersion(): int

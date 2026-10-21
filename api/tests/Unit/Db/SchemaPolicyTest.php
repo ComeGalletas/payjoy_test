@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Db;
 
 use FxInstallments\App;
+use FxInstallments\Db\SchemaCorrupt;
 use FxInstallments\Db\SchemaOutOfDate;
 use FxInstallments\Tests\Support\OverridesEnvironment;
 use FxInstallments\Tests\Support\P1_01Schema;
@@ -63,6 +64,16 @@ final class SchemaPolicyTest extends TestCase
 
         self::assertInstanceOf(PDO::class, $pdo);
         self::assertSame($before, $pdo->query('SELECT * FROM app_state')->fetchAll());
+    }
+
+    public function testTheAppRefusesACorruptSchemaVersion(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        TestEnvironment::connect($path)->exec("UPDATE app_state SET value = 'garbage' WHERE key = 'schema_version'");
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
+
+        $this->expectException(SchemaCorrupt::class);
+        App::fromEnvironment(dirname(__DIR__, 3))->db->pdo();
     }
 
     public function testTheAppNeverReferencesTheMigrationRunner(): void

@@ -9,6 +9,7 @@ use FxInstallments\Db\Database;
 use FxInstallments\Db\Migration;
 use FxInstallments\Db\Migrations;
 use FxInstallments\Db\Migrator;
+use FxInstallments\Db\SchemaCorrupt;
 use FxInstallments\Db\SchemaOutOfDate;
 use FxInstallments\Tests\Support\FakeClock;
 use FxInstallments\Tests\Support\P1_01Schema;
@@ -16,6 +17,7 @@ use FxInstallments\Tests\Support\TestEnvironment;
 use InvalidArgumentException;
 use PDO;
 use PDOException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class MigratorTest extends TestCase
@@ -103,6 +105,85 @@ final class MigratorTest extends TestCase
         $pdo->exec("UPDATE app_state SET value = '9' WHERE key = 'schema_version'");
         (new Migrator($pdo))->assertCurrent();
         self::assertTrue((new Migrator($pdo))->isCurrent());
+    }
+
+    public function testAMissingAppStateTableMeansVersionZero(): void
+    {
+        $empty = self::newDatabase();
+        $p101 = self::newDatabase();
+        P1_01Schema::apply($p101);
+
+        self::assertSame(0, (new Migrator($empty))->currentVersion());
+        self::assertSame(0, (new Migrator($p101))->currentVersion());
+    }
+
+    /**
+     * @return iterable<string, array{string|null}>
+     */
+    public static function corruptVersions(): iterable
+    {
+        yield 'no schema_version row' => [null];
+        yield 'empty' => [''];
+        yield 'garbage' => ['abc'];
+        yield 'decimal' => ['3.5'];
+        yield 'negative' => ['-1'];
+        yield 'padded' => [' 3'];
+        yield 'leading zero' => ['03'];
+        yield 'trailing newline' => ["3\n"];
+    }
+
+    #[DataProvider('corruptVersions')]
+    public function testACorruptVersionFailsClosed(?string $value): void
+    {
+        $pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
+        if ($value === null) {
+            $pdo->exec("DELETE FROM app_state WHERE key = 'schema_version'");
+        } else {
+            $pdo->prepare("UPDATE app_state SET value = ? WHERE key = 'schema_version'")->execute([$value]);
+        }
+        $migrator = new Migrator($pdo);
+
+        foreach ([$migrator->currentVersion(...), $migrator->assertCurrent(...), $migrator->migrate(...)] as $call) {
+            try {
+                $call();
+                self::fail('a corrupt schema_version must throw');
+            } catch (SchemaCorrupt) {
+                $this->addToAssertionCount(1);
+            }
+        }
+        // Nothing was re-applied over the existing tables.
+        self::assertSame(7, (int) $pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")->fetchColumn());
+    }
+
+    public function testALockedDatabasePropagatesInsteadOfCountingAsVersionZero(): void
+    {
+        // Rollback-journal mode (not WAL), so an exclusive lock blocks readers too.
+        $path = TestEnvironment::tempDir('locked') . '/locked.db';
+        $holder = new PDO('sqlite:' . $path, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $holder->exec('CREATE TABLE app_state (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+        $holder->exec('BEGIN EXCLUSIVE');
+        $reader = new PDO('sqlite:' . $path, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $reader->exec('PRAGMA busy_timeout = 0');
+
+        try {
+            (new Migrator($reader))->currentVersion();
+            self::fail('a locked database must not count as version 0');
+        } catch (PDOException $e) {
+            self::assertStringContainsString('database is locked', $e->getMessage());
+        } finally {
+            $holder->exec('ROLLBACK');
+        }
+    }
+
+    public function testAFileThatIsNotADatabasePropagates(): void
+    {
+        $path = TestEnvironment::tempDir('broken') . '/broken.db';
+        file_put_contents($path, str_repeat('this is not an SQLite database file. ', 200));
+        $pdo = new PDO('sqlite:' . $path, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+
+        $this->expectException(PDOException::class);
+        $this->expectExceptionMessage('file is not a database');
+        (new Migrator($pdo))->currentVersion();
     }
 
     public function testTheMigrationListMustBeConsecutive(): void
