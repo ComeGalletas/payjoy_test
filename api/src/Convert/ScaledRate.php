@@ -8,8 +8,8 @@ use InvalidArgumentException;
 
 /**
  * Exchange rates stored as integers, `rate_scaled` = the rate rounded to ten decimals, times
- * 10^10 (ADR 0017, CONTEXT "scaled rate"). P1-04 writes rate_cache with fromRate() or
- * fromDecimalString(); readers use toRate().
+ * 10^10 (ADR 0017, CONTEXT "scaled rate"). P1-04 writes rate_cache with fromDecimalString()
+ * on upstream's decimal text; readers use toRate().
  *
  * How the value is built: from the rate's decimal text, with integer and string arithmetic
  * only. No float is ever multiplied by 10^10, because that product is not exact: for
@@ -21,8 +21,10 @@ use InvalidArgumentException;
  *   result is exactly round(decimal × 10^10) for the decimal the text denotes.
  * - fromRate() takes a float and uses its shortest round-trip decimal text, the one PHP prints
  *   with `serialize_precision = -1` (`var_export(5.2291)` is `5.2291`). For a float parsed
- *   from upstream's JSON, that text is upstream's number whenever upstream sent 17 or fewer
- *   significant digits.
+ *   from upstream's JSON, that text is upstream's number whenever upstream sent 15 or fewer
+ *   significant digits: every decimal with at most 15 significant digits round-trips through
+ *   a double, while some with 16 or 17 come back as a different, shorter text. P1-04 passes
+ *   upstream's own text to fromDecimalString() instead (Rates/ConversionRatesScanner).
  * - Range: positive, at least one unit at the tenth decimal after rounding (≥ 0.00000000005),
  *   and below MAX_RATE (900,000,000), so the scaled value is below MAX_SCALED (9 × 10^18) and
  *   fits a signed 64-bit integer (PHP int, Postgres BIGINT) with margin.

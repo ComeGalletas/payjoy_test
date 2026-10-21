@@ -14,8 +14,10 @@ declare(strict_types=1);
  * - DATA_ROOT and BACKUP_ROOT pointing at fresh temp dirs (GR-001);
  * - DB_DSN pointing at a temp SQLite file, never api/var/app.db.
  *
- * Then the no-network guard replaces the network stream wrappers (INV-06). The Composer
- * scripts also start PHPUnit with -d allow_url_fopen=0.
+ * Then the no-network guard replaces the network stream wrappers and Guzzle's real transport
+ * handlers (INV-06, ADR 0018), so a test that builds a Guzzle client without an injected
+ * MockHandler fails. The Composer scripts also start PHPUnit with -d allow_url_fopen=0 and
+ * -d disable_functions=curl_exec,curl_multi_exec.
  */
 
 use FxInstallments\Bootstrap;

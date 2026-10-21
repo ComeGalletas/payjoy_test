@@ -52,4 +52,20 @@ final class CurrencySynonyms
         'crown', 'crowns', 'corona', 'coronas', 'krone', 'kronor', 'kr', 'rupee', 'rupees', 'rupia',
         'rupias', 'rial', 'riyal', 'riyales', 'C$', 'Panama', 'Panamá',
     ];
+
+    /**
+     * Common English words that are also currency codes, once the allow-list holds every code
+     * (P1-04). Typed in capitals (`TRY`, ` ALL `) they are the code; typed any other way
+     * (`try`, `Try`, which a phone keyboard capitalises) they are ambiguous currency text, so
+     * a conversational reply is never read as a Turkish lira or an Albanian lek.
+     *
+     * Only words people plausibly type as a reply, and only codes the synonym table and the
+     * currency-country map don't already serve: `pen` and `cop` stay codes (PEN and COP are
+     * core currencies here, and `cop` → COP is P1-03 behaviour). `can` is not a code (CAD is).
+     * A test fails if a mapped currency's code is listed here, so a task that adds, say,
+     * Bolivia → BOB must decide about `bob`.
+     *
+     * @var list<string>
+     */
+    public const CODE_WORDS = ['all', 'bob', 'cup', 'kid', 'mad', 'mop', 'sos', 'top', 'try'];
 }

@@ -85,13 +85,20 @@ final class TestBootstrapTest extends TestCase
         }
     }
 
-    public function testAllowUrlFopenIsOffForTheSuite(): void
+    public function testTheGateFlagsAreOnForTheSuite(): void
     {
-        // It is PHP_INI_SYSTEM: only the command line can turn it off (composer test/acceptance).
+        // Both are PHP_INI_SYSTEM: only the command line can set them (composer test/acceptance,
+        // ADR 0018). Run directly, PHPUnit skips this one test; the stream-wrapper and Guzzle
+        // handler guards still apply.
         if (ini_get('allow_url_fopen') !== '0') {
             self::markTestSkipped('PHPUnit was started without -d allow_url_fopen=0; run it through '
-                . '`make check` or `composer test`. The stream-wrapper guard still applies.');
+                . '`make check` or `composer test`. The stream-wrapper and Guzzle handler guards still apply.');
         }
         self::assertSame('0', ini_get('allow_url_fopen'));
+        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+        self::assertContains('curl_exec', $disabled);
+        self::assertContains('curl_multi_exec', $disabled);
+        self::assertFalse(function_exists('curl_exec'));
+        self::assertFalse(function_exists('curl_multi_exec'));
     }
 }
