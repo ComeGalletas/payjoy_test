@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace FxInstallments\Tests\Unit\Rates;
 
+use FxInstallments\Convert\ScaledRate;
 use FxInstallments\Rates\ConversionRatesScanner;
 use FxInstallments\Tests\Support\MockUpstream;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -52,6 +53,27 @@ final class ConversionRatesScannerTest extends TestCase
 
         self::assertNotNull($scan);
         self::assertSame(['XXA' => $text], $scan['rates']);
+    }
+
+    /**
+     * @return iterable<string, array{string, int}>
+     */
+    public static function textsTheFloatRouteGetsWrong(): iterable
+    {
+        yield '0.123456789049999999' => ['0.123456789049999999', 1_234_567_890];
+        yield '1.00000000004999999' => ['1.00000000004999999', 10_000_000_000];
+        yield '3153.77359900004999999' => ['3153.77359900004999999', 31_537_735_990_000];
+    }
+
+    #[DataProvider('textsTheFloatRouteGetsWrong')]
+    public function testTheScannedTextScalesExactly(string $text, int $scaled): void
+    {
+        $scan = ConversionRatesScanner::scan(MockUpstream::latestBody(['USD' => 1, 'BRL' => $text]));
+
+        self::assertNotNull($scan);
+        self::assertSame($text, $scan['rates']['BRL']);
+        self::assertSame($scaled, ScaledRate::fromDecimalString($scan['rates']['BRL']));
+        self::assertNotSame($scaled, ScaledRate::fromRate((float) $text));
     }
 
     public function testSkipsEveryOtherMemberWhateverItHolds(): void

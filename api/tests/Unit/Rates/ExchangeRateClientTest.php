@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Rates;
 
 use FxInstallments\Metrics\ErrorCodes;
+use FxInstallments\Rates\ApiKey;
 use FxInstallments\Rates\ExchangeRateClient;
 use FxInstallments\Rates\UpstreamError;
 use FxInstallments\Tests\Support\MockUpstream;
@@ -99,6 +100,8 @@ final class ExchangeRateClientTest extends TestCase
         self::assertSame(4, $options['connect_timeout']);
         self::assertFalse($options['http_errors']);
         self::assertFalse($options['allow_redirects']);
+        self::assertFalse($options['decode_content']);
+        self::assertSame('identity', $upstream->history[0]['request']->getHeaderLine('Accept-Encoding'));
         self::assertIsCallable($options['on_headers']);
         self::assertIsCallable($options['progress']);
     }
@@ -424,6 +427,38 @@ final class ExchangeRateClientTest extends TestCase
         yield '17 significant digits' => ['0.12345678901234567', 1_234_567_890];
         yield 'eleventh decimal 5 rounds up' => ['0.00000000005', 1];
         yield 'ten decimals kept' => ['0.1234567891', 1_234_567_891];
+        // The float route gets these wrong: the nearest double's shortest text ends in ...5 at
+        // the eleventh decimal, so fromRate() rounds up (see the next test).
+        yield 'float route rounds up: 0.123456789049999999' => ['0.123456789049999999', 1_234_567_890];
+        yield 'float route rounds up: 1.00000000004999999' => ['1.00000000004999999', 10_000_000_000];
+        yield 'float route rounds up: 3153.77359900004999999' => ['3153.77359900004999999', 31_537_735_990_000];
+    }
+
+    /**
+     * @return iterable<string, array{string, int}>
+     */
+    public static function floatRouteMistakes(): iterable
+    {
+        yield '0.123456789049999999' => ['0.123456789049999999', 1_234_567_890];
+        yield '1.00000000004999999' => ['1.00000000004999999', 10_000_000_000];
+        yield '3153.77359900004999999' => ['3153.77359900004999999', 31_537_735_990_000];
+    }
+
+    /**
+     * Why the client scales upstream's text: for these numbers the float route
+     * (`ScaledRate::fromRate((float) $value)`) gives a different scaled rate, while the text
+     * route gives the exact one, end to end from the raw body.
+     */
+    #[DataProvider('floatRouteMistakes')]
+    public function testTheTextRouteIsExactWhereTheFloatRouteIsNot(string $text, int $exact): void
+    {
+        $decoded = json_decode('{"r":' . $text . '}', true, 4, JSON_THROW_ON_ERROR)['r'];
+        self::assertIsFloat($decoded);
+        self::assertNotSame($exact, \FxInstallments\Convert\ScaledRate::fromRate($decoded), 'the float route is wrong here');
+        self::assertSame($exact, \FxInstallments\Convert\ScaledRate::fromDecimalString($text));
+
+        $upstream = new MockUpstream([MockUpstream::latest(['USD' => 1, 'BRL' => $text])]);
+        self::assertSame($exact, $upstream->client()->latest()->rates['BRL']);
     }
 
     #[DataProvider('decimalTexts')]
@@ -541,16 +576,89 @@ final class ExchangeRateClientTest extends TestCase
         self::assertSame('shape', $error->reason);
     }
 
-    public function testDumpingTheClientDoesNotShowTheKey(): void
+    /**
+     * @return iterable<string, array{string, string|null}>
+     */
+    public static function encodedResponses(): iterable
+    {
+        yield 'gzip' => ['gzip', (string) gzencode(MockUpstream::latestBody())];
+        yield 'deflate' => ['deflate', (string) gzdeflate(MockUpstream::latestBody())];
+        yield 'br' => ['br', 'not really brotli'];
+        yield 'gzip with spaces and capitals' => [' GZIP ', (string) gzencode(MockUpstream::latestBody())];
+        yield 'gzip, even over the cap when decoded' => ['gzip', (string) gzencode(str_repeat(' ', 4 * ExchangeRateClient::MAX_BODY_BYTES))];
+    }
+
+    #[DataProvider('encodedResponses')]
+    public function testAnEncodedResponseIsRejectedNotDecoded(string $encoding, string $body): void
+    {
+        $upstream = new MockUpstream([new Response(200, ['Content-Encoding' => $encoding], $body)]);
+
+        $error = self::failure(static fn () => $upstream->client()->latest());
+
+        self::assertSame(ErrorCodes::UPSTREAM_MALFORMED, $error->errorCode);
+        self::assertSame('content_encoding', $error->reason);
+        self::assertSame(200, $error->httpStatus);
+    }
+
+    public function testGzipBytesWithoutAContentEncodingAreNotJson(): void
+    {
+        $upstream = new MockUpstream([new Response(200, [], (string) gzencode(MockUpstream::latestBody()))]);
+
+        self::assertSame('json', self::failure(static fn () => $upstream->client()->latest())->reason);
+    }
+
+    public function testAnIdentityEncodingIsAccepted(): void
+    {
+        $upstream = new MockUpstream([
+            new Response(200, ['Content-Encoding' => 'identity'], MockUpstream::latestBody()),
+            new Response(200, ['Content-Encoding' => ' Identity '], MockUpstream::latestBody()),
+        ]);
+        $client = $upstream->client();
+
+        self::assertCount(count(MockUpstream::RATES), $client->latest()->rates);
+        self::assertCount(count(MockUpstream::RATES), $client->latest()->rates);
+    }
+
+    public function testNoDumpOrExportOfTheClientShowsTheKey(): void
     {
         $client = (new MockUpstream())->client(MockUpstream::CANARY_KEY);
 
         ob_start();
         var_dump($client);
         $dump = (string) ob_get_clean();
+        $texts = [
+            'var_dump' => $dump,
+            'print_r' => print_r($client, true),
+            'var_export' => var_export($client, true),
+            '(array) cast' => print_r((array) $client, true),
+            'get_object_vars' => print_r(get_object_vars($client), true),
+            'json_encode' => (string) json_encode((array) $client, JSON_PARTIAL_OUTPUT_ON_ERROR),
+            'the key property, cast' => var_export((array) ((array) $client)["\0FxInstallments\\Rates\\ExchangeRateClient\0apiKey"], true),
+        ];
 
-        self::assertStringNotContainsString(MockUpstream::CANARY_KEY, $dump . print_r($client, true));
+        foreach ($texts as $how => $text) {
+            self::assertStringNotContainsString(MockUpstream::CANARY_KEY, $text, $how);
+        }
         self::assertStringContainsString('[redacted]', $dump);
+    }
+
+    public function testTheClientAndItsKeyCanNotBeSerializedOrCloned(): void
+    {
+        $client = (new MockUpstream())->client(MockUpstream::CANARY_KEY);
+        $key = new ApiKey(MockUpstream::CANARY_KEY);
+
+        foreach ([static fn () => serialize($client), static fn () => serialize($key), static fn () => clone $key,
+            static fn () => ApiKey::__set_state([])] as $i => $call) {
+            try {
+                $call();
+                self::fail("call {$i} should have thrown");
+            } catch (\LogicException $e) {
+                self::assertStringNotContainsString(MockUpstream::CANARY_KEY, $e->getMessage() . $e);
+            }
+        }
+        self::assertSame(MockUpstream::CANARY_KEY, $key->reveal());
+        self::assertSame([], (array) $key);
+        self::assertSame('\\' . ApiKey::class . '::__set_state(array(' . "\n" . '))', var_export($key, true));
     }
 
     /**

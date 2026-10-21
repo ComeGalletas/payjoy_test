@@ -45,6 +45,130 @@ final class RateCacheTest extends TestCase
         $this->log = new ArrayObject();
     }
 
+    protected function tearDown(): void
+    {
+        // Release the database and delete it: Windows keeps an open SQLite file, and the
+        // suite's shutdown cleanup would leave it in %TEMP%.
+        unset($this->pdo);
+        self::assertTrue(TestEnvironment::removeDatabase($this->path), 'the test database was released and removed');
+    }
+
+    /**
+     * Every kind of failed refresh. Each must back off, so five lookups in the next five
+     * minutes cost exactly one upstream call.
+     *
+     * @return iterable<string, array{\Closure(): mixed}>
+     */
+    public static function failedRefreshes(): iterable
+    {
+        $request = static fn (): \Psr\Http\Message\RequestInterface => MockUpstream::request('k');
+        yield 'connect timeout' => [static fn (): mixed => new ConnectTimeoutException('t', $request())];
+        yield 'connect refused' => [static fn (): mixed => new \GuzzleHttp\Exception\ConnectException('c', $request())];
+        yield 'network error' => [static fn (): mixed => new \GuzzleHttp\Exception\NetworkException('n', $request())];
+        yield 'other throwable' => [static fn (): mixed => new \RuntimeException('x')];
+        yield 'HTTP 500' => [static fn (): mixed => MockUpstream::json(500, '')];
+        yield 'HTTP 404 page' => [static fn (): mixed => MockUpstream::json(404, '<html></html>')];
+        yield 'not JSON' => [static fn (): mixed => MockUpstream::json(200, 'nope')];
+        yield 'bad shape' => [static fn (): mixed => MockUpstream::json(200, '{"result":"success"}')];
+        yield 'no valid rate' => [static fn (): mixed => MockUpstream::latest(['BRL' => -1])];
+        yield 'unsupported-code' => [static fn (): mixed => MockUpstream::error('unsupported-code', 404)];
+        yield 'unknown error-type' => [static fn (): mixed => MockUpstream::error('malformed-request', 400)];
+        yield 'too large' => [static fn (): mixed => new \GuzzleHttp\Psr7\Response(200, ['Content-Length' => '99999999'], '{}')];
+        yield 'gzip encoded' => [static fn (): mixed => new \GuzzleHttp\Psr7\Response(200, ['Content-Encoding' => 'gzip'], (string) gzencode(MockUpstream::latestBody()))];
+        yield 'quota-reached' => [static fn (): mixed => MockUpstream::error('quota-reached', 429)];
+        yield 'invalid-key' => [static fn (): mixed => MockUpstream::error('invalid-key', 403)];
+        yield 'inactive-account' => [static fn (): mixed => MockUpstream::error('inactive-account', 403)];
+    }
+
+    /**
+     * @param \Closure(): mixed $failure
+     */
+    #[DataProvider('failedRefreshes')]
+    public function testFiveLookupsAfterAFailedRefreshMakeOneCall(\Closure $failure): void
+    {
+        foreach ([false, true] as $cached) {
+            $this->pdo->exec('DELETE FROM rate_cache');
+            $this->pdo->exec('DELETE FROM app_state WHERE key = \'upstream_breaker\'');
+            if ($cached) {
+                $this->seed();
+            }
+            $this->clock->now = MockUpstream::NEXT_UPDATE;
+            // Spare answers: a second call would get a good table instead of failing.
+            $upstream = new MockUpstream([$failure(), MockUpstream::latest(), MockUpstream::latest()]);
+            $cache = $this->cache($upstream);
+
+            foreach ([0, 60, 120, 240, 299] as $offset) {
+                $this->clock->now = MockUpstream::NEXT_UPDATE + $offset;
+                try {
+                    $result = $cache->rate('BRL');
+                    self::assertTrue($result->stale, 'only a stale rate can be served');
+                } catch (UpstreamError) {
+                    self::assertFalse($cached, 'with a cached table the stale rate is served');
+                }
+            }
+
+            self::assertSame(1, $upstream->calls(), $cached ? 'with a cached table' : 'cold cache');
+        }
+    }
+
+    public function testFiveLookupsAfterAFailedWriteMakeOneCall(): void
+    {
+        $readOnly = Connection::wrap(TestEnvironment::connectReadOnly($this->path));
+        $writable = Connection::wrap($this->pdo);
+        $clock = Closure::fromCallable($this->clock);
+        $upstream = new MockUpstream([MockUpstream::latest(), MockUpstream::latest(), MockUpstream::latest()]);
+        $cache = new RateCache(new RateStore($readOnly), $upstream->client(), new UpstreamBreaker($writable, $clock), new Metrics($writable, $clock), 48, $clock);
+
+        self::assertSame(52_291_000_000, $cache->rate('BRL')->rateScaled, 'the fetched rate is served once');
+        foreach ([1, 60, 120, 299] as $offset) {
+            $this->clock->now = MockUpstream::LAST_UPDATE + 3600 + $offset;
+            $error = $this->failure(fn () => $cache->rate('BRL'));
+            self::assertSame('blocked_backoff', $error->reason);
+        }
+
+        self::assertSame(1, $upstream->calls());
+        self::assertSame(BreakerState::BACKOFF, $this->events()[0]['meta']['breaker']);
+        unset($cache, $readOnly);
+    }
+
+    public function testRepeatedFailuresCallUpstreamOnTheBackoffScheduleAndASuccessResetsIt(): void
+    {
+        $this->clock->now = MockUpstream::NEXT_UPDATE;
+        $start = $this->clock->now;
+        $queue = array_fill(0, 6, MockUpstream::json(503, ''));
+        $queue[] = MockUpstream::latest(next: $start + 10 * 86400);
+        $queue[] = MockUpstream::json(503, '');
+        $upstream = new MockUpstream($queue);
+        $cache = $this->cache($upstream);
+
+        // Look up every minute for 4 hours: calls go out only when each backoff ends.
+        $callTimes = [];
+        for ($minute = 0; $minute <= 240; $minute++) {
+            $this->clock->now = $start + 60 * $minute;
+            $before = $upstream->calls();
+            try {
+                $cache->rate('BRL');
+            } catch (UpstreamError) {
+                // cold cache: no stale table
+            }
+            if ($upstream->calls() > $before) {
+                $callTimes[] = $minute;
+            }
+        }
+        // Failures at 0, 5, 15, 35, 75, 135; the call at 195 succeeds.
+        self::assertSame([0, 5, 15, 35, 75, 135, 195], $callTimes);
+        self::assertNull((new UpstreamBreaker(Connection::wrap($this->pdo)))->state(), 'the success cleared the backoff');
+
+        // Once the table is due again, the next failure waits 5 minutes, not 60.
+        $this->clock->now = $start + 10 * 86400;
+        $error = $this->failure(fn () => $cache->rate('BRL'));
+        self::assertSame(ErrorCodes::UPSTREAM_MALFORMED, $error->errorCode, 'the table is too old to serve stale');
+        $state = (new UpstreamBreaker(Connection::wrap($this->pdo)))->state();
+        self::assertSame(1, $state?->failures);
+        self::assertSame(300, (int) $state?->until - $state->since);
+        self::assertSame(8, $upstream->calls());
+    }
+
     public function testAColdCacheRefreshesOnceAndStoresEveryRow(): void
     {
         $upstream = new MockUpstream([MockUpstream::latest()]);
@@ -380,6 +504,21 @@ final class RateCacheTest extends TestCase
         self::assertSame(52_291_000_000, $result->rateScaled);
         self::assertTrue($this->events()[0]['meta']['store_failed']);
         self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM rate_cache')->fetchColumn());
+        $state = (new UpstreamBreaker($writable))->state();
+        self::assertSame(BreakerState::BACKOFF, $state?->kind, 'a failed write backs off too');
+        self::assertSame(ErrorCodes::UPSTREAM_MALFORMED, $state?->errorCode);
+        unset($cache, $readOnly);
+    }
+
+    public function testASuccessfulRefreshClearsAnExpiredBackoff(): void
+    {
+        $breaker = new UpstreamBreaker(Connection::wrap($this->pdo), Closure::fromCallable($this->clock));
+        $breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+        $this->clock->advance(UpstreamBreaker::BACKOFF_SECONDS);
+
+        $this->cache(new MockUpstream([MockUpstream::latest()]))->rate('BRL');
+
+        self::assertNull($breaker->state());
     }
 
     public function testEveryLookupWritesOneUpstreamCallEventWithAKnownResult(): void

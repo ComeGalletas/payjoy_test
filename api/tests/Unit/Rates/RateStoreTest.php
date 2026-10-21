@@ -84,6 +84,7 @@ final class RateStoreTest extends TestCase
             . "('ZZZ', 0, 1, 2, 1), ('YYY', -4, 1, 2, 1), ('XXX', 9000000000000000000, 1, 2, 1), ('WWW', 'abc', 1, 2, 1)");
 
         self::assertSame(['USD' => 10_000_000_000], $this->store->table()?->rates);
+        self::assertSame(['USD'], $this->store->codes(), 'codes() skips exactly the rows table() skips');
     }
 
     public function testRatesAreStoredAsIntegers(): void

@@ -13,23 +13,31 @@ use PDOException;
 use Throwable;
 
 /**
- * The breaker (docs/PLAN.md §3b, ADR 0012): stops upstream calls after an error that more
- * calls can't fix. Its state is one `app_state` row, STATE_KEY, holding a BreakerState.
+ * The breaker (docs/PLAN.md §3b, ADR 0012): stops upstream calls after a failed refresh, so
+ * quota use is bounded by time, never by traffic. Its state is one `app_state` row,
+ * STATE_KEY, holding a BreakerState.
  *
  * - `quota-reached` → blocked until 00:00 UTC on the first day of the next month;
  * - `invalid-key`, `inactive-account` → blocked until `php api/bin/upstream.php reset`;
- * - any other failed call (timeout, connect error, malformed answer) → blocked for
- *   BACKOFF_SECONDS, so quota use during an outage depends on time, not traffic;
- * - `unsupported-code` and a missing key (no call was made) don't trip it.
+ * - every other failed refresh (timeout, connect error, malformed answer, `unsupported-code`
+ *   on `/latest/USD`, a `rate_cache` write that failed) → a backoff that doubles with each
+ *   consecutive failure: 5, 10, 20, 40, then 60 minutes at most (owner decision 2026-10-21).
+ *   A successful refresh (succeeded()) clears it, so the next failure waits 5 minutes again;
+ * - a missing key (`no_key`) doesn't trip it: no call was made.
  *
- * A trip never replaces a stronger open one (auth > quota > backoff), so a slow request that
- * times out can't shorten an auth or quota block another request has just set. Writes are
- * select-then-write in a transaction (ADR 0010).
+ * A trip never replaces an open one of equal or greater strength (auth > quota > backoff), so
+ * a slow request that fails late can't shorten an auth or quota block, or count one outage
+ * twice. Writes are select-then-write in a transaction (ADR 0010).
  */
 final class UpstreamBreaker
 {
     public const STATE_KEY = 'upstream_breaker';
+
+    /** The first backoff, after one failed refresh. */
     public const BACKOFF_SECONDS = 300;
+
+    /** The longest backoff, from the fifth consecutive failure on. */
+    public const MAX_BACKOFF_SECONDS = 3600;
 
     private const STRENGTH = [BreakerState::BACKOFF => 1, BreakerState::QUOTA => 2, BreakerState::AUTH => 3];
 
@@ -65,7 +73,7 @@ final class UpstreamBreaker
     }
 
     /**
-     * Records a failed call. Returns the trip now in force, or null when this error doesn't
+     * Records a failed refresh. Returns the trip now in force, or null when this error doesn't
      * trip the breaker.
      */
     public function trip(UpstreamError $error): ?BreakerState
@@ -75,27 +83,31 @@ final class UpstreamBreaker
         if ($kind === null) {
             return null;
         }
-        $new = new BreakerState(
-            $kind,
-            $error->errorCode,
-            $now,
-            match ($kind) {
-                BreakerState::QUOTA => self::nextMonthStart($now),
-                BreakerState::AUTH => null,
-                default => $now + self::BACKOFF_SECONDS,
-            },
-        );
 
         $pdo = $this->db->pdo();
         $pdo->beginTransaction();
         try {
             $current = $this->state();
             if ($current !== null && $current->isOpenAt($now)
-                && self::STRENGTH[$current->kind] > self::STRENGTH[$new->kind]) {
+                && self::STRENGTH[$current->kind] >= self::STRENGTH[$kind]) {
                 $pdo->commit();
 
                 return $current;
             }
+            $failures = $kind === BreakerState::BACKOFF
+                ? ($current?->kind === BreakerState::BACKOFF ? $current->failures + 1 : 1)
+                : 0;
+            $new = new BreakerState(
+                $kind,
+                $error->errorCode,
+                $now,
+                match ($kind) {
+                    BreakerState::QUOTA => self::nextMonthStart($now),
+                    BreakerState::AUTH => null,
+                    default => $now + self::backoffSeconds($failures),
+                },
+                $failures,
+            );
             $this->write($new->toJson(), $now);
             $pdo->commit();
         } catch (Throwable $e) {
@@ -109,12 +121,30 @@ final class UpstreamBreaker
     }
 
     /**
+     * Records a successful refresh: clears a backoff (open or not) or an expired trip, so the
+     * next failure starts the backoff at five minutes again. An open quota or auth block is
+     * left alone (no refresh can succeed while it blocks; another process may just have set
+     * it). Writes nothing when there is nothing to clear.
+     */
+    public function succeeded(): void
+    {
+        if ($this->storedValue() === null) {
+            return;
+        }
+        $state = $this->state();
+        if ($state !== null && $state->kind !== BreakerState::BACKOFF && $state->isOpenAt(($this->clock)())) {
+            return;
+        }
+        $this->delete();
+    }
+
+    /**
      * Clears any trip. Returns the trip that was stored (open or not), or null.
      */
     public function reset(): ?BreakerState
     {
         $state = $this->state();
-        $this->db->pdo()->prepare('DELETE FROM app_state WHERE key = ?')->execute([self::STATE_KEY]);
+        $this->delete();
 
         return $state;
     }
@@ -131,9 +161,22 @@ final class UpstreamBreaker
         return match ($error->errorCode) {
             ErrorCodes::UPSTREAM_QUOTA => BreakerState::QUOTA,
             ErrorCodes::UPSTREAM_AUTH => BreakerState::AUTH,
-            ErrorCodes::UPSTREAM_TIMEOUT, ErrorCodes::UPSTREAM_MALFORMED => BreakerState::BACKOFF,
-            default => null,
+            default => BreakerState::BACKOFF,
         };
+    }
+
+    /**
+     * The backoff after $failures consecutive failed refreshes: 300 × 2^(failures − 1)
+     * seconds, at most MAX_BACKOFF_SECONDS.
+     */
+    public static function backoffSeconds(int $failures): int
+    {
+        $failures = max(1, $failures);
+        if ($failures > 5) {
+            return self::MAX_BACKOFF_SECONDS;
+        }
+
+        return min(self::MAX_BACKOFF_SECONDS, self::BACKOFF_SECONDS * 2 ** ($failures - 1));
     }
 
     /**
@@ -160,6 +203,11 @@ final class UpstreamBreaker
         $value = $select->fetchColumn();
 
         return is_string($value) ? $value : null;
+    }
+
+    private function delete(): void
+    {
+        $this->db->pdo()->prepare('DELETE FROM app_state WHERE key = ?')->execute([self::STATE_KEY]);
     }
 
     private function write(string $value, int $now): void

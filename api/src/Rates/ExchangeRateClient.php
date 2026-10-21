@@ -17,6 +17,7 @@ use GuzzleHttp\Exception\ResponseTimeoutException;
 use GuzzleHttp\Exception\TransferException;
 use InvalidArgumentException;
 use JsonException;
+use LogicException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Throwable;
@@ -30,8 +31,13 @@ use Throwable;
  * one with the key from EXCHANGERATE_API_KEY.
  *
  * Every request: 4 s total and connect timeout, no redirects, no exceptions for HTTP status
- * (the status is checked here), and a body cap of MAX_BODY_BYTES, checked on the
- * Content-Length header, during the download and while reading.
+ * (the status is checked here), no transparent decompression (`Accept-Encoding: identity`; a
+ * response with any other Content-Encoding is UPSTREAM_MALFORMED), and a body cap of
+ * MAX_BODY_BYTES on the bytes that are decoded. The cap is checked on the Content-Length
+ * header and while reading (the real guarantees), and also from curl's progress callback.
+ *
+ * The key is held in an ApiKey, so var_export(), `(array)` casts and serialize() of the client
+ * never show it.
  *
  * Errors (§3b) come out as UpstreamError only:
  * - error-type `unsupported-code` → UPSTREAM_UNSUPPORTED_CODE; `quota-reached` →
@@ -76,11 +82,14 @@ final class ExchangeRateClient
     private const JSON_DEPTH = 16;
     private const MAX_NAME_BYTES = 100;
 
+    private readonly ?ApiKey $apiKey;
+
     public function __construct(
         private readonly ClientInterface $http,
         #[\SensitiveParameter]
-        private readonly ?string $apiKey,
+        ?string $apiKey,
     ) {
+        $this->apiKey = $apiKey === null ? null : new ApiKey($apiKey);
     }
 
     /**
@@ -108,7 +117,10 @@ final class ExchangeRateClient
             'connect_timeout' => self::TIMEOUT_SECONDS,
             'http_errors' => false,
             'allow_redirects' => false,
-            'headers' => ['Accept' => 'application/json'],
+            // The body cap applies to the bytes decoded as JSON: no transparent decompression,
+            // and only an identity-encoded answer is accepted (see fetch()).
+            'decode_content' => false,
+            'headers' => ['Accept' => 'application/json', 'Accept-Encoding' => 'identity'],
             'on_headers' => static function (ResponseInterface $response) use ($tooLarge): void {
                 $length = $response->getHeaderLine('Content-Length');
                 if ($length !== '' && (!ctype_digit($length) || strlen($length) > 12 || (int) $length > self::MAX_BODY_BYTES)) {
@@ -213,6 +225,22 @@ final class ExchangeRateClient
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    public function __serialize(): array
+    {
+        throw new LogicException('The upstream client is never serialized');
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    public function __unserialize(array $data): void
+    {
+        throw new LogicException('The upstream client is never unserialized');
+    }
+
+    /**
      * One request to a fixed endpoint. Returns the decoded success body and its raw text.
      *
      * @param key-of<self::ENDPOINTS> $endpoint
@@ -225,28 +253,34 @@ final class ExchangeRateClient
         if (!isset(self::ENDPOINTS[$endpoint])) {
             throw new InvalidArgumentException('Unknown upstream endpoint');
         }
-        if ($this->apiKey === null || preg_match(self::KEY_PATTERN, $this->apiKey) !== 1) {
+        if ($this->apiKey === null || preg_match(self::KEY_PATTERN, $this->apiKey->reveal()) !== 1) {
             throw new UpstreamError(ErrorCodes::UPSTREAM_AUTH, 'no_key');
         }
 
         $failure = null;
         $status = 0;
         $body = null;
+        $encoded = false;
         try {
             $response = $this->http->request(
                 'GET',
-                self::BASE_URL . $this->apiKey . '/' . self::ENDPOINTS[$endpoint],
+                self::BASE_URL . $this->apiKey->reveal() . '/' . self::ENDPOINTS[$endpoint],
                 self::requestOptions(),
             );
             $status = $response->getStatusCode();
-            $body = self::readBody($response->getBody());
-            unset($response);
+            $encoding = strtolower(trim($response->getHeaderLine('Content-Encoding')));
+            $encoded = $encoding !== '' && $encoding !== 'identity';
+            $body = $encoded ? '' : self::readBody($response->getBody());
+            unset($response, $encoding);
         } catch (Throwable $e) {
             $failure = self::transportFailure($e);
             unset($e);
         }
         if ($failure !== null) {
             throw new UpstreamError($failure[0], $failure[1]);
+        }
+        if ($encoded) {
+            throw new UpstreamError(ErrorCodes::UPSTREAM_MALFORMED, 'content_encoding', $status);
         }
         if ($body === null) {
             throw new UpstreamError(ErrorCodes::UPSTREAM_MALFORMED, 'too_large');

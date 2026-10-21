@@ -54,21 +54,14 @@ final class RateStore
     }
 
     /**
-     * The stored currency codes, without loading the rates.
+     * The stored currency codes: exactly the codes of table(), so the allow-list never holds a
+     * code whose row the rate cache would skip.
      *
-     * @return list<string>
+     * @return list<string> sorted
      */
     public function codes(): array
     {
-        $codes = [];
-        foreach ($this->db->pdo()->query('SELECT currency FROM rate_cache')->fetchAll(PDO::FETCH_COLUMN) as $code) {
-            if (is_string($code) && preg_match('/^[A-Z]{3}$/D', $code) === 1) {
-                $codes[] = $code;
-            }
-        }
-        sort($codes, SORT_STRING);
-
-        return $codes;
+        return array_keys($this->table()?->rates ?? []);
     }
 
     /**

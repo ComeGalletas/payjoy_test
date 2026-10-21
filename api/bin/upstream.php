@@ -6,7 +6,8 @@ declare(strict_types=1);
  * Upstream breaker and rate cache, for operators (docs/PLAN.md §3b).
  *
  *     php bin/upstream.php status   print the breaker state and the stored rate table's times
- *     php bin/upstream.php reset    clear the breaker (after fixing the key, or to retry early)
+ *     php bin/upstream.php reset    clear the breaker (after fixing the key, or to retry early);
+ *                                   records an `upstream.breaker_reset` event
  *
  * Never calls upstream and never prints the API key (only whether one is set). Refuses to run
  * while the database is behind the code (run bin/migrate.php first). Exit codes: 0 done,
@@ -18,6 +19,7 @@ use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
 use FxInstallments\Db\Migrator;
 use FxInstallments\Env;
+use FxInstallments\Metrics\Metrics;
 use FxInstallments\Rates\BreakerState;
 use FxInstallments\Rates\RateStore;
 use FxInstallments\Rates\UpstreamBreaker;
@@ -44,12 +46,13 @@ $describe = static function (?BreakerState $state, int $now) use ($time): string
     $open = $state->isOpenAt($now) ? 'open' : 'expired';
 
     return sprintf(
-        '%s (%s, %s) since %s until %s',
+        '%s (%s, %s) since %s until %s%s',
         $open,
         $state->kind,
         $state->errorCode,
         $time($state->since),
         $state->until === null ? 'reset' : $time($state->until),
+        $state->kind === BreakerState::BACKOFF ? sprintf(', %d consecutive failure(s)', $state->failures) : '',
     );
 };
 
@@ -63,6 +66,15 @@ try {
 
     if ($mode === 'reset') {
         $cleared = $breaker->reset();
+        // Fixed fields only: never the key.
+        (new Metrics($db))->record('upstream.breaker_reset', [
+            'source' => 'upstream',
+            'meta' => [
+                'cleared' => $cleared?->kind,
+                'was_open' => $cleared !== null && $cleared->isOpenAt($now),
+                'by' => 'cli',
+            ],
+        ]);
         fwrite(STDOUT, $cleared === null
             ? "upstream: breaker was already closed\n"
             : 'upstream: breaker reset (was ' . $describe($cleared, $now) . ")\n");

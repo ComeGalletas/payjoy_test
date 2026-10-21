@@ -146,11 +146,20 @@ final class UpstreamBreakerTest extends TestCase
         self::assertSame(BreakerState::BACKOFF, $this->breaker->state()?->kind, 'the expired trip stays visible');
     }
 
-    public function testUnsupportedCodeAndAMissingKeyDoNotTrip(): void
+    public function testAMissingKeyDoesNotTrip(): void
     {
-        self::assertNull($this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, 'unsupported-code')));
+        // No call was made, so no quota was used.
         self::assertNull($this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_AUTH, 'no_key')));
         self::assertNull($this->breaker->state());
+    }
+
+    public function testUnsupportedCodeOnTheRefreshBacksOff(): void
+    {
+        // On /latest/USD it means a broken answer, not a user's currency.
+        $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, 'unsupported-code'));
+
+        self::assertSame(BreakerState::BACKOFF, $state?->kind);
+        self::assertSame(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $this->breaker->blocking()?->errorCode);
     }
 
     public function testAWeakerTripNeverReplacesAStrongerOpenOne(): void
@@ -189,7 +198,8 @@ final class UpstreamBreakerTest extends TestCase
 
         $row = $this->pdo->query("SELECT value, updated_at FROM app_state WHERE key = 'upstream_breaker'")->fetch();
         self::assertSame(
-            ['kind' => 'quota', 'error_code' => 'UPSTREAM_QUOTA', 'since' => $this->clock->now, 'until' => self::utc('2026-11-01 00:00:00')],
+            ['kind' => 'quota', 'error_code' => 'UPSTREAM_QUOTA', 'since' => $this->clock->now,
+                'until' => self::utc('2026-11-01 00:00:00'), 'failures' => 0],
             json_decode((string) $row['value'], true, 4, JSON_THROW_ON_ERROR),
         );
         self::assertSame($this->clock->now, (int) $row['updated_at']);
@@ -200,14 +210,137 @@ final class UpstreamBreakerTest extends TestCase
      */
     public static function corruptValues(): iterable
     {
+        // 2026-10-21 10:30:00 UTC; the next 1st is 1793491200.
+        $since = gmmktime(10, 30, 0, 10, 21, 2026);
+        $row = static fn (string $kind, string $code, mixed $until, mixed $failures, mixed $at = null): string => json_encode(
+            ['kind' => $kind, 'error_code' => $code, 'since' => $at ?? $since, 'until' => $until, 'failures' => $failures],
+            JSON_THROW_ON_ERROR,
+        );
         yield 'not JSON' => ['quota'];
         yield 'a list' => ['[1]'];
-        yield 'unknown kind' => ['{"kind":"forever","error_code":"UPSTREAM_AUTH","since":1,"until":null}'];
-        yield 'unknown code' => ['{"kind":"auth","error_code":"NOPE","since":1,"until":null}'];
-        yield 'non-upstream code' => ['{"kind":"auth","error_code":"INTERNAL","since":1,"until":null}'];
-        yield 'quota without until' => ['{"kind":"quota","error_code":"UPSTREAM_QUOTA","since":1,"until":null}'];
-        yield 'until before since' => ['{"kind":"quota","error_code":"UPSTREAM_QUOTA","since":5,"until":4}'];
-        yield 'since as text' => ['{"kind":"auth","error_code":"UPSTREAM_AUTH","since":"1","until":null}'];
+        yield 'unknown kind' => [$row('forever', 'UPSTREAM_AUTH', null, 0)];
+        yield 'unknown code' => [$row('auth', 'NOPE', null, 0)];
+        yield 'non-upstream code' => [$row('auth', 'INTERNAL', null, 0)];
+        yield 'quota with the auth code' => [$row('quota', 'UPSTREAM_AUTH', $since + 60, 0)];
+        yield 'auth with the quota code' => [$row('auth', 'UPSTREAM_QUOTA', null, 0)];
+        yield 'backoff with the auth code' => [$row('backoff', 'UPSTREAM_AUTH', $since + 300, 1)];
+        yield 'backoff with the quota code' => [$row('backoff', 'UPSTREAM_QUOTA', $since + 300, 1)];
+        yield 'quota without until' => [$row('quota', 'UPSTREAM_QUOTA', null, 0)];
+        yield 'quota past the next 1st' => [$row('quota', 'UPSTREAM_QUOTA', gmmktime(0, 0, 1, 11, 1, 2026), 0)];
+        yield 'quota for a year' => [$row('quota', 'UPSTREAM_QUOTA', $since + 365 * 86400, 0)];
+        yield 'until before since' => [$row('quota', 'UPSTREAM_QUOTA', $since - 1, 0)];
+        yield 'backoff over an hour' => [$row('backoff', 'UPSTREAM_TIMEOUT', $since + 3601, 5)];
+        yield 'backoff without until' => [$row('backoff', 'UPSTREAM_TIMEOUT', null, 1)];
+        yield 'backoff with no failures' => [$row('backoff', 'UPSTREAM_TIMEOUT', $since + 300, 0)];
+        yield 'auth with an until' => [$row('auth', 'UPSTREAM_AUTH', $since + 300, 0)];
+        yield 'auth with failures' => [$row('auth', 'UPSTREAM_AUTH', null, 3)];
+        yield 'failures missing' => ['{"kind":"auth","error_code":"UPSTREAM_AUTH","since":1,"until":null}'];
+        yield 'failures as text' => [$row('backoff', 'UPSTREAM_TIMEOUT', $since + 300, '1')];
+        yield 'since as text' => [$row('auth', 'UPSTREAM_AUTH', null, 0, '1')];
+    }
+
+    public function testTheLongestValidStatesAreAccepted(): void
+    {
+        $since = $this->clock->now;
+        self::assertNotNull(BreakerState::fromJson(json_encode(
+            ['kind' => 'backoff', 'error_code' => 'UPSTREAM_TIMEOUT', 'since' => $since, 'until' => $since + 3600, 'failures' => 9],
+            JSON_THROW_ON_ERROR,
+        )));
+        self::assertNotNull(BreakerState::fromJson(json_encode(
+            ['kind' => 'quota', 'error_code' => 'UPSTREAM_QUOTA', 'since' => $since, 'until' => self::utc('2026-11-01 00:00:00'), 'failures' => 0],
+            JSON_THROW_ON_ERROR,
+        )));
+        self::assertNotNull(BreakerState::fromJson(json_encode(
+            ['kind' => 'backoff', 'error_code' => 'UPSTREAM_UNSUPPORTED_CODE', 'since' => $since, 'until' => $since + 300, 'failures' => 1],
+            JSON_THROW_ON_ERROR,
+        )));
+    }
+
+    public function testConsecutiveFailuresBackOff5102040Then60Minutes(): void
+    {
+        $waits = [];
+        foreach (range(1, 7) as $failure) {
+            $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+            self::assertNotNull($state);
+            self::assertSame($failure, $state->failures);
+            $waits[] = intdiv((int) $state->until - $state->since, 60);
+            // The next refresh can only happen once this backoff has ended.
+            $this->clock->now = (int) $state->until;
+        }
+
+        self::assertSame([5, 10, 20, 40, 60, 60, 60], $waits);
+        self::assertSame([300, 600, 1200, 2400, 3600, 3600], array_map(UpstreamBreaker::backoffSeconds(...), range(1, 6)));
+        self::assertSame(3600, UpstreamBreaker::backoffSeconds(1000));
+    }
+
+    public function testASuccessfulRefreshResetsTheBackoffToFiveMinutes(): void
+    {
+        foreach (range(1, 3) as $ignored) {
+            $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_MALFORMED, 'json'));
+            $this->clock->now = (int) $state?->until;
+        }
+        self::assertSame(3, $this->breaker->state()?->failures);
+
+        $this->breaker->succeeded();
+        self::assertNull($this->breaker->state());
+
+        $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+        self::assertSame(1, $state?->failures);
+        self::assertSame(300, (int) $state?->until - $state->since);
+    }
+
+    public function testASuccessLeavesAnOpenQuotaOrAuthBlockButClearsAnExpiredOne(): void
+    {
+        $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_AUTH, 'invalid-key'));
+        $this->breaker->succeeded();
+        self::assertSame(BreakerState::AUTH, $this->breaker->state()?->kind);
+        $this->breaker->reset();
+
+        $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_QUOTA, 'quota-reached'));
+        $this->breaker->succeeded();
+        self::assertSame(BreakerState::QUOTA, $this->breaker->state()?->kind);
+
+        $this->clock->now = self::utc('2026-11-01 00:00:00');
+        $this->breaker->succeeded();
+        self::assertNull($this->breaker->state());
+
+        // With nothing stored, a success writes nothing.
+        $this->breaker->succeeded();
+        self::assertSame(['schema_version'], $this->pdo->query('SELECT key FROM app_state')->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    public function testAWeakerTripNeverShortensAStrongerOne(): void
+    {
+        $quota = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_QUOTA, 'quota-reached'));
+        foreach ([60, 3600, 86400] as $later) {
+            $this->clock->now = (int) $quota?->since + $later;
+            self::assertEquals($quota, $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout')));
+            self::assertEquals($quota, $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, 'unsupported-code')));
+        }
+        self::assertSame(self::utc('2026-11-01 00:00:00'), $this->breaker->state()?->until);
+    }
+
+    public function testAnOpenBackoffIsNeitherExtendedNorCountedTwice(): void
+    {
+        $first = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+        $this->clock->advance(10);
+
+        // A second process failing during the same outage.
+        $second = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_MALFORMED, 'json'));
+
+        self::assertEquals($first, $second);
+        self::assertSame(1, $this->breaker->state()?->failures);
+    }
+
+    public function testAnExpiredQuotaBlockStartsTheBackoffAtFiveMinutes(): void
+    {
+        $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_QUOTA, 'quota-reached'));
+        $this->clock->now = self::utc('2026-11-01 00:00:00');
+
+        $state = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+
+        self::assertSame(1, $state?->failures);
+        self::assertSame(300, (int) $state?->until - $state->since);
     }
 
     #[DataProvider('corruptValues')]

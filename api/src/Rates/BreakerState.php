@@ -11,13 +11,18 @@ use JsonException;
 /**
  * One trip of the breaker, as stored in `app_state` (JSON text).
  *
- * - `quota`: after `quota-reached`; open until `until`, 00:00 UTC on the first day of the
- *   next month.
- * - `auth`: after `invalid-key` or `inactive-account`; `until` is null, open until
- *   `bin/upstream.php reset`.
- * - `backoff`: after a failed refresh for any other reason (timeout, malformed answer); open
- *   for UpstreamBreaker::BACKOFF_SECONDS, so an outage costs one upstream call per five
- *   minutes instead of one per lookup.
+ * - `quota`: after `quota-reached` (UPSTREAM_QUOTA); open until `until`, at most 00:00 UTC on
+ *   the first day of the month after `since`.
+ * - `auth`: after `invalid-key` or `inactive-account` (UPSTREAM_AUTH); `until` is null, open
+ *   until `bin/upstream.php reset`.
+ * - `backoff`: after any other failed refresh (UPSTREAM_TIMEOUT, UPSTREAM_MALFORMED,
+ *   UPSTREAM_UNSUPPORTED_CODE); open for UpstreamBreaker::backoffSeconds($failures), at most
+ *   one hour. `failures` counts consecutive failed refreshes (owner decision 2026-10-21:
+ *   5, 10, 20, 40, then 60 minutes); it is 0 for the other kinds.
+ *
+ * The constructor rejects any other combination, so a hand-edited or corrupt row can't
+ * produce an open-ended or mislabelled block: fromJson() returns null for it and the breaker
+ * counts as closed.
  */
 final class BreakerState
 {
@@ -27,17 +32,32 @@ final class BreakerState
 
     public const KINDS = [self::QUOTA, self::AUTH, self::BACKOFF];
 
+    /** Kind => the error codes it may carry. */
+    private const CODES = [
+        self::QUOTA => [ErrorCodes::UPSTREAM_QUOTA],
+        self::AUTH => [ErrorCodes::UPSTREAM_AUTH],
+        self::BACKOFF => [ErrorCodes::UPSTREAM_TIMEOUT, ErrorCodes::UPSTREAM_MALFORMED, ErrorCodes::UPSTREAM_UNSUPPORTED_CODE],
+    ];
+
     public function __construct(
         public readonly string $kind,
         public readonly string $errorCode,
         public readonly int $since,
         public readonly ?int $until,
+        public readonly int $failures = 0,
     ) {
-        if (!in_array($kind, self::KINDS, true) || !in_array($errorCode, UpstreamError::CODES, true)) {
-            throw new InvalidArgumentException('Invalid breaker state');
+        if (!isset(self::CODES[$kind]) || !in_array($errorCode, self::CODES[$kind], true)) {
+            throw new InvalidArgumentException('Invalid breaker kind or error code for that kind');
         }
-        if (($kind === self::AUTH) !== ($until === null) || ($until !== null && $until <= $since)) {
-            throw new InvalidArgumentException('Only an auth trip is open-ended; others end after they start');
+        $valid = match ($kind) {
+            self::AUTH => $until === null && $failures === 0,
+            self::QUOTA => $until !== null && $until > $since
+                && $until <= UpstreamBreaker::nextMonthStart($since) && $failures === 0,
+            default => $until !== null && $until > $since
+                && $until - $since <= UpstreamBreaker::MAX_BACKOFF_SECONDS && $failures >= 1,
+        };
+        if (!$valid) {
+            throw new InvalidArgumentException('Breaker block out of range for its kind');
         }
     }
 
@@ -62,6 +82,7 @@ final class BreakerState
             'error_code' => $this->errorCode,
             'since' => $this->since,
             'until' => $this->until,
+            'failures' => $this->failures,
         ], JSON_THROW_ON_ERROR);
     }
 
@@ -82,12 +103,13 @@ final class BreakerState
         $code = $data['error_code'] ?? null;
         $since = $data['since'] ?? null;
         $until = $data['until'] ?? null;
-        if (!is_string($kind) || !is_string($code) || !ErrorCodes::isKnown($code) || !is_int($since)
+        $failures = $data['failures'] ?? null;
+        if (!is_string($kind) || !is_string($code) || !is_int($since) || !is_int($failures)
             || ($until !== null && !is_int($until))) {
             return null;
         }
         try {
-            return new self($kind, $code, $since, $until);
+            return new self($kind, $code, $since, $until, $failures);
         } catch (InvalidArgumentException) {
             return null;
         }

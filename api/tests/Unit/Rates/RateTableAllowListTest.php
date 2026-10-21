@@ -78,6 +78,17 @@ final class RateTableAllowListTest extends TestCase
         self::assertFalse($allowList->contains('brl'));
     }
 
+    public function testARowTheRateCacheWouldSkipIsNotAllowed(): void
+    {
+        $this->pdo->exec("INSERT INTO rate_cache VALUES ('USD', 10000000000, 1, 2, 1), ('BRL', 0, 1, 2, 1), ('EUR', -5, 1, 2, 1)");
+        $allowList = new RateTableAllowList($this->store);
+
+        self::assertTrue($allowList->contains('USD'));
+        self::assertFalse($allowList->contains('BRL'), 'rate_scaled = 0: the table has no BRL, so neither does the allow-list');
+        self::assertFalse($allowList->contains('EUR'));
+        self::assertSame(array_keys((array) $this->store->table()?->rates), $this->store->codes());
+    }
+
     public function testTheValidatorUsesIt(): void
     {
         $validator = new CurrencyValidator(new RateTableAllowList($this->store));

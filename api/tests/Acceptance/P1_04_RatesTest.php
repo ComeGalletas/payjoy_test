@@ -53,6 +53,8 @@ final class P1_04_RatesTest extends TestCase
 
     private FakeClock $clock;
 
+    private string $path;
+
     private PDO $pdo;
 
     /** @var ArrayObject<int, string> */
@@ -61,8 +63,15 @@ final class P1_04_RatesTest extends TestCase
     protected function setUp(): void
     {
         $this->clock = new FakeClock(MockUpstream::LAST_UPDATE + 3600);
-        $this->pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
+        $this->path = TestEnvironment::freshDatabasePath();
+        $this->pdo = TestEnvironment::connect($this->path);
         $this->log = new ArrayObject();
+    }
+
+    protected function tearDown(): void
+    {
+        unset($this->pdo);
+        self::assertTrue(TestEnvironment::removeDatabase($this->path), 'the test database was released and removed');
     }
 
     public function testTwoConversionsInOneRefreshWindowMakeOneUpstreamCall(): void
@@ -233,6 +242,17 @@ final class P1_04_RatesTest extends TestCase
             $output[] = json_encode($this->pdo->query("SELECT * FROM {$table}")->fetchAll(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
         }
         $output[] = implode("\n", $this->log->getArrayCopy());
+
+        // Generic dumps of a client holding the key (on a handler with no request history, so
+        // only the client's own state is dumped): var_export, (array), print_r, serialize.
+        $client = new ExchangeRateClient(new \GuzzleHttp\Client(['handler' => static fn () => throw new RuntimeException('unused')]), $key);
+        $output[] = var_export($client, true) . print_r((array) $client, true) . print_r($client, true);
+        try {
+            $output[] = serialize($client);
+            self::fail('the client was serialized');
+        } catch (\LogicException $e) {
+            $output[] = $e->getMessage();
+        }
 
         $all = implode("\n", $output);
         self::assertGreaterThan(0, (int) $this->pdo->query("SELECT COUNT(*) FROM events WHERE event_type = 'upstream.call'")->fetchColumn());

@@ -75,6 +75,26 @@ final class UpstreamCliTest extends TestCase
         [$exit, $out] = $this->runCli(['reset']);
         self::assertSame(0, $exit);
         self::assertSame("upstream: breaker was already closed\n", $out);
+
+        // Each reset is recorded, with fixed fields only.
+        $events = TestEnvironment::connect($this->path)
+            ->query("SELECT source, status, meta FROM events WHERE event_type = 'upstream.breaker_reset' ORDER BY id")
+            ->fetchAll();
+        self::assertSame([
+            ['source' => 'upstream', 'status' => 'ok', 'meta' => '{"cleared":"auth","was_open":true,"by":"cli"}'],
+            ['source' => 'upstream', 'status' => 'ok', 'meta' => '{"cleared":null,"was_open":false,"by":"cli"}'],
+        ], $events);
+    }
+
+    public function testStatusShowsTheBackoffCount(): void
+    {
+        $db = Connection::wrap(TestEnvironment::connect($this->path));
+        (new UpstreamBreaker($db))->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+
+        [$exit, $out] = $this->runCli(['status']);
+
+        self::assertSame(0, $exit);
+        self::assertMatchesRegularExpression('/^breaker: open \(backoff, UPSTREAM_TIMEOUT\) since \S+ until \S+, 1 consecutive failure\(s\)$/m', $out);
     }
 
     public function testStatusSaysWhenNoKeyIsSet(): void

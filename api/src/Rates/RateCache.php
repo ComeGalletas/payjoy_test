@@ -25,6 +25,9 @@ use Throwable;
  * - `next_update_unix` is upstream's `time_next_update_unix`, but never earlier than
  *   MIN_REFRESH_SECONDS after the fetch: if upstream is late and sends a time already past,
  *   lookups don't each call upstream again.
+ * - Every failed refresh trips the breaker (UpstreamBreaker), including one whose answer was
+ *   fine but whose `rate_cache` write failed (the fetched rate is still served once); every
+ *   successful one clears its backoff. So upstream calls are bounded by time, not traffic.
  *
  * Every lookup writes one `upstream.call` event (source `upstream`) with `meta.result` = `hit`,
  * `miss`, `stale` or `blocked`, `meta.endpoint` = `latest` and `meta.stale`; a failed refresh
@@ -130,10 +133,24 @@ final class RateCache
         }
         try {
             $this->store->replace($fresh);
+            $stored = true;
         } catch (Throwable) {
-            // Serve what was fetched and flag it for the operator. Until a write succeeds,
-            // each lookup refreshes again (a known limit: the database is broken anyway).
-            $meta['store_failed'] = true;
+            $stored = false;
+        }
+        try {
+            if ($stored) {
+                $this->breaker->succeeded();
+            } else {
+                // Serve what was fetched, but back off: without the stored table every lookup
+                // would refresh again.
+                $meta['store_failed'] = true;
+                $trip = $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_MALFORMED, 'store_failed'));
+                if ($trip !== null) {
+                    $meta['breaker'] = $trip->kind;
+                }
+            }
+        } catch (Throwable) {
+            $meta['breaker_write_failed'] = true;
         }
 
         return $this->serve($fresh, $currency, 'miss', false, $started, $meta);
