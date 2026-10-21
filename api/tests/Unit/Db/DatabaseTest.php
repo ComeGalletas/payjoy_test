@@ -73,23 +73,19 @@ final class DatabaseTest extends TestCase
         self::assertFileExists($path);
     }
 
-    public function testFloatParamsRoundTripEveryDigit(): void
+    public function testThereIsNoFloatBindingHelper(): void
     {
-        $pdo = Database::connect('sqlite::memory:');
-        $pdo->exec('CREATE TABLE t (x REAL)');
-        $values = [1045.82 / 3, 200 * 5.2291, 0.1 + 0.2, 1e-7, 123456789.12345678, 5.0];
-        $insert = $pdo->prepare('INSERT INTO t (x) VALUES (?)');
-        foreach ($values as $value) {
-            $insert->execute([Database::floatParam($value)]);
-        }
-
-        self::assertSame($values, $pdo->query('SELECT x FROM t ORDER BY rowid')->fetchAll(PDO::FETCH_COLUMN));
+        // ADR 0017: nothing binds floats any more, so floatParam() is gone.
+        self::assertFalse(method_exists(Database::class, 'floatParam'));
     }
 
-    public function testFloatParamsRejectNonFiniteValues(): void
+    public function testConnectingNeverCreatesOrChangesTheSchema(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
-        Database::floatParam(NAN);
+        $path = TestEnvironment::tempDir() . '/bare.db';
+
+        Database::connect('sqlite:' . $path);
+
+        self::assertSame([], Database::connect('sqlite:' . $path)->query("SELECT name FROM sqlite_master")->fetchAll());
     }
 
     public function testConnectionOpensLazilyOnceAndRetriesAfterAFailure(): void

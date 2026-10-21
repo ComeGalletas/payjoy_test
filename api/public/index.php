@@ -9,7 +9,8 @@ declare(strict_types=1);
  *     php -S 127.0.0.1:8080 api/public/index.php
  *
  * Errors are never displayed: a failure anywhere, even before the app is wired, answers with
- * the INTERNAL envelope and no detail.
+ * the INTERNAL envelope and no detail. That includes a database that can't be opened or whose
+ * schema is behind the code (Migrator::assertCurrent).
  */
 
 ini_set('display_errors', '0');
@@ -21,8 +22,11 @@ try {
     require $apiRoot . '/vendor/autoload.php';
 
     FxInstallments\Bootstrap::init($apiRoot);
-    FxInstallments\App::fromEnvironment($apiRoot)
-        ->kernel()
+    $app = FxInstallments\App::fromEnvironment($apiRoot);
+    // Open the database and check its schema version before routing: a database behind the
+    // code (run php bin/migrate.php) fails closed with INTERNAL below.
+    $app->db->pdo();
+    $app->kernel()
         ->handle(FxInstallments\Http\Request::fromGlobals())
         ->send();
 } catch (Throwable $e) {

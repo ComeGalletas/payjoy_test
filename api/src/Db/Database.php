@@ -11,6 +11,10 @@ use PDO;
  * The PDO factory (ADR 0010). Reads DB_DSN, DB_USER and DB_PASS; the default is the SQLite file
  * api/var/app.db, outside public/. SQLite connections run with WAL and a 5 s busy timeout.
  * Every connection uses exception error mode.
+ *
+ * No float is ever bound (ADR 0017, INV-09): money is integer cents (UsdCents) and rates are
+ * integers scaled by 10^10 (ScaledRate). Opening a connection never touches the schema; see
+ * Migrator for when it is applied.
  */
 final class Database
 {
@@ -68,20 +72,6 @@ final class Database
         }
 
         return $dsn;
-    }
-
-    /**
-     * A float as a bind value that keeps every digit. PDO turns a PHP float parameter into a
-     * string using the `precision` ini setting (14 significant digits by default), which would
-     * silently round stored amounts and rates; 17 significant digits always round-trip.
-     */
-    public static function floatParam(float $value): string
-    {
-        if (!is_finite($value)) {
-            throw new \InvalidArgumentException('Only finite floats can be stored');
-        }
-
-        return sprintf('%.17g', $value);
     }
 
     public static function defaultDsn(string $apiRoot): string
