@@ -7,22 +7,31 @@ namespace FxInstallments\Tests\Guards;
 /**
  * Drives api/bin/install-hooks.php against a throwaway git repository and a linked worktree of
  * it, both created under the system temp dir. The real repository is never touched: every child
- * process runs without inherited GIT_* variables, and setUp checks that git resolves the
- * fixture to itself before any test runs the installer.
+ * process runs without inherited GIT_* variables and without the developer's system or global
+ * git config, and setUp checks that git resolves the fixture to itself before any test runs the
+ * installer.
  */
 final class InstallHooksTest extends GuardTestCase
 {
     private const MARKER = '# fx-installments managed hook';
     private const HOOKS = ['commit-msg', 'pre-push'];
+    private const FOREIGN = "#!/bin/sh\necho somebody else's hook\n";
 
     private string $repo;
     private string $worktree;
     private string $hooksDir;
 
+    /** @var array<string, string|null> extra environment for the fixture's git commands */
+    private array $gitEnv = [];
+
     protected function setUp(): void
     {
         $this->requireGit();
+        $this->createFixture();
+    }
 
+    private function createFixture(): void
+    {
         $base = $this->tempDir();
         $this->repo = $base . '/repo';
         $this->worktree = $base . '/wt';
@@ -72,7 +81,7 @@ final class InstallHooksTest extends GuardTestCase
         self::assertSame(0, $code, $stderr);
         foreach (self::HOOKS as $hook) {
             $this->assertInstalled($hook);
-            self::assertFileDoesNotExist($this->hooksDir . "/{$hook}.bak");
+            self::assertSame([], $this->backupFiles($hook));
             self::assertStringContainsString("{$hook} -> ", $stdout);
         }
     }
@@ -85,7 +94,7 @@ final class InstallHooksTest extends GuardTestCase
         self::assertSame(0, $code, $stderr);
         foreach (self::HOOKS as $hook) {
             self::assertStringContainsString("{$hook} is up to date", $stdout);
-            self::assertFileDoesNotExist($this->hooksDir . "/{$hook}.bak");
+            self::assertSame([], $this->backupFiles($hook));
         }
     }
 
@@ -99,15 +108,17 @@ final class InstallHooksTest extends GuardTestCase
         self::assertSame(0, $code, $stderr);
         $this->assertInstalled('commit-msg');
         $this->assertInstalled('pre-push');
-        self::assertSame($old, file_get_contents($this->hooksDir . '/commit-msg.bak'));
-        self::assertFileDoesNotExist($this->hooksDir . '/pre-push.bak');
-        self::assertStringContainsString('kept the previous commit-msg', $stdout);
+        $backups = $this->backups('commit-msg');
+        self::assertSame([$old], array_values($backups));
+        self::assertMatchesRegularExpression('/^commit-msg\.bak\.\d{8}-\d{6}$/', array_key_first($backups));
+        self::assertFileDoesNotExist($this->hooksDir . '/commit-msg.bak');
+        self::assertSame([], $this->backupFiles('pre-push'));
+        self::assertBackupPrinted($stdout, 'commit-msg', array_key_first($backups));
     }
 
     public function testMainCheckoutRefusesForeignHookAndWritesNothing(): void
     {
-        $foreign = "#!/bin/sh\necho somebody else's hook\n";
-        file_put_contents($this->hooksDir . '/pre-push', $foreign);
+        file_put_contents($this->hooksDir . '/pre-push', self::FOREIGN);
 
         [$code, , $stderr] = $this->install($this->repo);
 
@@ -115,22 +126,75 @@ final class InstallHooksTest extends GuardTestCase
         self::assertStringContainsString('refusing to overwrite', $stderr);
         self::assertStringContainsString('pre-push', $stderr);
         self::assertStringContainsString('FORCE=1', $stderr);
-        self::assertSame($foreign, file_get_contents($this->hooksDir . '/pre-push'));
-        self::assertFileDoesNotExist($this->hooksDir . '/pre-push.bak');
+        self::assertSame(self::FOREIGN, file_get_contents($this->hooksDir . '/pre-push'));
+        self::assertSame([], $this->backupFiles('pre-push'));
         self::assertFileDoesNotExist($this->hooksDir . '/commit-msg', 'a refusal must not install the other hooks either');
     }
 
     public function testMainCheckoutForceReplacesForeignHookKeepingBackup(): void
     {
-        $foreign = "#!/bin/sh\necho somebody else's hook\n";
-        file_put_contents($this->hooksDir . '/pre-push', $foreign);
+        file_put_contents($this->hooksDir . '/pre-push', self::FOREIGN);
 
-        [$code, , $stderr] = $this->install($this->repo, ['--force']);
+        [$code, $stdout, $stderr] = $this->install($this->repo, ['--force']);
 
         self::assertSame(0, $code, $stderr);
         $this->assertInstalled('pre-push');
         $this->assertInstalled('commit-msg');
-        self::assertSame($foreign, file_get_contents($this->hooksDir . '/pre-push.bak'));
+        self::assertSame([self::FOREIGN], array_values($this->backups('pre-push')));
+        self::assertStringContainsString('kept the previous pre-push as ', $stdout);
+    }
+
+    /**
+     * The P0-06 acceptance scenario: `make init FORCE=1` over a foreign hook, then an update of
+     * the managed hook. Before P0-06 the second run replaced pre-push.bak (the foreign hook) with
+     * the old managed version.
+     */
+    public function testForceOverForeignHookThenManagedUpdateKeepsForeignBackup(): void
+    {
+        file_put_contents($this->hooksDir . '/pre-push', self::FOREIGN);
+        [$code, , $stderr] = $this->install($this->repo, ['--force']);
+        self::assertSame(0, $code, $stderr);
+        $firstManaged = (string) file_get_contents($this->hooksDir . '/pre-push');
+
+        // A new version of the managed hook arrives on the branch (still carries the marker).
+        file_put_contents($this->repo . '/.githooks/pre-push', "# managed update\n", FILE_APPEND);
+        [$code, $stdout, $stderr] = $this->install($this->repo);
+
+        self::assertSame(0, $code, $stderr);
+        $this->assertInstalled('pre-push');
+        $backups = $this->backups('pre-push');
+        self::assertCount(2, $backups, 'one backup per replaced hook: ' . implode(', ', array_keys($backups)));
+        self::assertContains(self::FOREIGN, $backups, 'the foreign hook must still exist in a backup file');
+        self::assertContains($firstManaged, $backups, 'the replaced managed hook is backed up too');
+        self::assertStringContainsString('kept the previous pre-push as ', $stdout);
+    }
+
+    public function testExistingBackupFilesAreNeverOverwritten(): void
+    {
+        // A plain .bak from before P0-06, and every timestamped name the run could pick in the
+        // next 30 seconds, so the installer has to fall back to a numeric suffix.
+        $existing = ['pre-push.bak' => self::FOREIGN];
+        $now = time();
+        for ($second = 0; $second <= 30; $second++) {
+            $existing['pre-push.bak.' . gmdate('Ymd-His', $now + $second)] = "taken {$second}\n";
+        }
+        foreach ($existing as $name => $contents) {
+            file_put_contents($this->hooksDir . '/' . $name, $contents);
+        }
+        $old = "#!/bin/sh\n" . self::MARKER . "\necho old managed version\n";
+        file_put_contents($this->hooksDir . '/pre-push', $old);
+
+        [$code, $stdout, $stderr] = $this->install($this->repo);
+
+        self::assertSame(0, $code, $stderr);
+        $this->assertInstalled('pre-push');
+        foreach ($existing as $name => $contents) {
+            self::assertSame($contents, file_get_contents($this->hooksDir . '/' . $name), "{$name} must be untouched");
+        }
+        $new = array_diff_key($this->backups('pre-push'), $existing);
+        self::assertSame([$old], array_values($new), 'exactly one new backup holding the replaced hook');
+        self::assertMatchesRegularExpression('/^pre-push\.bak\.\d{8}-\d{6}-1$/', array_key_first($new));
+        self::assertBackupPrinted($stdout, 'pre-push', array_key_first($new));
     }
 
     public function testUnknownArgumentIsRejected(): void
@@ -185,6 +249,50 @@ final class InstallHooksTest extends GuardTestCase
     }
 
     /**
+     * A developer's global config with init.templateDir pointing at a template that holds a
+     * foreign pre-push would break the fixture: `git init` would copy that hook in, setUp would
+     * find it, and the installer would refuse. The isolation in GuardTestCase::runProcess must
+     * make such a config invisible.
+     */
+    public function testFixtureIgnoresDevelopersGlobalGitConfig(): void
+    {
+        $home = $this->tempDir();
+        mkdir($home . '/template/hooks', 0777, true);
+        file_put_contents($home . '/template/hooks/pre-push', self::FOREIGN);
+        file_put_contents($home . '/.gitconfig', "[init]\n\ttemplateDir = {$home}/template\n");
+        $developer = ['HOME' => $home, 'XDG_CONFIG_HOME' => $home . '/xdg'];
+
+        // Without the isolation the file is read and does break a fresh repository.
+        $plain = $this->tempDir();
+        $unisolated = $developer + ['GIT_CONFIG_GLOBAL' => null, 'GIT_CONFIG_NOSYSTEM' => null];
+        [$code, $stdout, $stderr] = self::runProcess(['git', 'config', '--global', '--get', 'init.templateDir'], '', $plain, $unisolated);
+        self::assertSame(0, $code, $stderr);
+        self::assertSame("{$home}/template", trim($stdout));
+        [$code, , $stderr] = self::runProcess(['git', 'init', '-q', 'repo'], '', $plain, $unisolated);
+        self::assertSame(0, $code, $stderr);
+        self::assertFileExists($plain . '/repo/.git/hooks/pre-push', 'the bogus config must really apply without isolation');
+
+        // With the isolation the same HOME has no effect: the fixture builds and installs cleanly.
+        [$code, $stdout] = self::runProcess(['git', 'config', '--global', '--get', 'init.templateDir'], '', $plain, $developer);
+        self::assertSame(1, $code, 'the isolated child sees no global init.templateDir');
+        self::assertSame('', trim($stdout));
+
+        $this->gitEnv = $developer;
+        $this->createFixture();
+        [$code, , $stderr] = self::runProcess(
+            [PHP_BINARY, $this->repo . '/api/bin/install-hooks.php'],
+            '',
+            $this->repo,
+            $developer,
+        );
+        self::assertSame(0, $code, $stderr);
+        foreach (self::HOOKS as $hook) {
+            $this->assertInstalled($hook);
+            self::assertSame([], $this->backupFiles($hook));
+        }
+    }
+
+    /**
      * @param list<string> $arguments
      * @return array{int, string, string}
      */
@@ -193,11 +301,57 @@ final class InstallHooksTest extends GuardTestCase
         return self::runProcess([PHP_BINARY, $checkout . '/api/bin/install-hooks.php', ...$arguments], '', $checkout);
     }
 
+    /**
+     * The installer prints the full backup path. The directory part is compared loosely, since
+     * git and realpath() may spell the temp dir differently on Windows (case, short names).
+     */
+    private static function assertBackupPrinted(string $stdout, string $hook, ?string $backupName): void
+    {
+        self::assertNotNull($backupName);
+        self::assertMatchesRegularExpression(
+            '~^install-hooks: kept the previous ' . preg_quote($hook, '~') . ' as .+/hooks/'
+                . preg_quote($backupName, '~') . '\r?$~m',
+            $stdout,
+            'the backup path is printed',
+        );
+    }
+
     private function assertInstalled(string $hook): void
     {
         $installed = $this->hooksDir . '/' . $hook;
         self::assertFileExists($installed);
         self::assertSame(file_get_contents($this->repo . '/.githooks/' . $hook), file_get_contents($installed));
+    }
+
+    /**
+     * Every backup-like file for $hook in the hooks dir: <hook>.bak and <hook>.bak.*.
+     *
+     * @return list<string> file names
+     */
+    private function backupFiles(string $hook): array
+    {
+        return array_values(array_filter(
+            scandir($this->hooksDir) ?: [],
+            static fn (string $name): bool => $name === "{$hook}.bak" || str_starts_with($name, "{$hook}.bak."),
+        ));
+    }
+
+    /**
+     * Timestamped backups of $hook (<hook>.bak.<YYYYMMDD-HHMMSS>[-<n>]), sorted by name.
+     *
+     * @return array<string, string> file name => contents
+     */
+    private function backups(string $hook): array
+    {
+        $backups = [];
+        foreach ($this->backupFiles($hook) as $name) {
+            if (preg_match('/^' . preg_quote($hook, '/') . '\.bak\.\d{8}-\d{6}(?:-\d+)?$/', $name) === 1) {
+                $backups[$name] = (string) file_get_contents($this->hooksDir . '/' . $name);
+            }
+        }
+        ksort($backups);
+
+        return $backups;
     }
 
     /**
@@ -227,7 +381,7 @@ final class InstallHooksTest extends GuardTestCase
             'GIT_AUTHOR_EMAIL' => 'guard@example.invalid',
             'GIT_COMMITTER_NAME' => 'Guard Test',
             'GIT_COMMITTER_EMAIL' => 'guard@example.invalid',
-        ]);
+        ] + $this->gitEnv);
         self::assertSame(0, $code, 'git ' . implode(' ', $arguments) . " failed: {$stderr}");
 
         return trim($stdout);

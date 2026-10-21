@@ -18,6 +18,7 @@ abstract class GuardTestCase extends TestCase
     private static ?string $sh = null;
     private static bool $shSearched = false;
     private static ?bool $gitAvailable = null;
+    private static ?string $emptyGitConfig = null;
 
     /** @var list<string> */
     private array $tempPaths = [];
@@ -80,7 +81,9 @@ abstract class GuardTestCase extends TestCase
     /**
      * Runs a command without a shell. The child gets this process's environment minus every GIT_*
      * variable (git sets some of them while running hooks, and they would point the child at the
-     * real repository), plus $env overrides. A null override removes the variable.
+     * real repository), then GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL pointing at an empty
+     * file, so the developer's system and global git config (~/.gitconfig, XDG) never reach a
+     * fixture, then $env overrides. A null override removes the variable.
      *
      * @param list<string> $command
      * @param array<string, string|null> $env
@@ -127,6 +130,8 @@ abstract class GuardTestCase extends TestCase
                 $env[(string) $name] = (string) $value;
             }
         }
+        $env['GIT_CONFIG_NOSYSTEM'] = '1';
+        $env['GIT_CONFIG_GLOBAL'] = self::emptyGitConfig();
         foreach ($overrides as $name => $value) {
             // Environment names are case-insensitive on Windows (PATH is usually "Path").
             foreach (array_keys($env) as $existing) {
@@ -143,13 +148,24 @@ abstract class GuardTestCase extends TestCase
     }
 
     /**
-     * The current PATH with $directory in front.
+     * An empty file for GIT_CONFIG_GLOBAL, created once per PHPUnit process and removed when it
+     * exits. It is checked before each use, so a test that wrote to it can't leak config into
+     * the next one.
      */
-    protected static function pathWith(string $directory): string
+    private static function emptyGitConfig(): string
     {
-        $path = getenv('PATH');
+        if (self::$emptyGitConfig === null) {
+            $file = tempnam(sys_get_temp_dir(), 'fxgitcfg');
+            self::assertIsString($file);
+            self::$emptyGitConfig = str_replace('\\', '/', $file);
+            register_shutdown_function(static function () use ($file): void {
+                @unlink($file);
+            });
+        }
+        clearstatcache(true, self::$emptyGitConfig);
+        self::assertSame(0, @filesize(self::$emptyGitConfig), 'the empty GIT_CONFIG_GLOBAL file must stay empty');
 
-        return $directory . PATH_SEPARATOR . (is_string($path) ? $path : '');
+        return self::$emptyGitConfig;
     }
 
     protected function tempFile(string $contents = ''): string
