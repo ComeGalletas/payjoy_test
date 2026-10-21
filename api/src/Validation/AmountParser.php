@@ -7,25 +7,37 @@ namespace FxInstallments\Validation;
 use FxInstallments\Convert\UsdCents;
 
 /**
- * The bot's lenient amount reader (docs/PLAN.md §3c, ADR 0013). `/convert` never uses it.
+ * The bot's lenient amount reader (docs/PLAN.md §3c, ADR 0013 and its 2026-10-21 owner
+ * decisions). `/convert` never uses it.
  *
  * It only translates what the user typed into a canonical amount string; the strict
  * `AmountValidator` then decides. All work is on ASCII bytes and strings: no floats, no locale.
+ * Whenever a reading could give a wrong number, it is unclear and the bot asks again.
  *
  * Rules, in order:
- * 1. Strip spaces (space, tab, CR, LF, no-break space U+00A0, narrow no-break space U+202F),
- *    then `US$`, `USD` and `$` in any case, wherever they appear.
- * 2. Anything left except ASCII digits, `.` and `,` → unclear (so `1e3`, `-5`, `NaN`, unicode
- *    digits and NUL bytes are unclear).
+ * 1. Trim leading and trailing whitespace (space, tab, CR, LF, no-break space U+00A0, narrow
+ *    no-break space U+202F). Then strip one currency marker (`US$`, `USD` or `$`, any case) at
+ *    the start and one at the end, each with optional whitespace between it and the number.
+ *    A marker anywhere else (`5$5`, `1USD000`, `usdusd5`, `US$$5`) or spelled with spaces
+ *    (`U SD5`) is left in place, so rule 2 makes the text unclear.
+ * 2. Anything left except ASCII digits, `.`, `,` and inner whitespace → unclear (so `1e3`,
+ *    `-5`, `NaN`, unicode digits and NUL bytes are unclear).
  * 3. Both `.` and `,` present: the last one is the decimal separator, appears once and has 1–2
  *    digits after it; the other is a thousands separator with groups of exactly 3 digits.
  * 4. One kind, more than once: thousands separators only, groups of 3.
- * 5. One kind, once: 1–2 digits after it → decimal; exactly 3 → thousands; anything else →
- *    unclear.
- * 6. Leading or trailing separator, empty groups, or more than 2 decimals → unclear.
+ * 5. One kind, once: 1–2 digits after it → decimal. Exactly 3 digits after a `,` → thousands
+ *    (`1,000` → 1000); exactly 3 after a `.` → unclear (`200.505`, `1.500`: a decimal typed with
+ *    three places, or thousands? never guessed). Anything else → unclear.
+ * 6. Leading or trailing separator, empty groups (two separators in a row, including a double
+ *    space), or more than 2 decimals → unclear.
  *
- * Thousands grouping (rules 3–5) also requires a first group of 1–3 digits that doesn't start
- * with `0`, so `0,500` and `1234,567` are unclear rather than read as 500 and 1234567.
+ * Inner whitespace is a thousands separator only: every group after the first must be exactly
+ * 3 digits (`1 000`, `1 000 000`; `200 3` and `2 50` are unclear). It may be followed by one
+ * decimal `.` or `,` with 1–2 digits (`1 000,50` → 1000.50); combined with `.` or `,` used as a
+ * second thousands separator it is unclear (`1 000.000`).
+ *
+ * Thousands grouping also requires a first group of 1–3 digits that doesn't start with `0`, so
+ * `0,500` and `1234,567` are unclear rather than read as 500 and 1234567.
  * Input longer than MAX_INPUT_BYTES is unclear.
  */
 final class AmountParser
@@ -36,7 +48,7 @@ final class AmountParser
     /** @var list<string> */
     private const SPACES = [' ', "\t", "\r", "\n", "\u{00A0}", "\u{202F}"];
 
-    /** Longest first, so `US$` isn't left as `US` after `$` is removed. @var list<string> */
+    /** Longest first, so `US$` isn't read as `US` plus `$`. @var list<string> */
     private const CURRENCY_MARKERS = ['US$', 'USD', '$'];
 
     public function __construct(private readonly AmountValidator $validator)
@@ -67,8 +79,12 @@ final class AmountParser
     /**
      * Rules 1–6 only. Returns the number read, as ASCII digits without leading zeros and, when a
      * decimal part was typed, `.` plus exactly two decimals (`200,5` → `200.50`,
-     * `1,000` → `1000`, `007` → `7`); or null for unclear. The result is a canonical amount
-     * whenever its integer part has at most 7 digits. Range is not checked here.
+     * `1,000` → `1000`, `007` → `7`); or null for unclear. Range is not checked here.
+     *
+     * The result is a canonical amount only when its integer part has at most 7 digits. A longer
+     * one (`12.345.678` → `12345678`) is returned as read, so `read()` can report it as invalid
+     * (`over_max`) rather than unclear; callers other than `read()` must still pass the result
+     * through `AmountValidator`.
      */
     public static function normalize(string $text): ?string
     {
@@ -77,12 +93,21 @@ final class AmountParser
         }
 
         // Rule 1.
-        $text = str_replace(self::SPACES, '', $text);
-        $text = str_ireplace(self::CURRENCY_MARKERS, '', $text);
+        $text = self::stripMarker(self::stripMarker(self::trimSpaces($text), true), false);
+        $text = str_replace(self::SPACES, ' ', $text);
 
         // Rule 2.
-        if (preg_match('/^[0-9.,]+$/D', $text) !== 1) {
+        if (preg_match('/^[0-9., ]+$/D', $text) !== 1) {
             return null;
+        }
+
+        // Rule 6: leading or trailing separator, or an empty group between two separators.
+        if (preg_match('/^[., ]|[., ]$|[., ]{2}/', $text) === 1) {
+            return null;
+        }
+
+        if (str_contains($text, ' ')) {
+            return self::spaceGrouped($text);
         }
 
         $dots = substr_count($text, '.');
@@ -90,12 +115,6 @@ final class AmountParser
         if ($dots + $commas === 0) {
             return self::compose($text, null);
         }
-
-        // Rule 6: leading or trailing separator, or an empty group between two separators.
-        if (preg_match('/^[.,]|[.,]$|[.,]{2}/', $text) === 1) {
-            return null;
-        }
-
         if ($dots > 0 && $commas > 0) {
             return self::mixedSeparators($text);
         }
@@ -112,11 +131,34 @@ final class AmountParser
         if ($digitsAfter <= 2) {
             return self::compose($integer, $after);
         }
-        if ($digitsAfter === 3) {
+        if ($digitsAfter === 3 && $separator === ',') {
             return self::compose(self::thousands($text, $separator), null);
         }
 
         return null;
+    }
+
+    /**
+     * Inner whitespace as the thousands separator, optionally followed by one decimal `.` or `,`.
+     */
+    private static function spaceGrouped(string $text): ?string
+    {
+        $dots = substr_count($text, '.');
+        $commas = substr_count($text, ',');
+        if ($dots + $commas > 1) {
+            // A second thousands separator kind, or two decimals.
+            return null;
+        }
+        if ($dots + $commas === 0) {
+            return self::compose(self::thousands($text, ' '), null);
+        }
+
+        [$integer, $fraction] = explode($dots > 0 ? '.' : ',', $text);
+        if (str_contains($fraction, ' ') || strlen($fraction) > 2) {
+            return null;
+        }
+
+        return self::compose(self::thousands($integer, ' '), $fraction);
     }
 
     /**
@@ -176,5 +218,45 @@ final class AmountParser
         }
 
         return $fraction === null ? $integer : $integer . '.' . str_pad($fraction, 2, '0');
+    }
+
+    /**
+     * Removes leading and trailing whitespace from SPACES (byte-safe on any input).
+     */
+    private static function trimSpaces(string $text): string
+    {
+        do {
+            $before = $text;
+            foreach (self::SPACES as $space) {
+                if (str_starts_with($text, $space)) {
+                    $text = substr($text, strlen($space));
+                }
+                if (str_ends_with($text, $space)) {
+                    $text = substr($text, 0, -strlen($space));
+                }
+            }
+        } while ($text !== $before);
+
+        return $text;
+    }
+
+    /**
+     * Removes one currency marker (any case) at the start or the end, plus the whitespace
+     * between it and the number. ASCII-only comparison (`strncasecmp` is locale-independent).
+     */
+    private static function stripMarker(string $text, bool $atStart): string
+    {
+        foreach (self::CURRENCY_MARKERS as $marker) {
+            $length = strlen($marker);
+            if (strlen($text) < $length) {
+                continue;
+            }
+            $edge = $atStart ? substr($text, 0, $length) : substr($text, -$length);
+            if (strcasecmp($edge, $marker) === 0) {
+                return self::trimSpaces($atStart ? substr($text, $length) : substr($text, 0, -$length));
+            }
+        }
+
+        return $text;
     }
 }

@@ -18,38 +18,89 @@ use PHPUnit\Framework\TestCase;
  */
 final class AmountParserTest extends TestCase
 {
+    /** Sweep inputs `normalize()` reads (non-null), measured 2026-10-21 after round 2. */
+    private const SWEEP_1_READ = 2_730;
+    private const SWEEP_2_READ = 5_472;
+
     /**
-     * Rule 1: strip `$`, `US$`, `USD` (any case) and spaces.
+     * Rule 1: trim whitespace, then strip one `$`, `US$` or `USD` (any case) at each end.
      *
      * @return iterable<string, array{string, string|null}>
      */
     public static function rule1Stripping(): iterable
     {
         yield 'dollar prefix' => ['$200', '200'];
+        yield 'dollar prefix with a space' => ['$ 200', '200'];
         yield 'dollar suffix' => ['200$', '200'];
         yield 'US$ prefix' => ['US$200', '200'];
+        yield 'US$ prefix with a decimal comma' => ['US$1.000,50', '1000.50'];
         yield 'us$ lowercase' => ['us$ 200', '200'];
         yield 'USD suffix' => ['200 USD', '200'];
         yield 'usd lowercase prefix' => ['usd200', '200'];
         yield 'UsD mixed case' => ['200.50 UsD', '200.50'];
         yield 'symbol and code together' => ['$ 1,000.50 USD', '1000.50'];
+        yield 'markers inside surrounding spaces' => ["  \$200 USD\t", '200'];
+        yield 'no-break space after the marker' => ["\$\u{00A0}200", '200'];
         yield 'surrounding spaces' => ['  200  ', '200'];
         yield 'tab and newline' => ["\t200\n", '200'];
-        yield 'space as thousands' => ['1 000', '1000'];
-        yield 'no-break space' => ["1\u{00A0}000,50", '1000.50'];
-        yield 'narrow no-break space' => ["1\u{202F}000", '1000'];
-        // Other side: only those markers and spaces are stripped.
+        yield 'surrounding no-break spaces' => ["\u{00A0}200\u{202F}", '200'];
+        // Other side: markers only at the ends, once each, spelled without spaces.
+        yield 'dollar in the middle' => ['5$5', null];
+        yield 'USD in the middle' => ['1USD000', null];
+        yield 'USD twice at the start' => ['usdusd5', null];
+        yield 'US$ then $' => ['US$$5', null];
+        yield 'USD then $' => ['USD$5', null];
+        yield '$ then USD' => ['$USD5', null];
+        yield 'dollar twice at the end' => ['5$$', null];
+        yield 'spaced-out USD' => ['U SD5', null];
+        yield 'spaced-out lowercase usd' => ['u s d 5', null];
+        yield 'spaced-out US$' => ['US $200', null];
         yield 'US without $' => ['US 200', null];
         yield 'other currency code' => ['200 EUR', null];
         yield 'euro sign' => ['€200', null];
         yield 'only a dollar sign' => ['$', null];
         yield 'only USD' => ['USD', null];
+        yield 'only markers' => ['$ USD', null];
         yield 'empty' => ['', null];
         yield 'only spaces' => ['   ', null];
     }
 
     /**
-     * Rule 2: anything left except digits, `.` and `,` is unclear.
+     * Inner whitespace: a thousands separator with groups of exactly 3, or unclear.
+     *
+     * @return iterable<string, array{string, string|null}>
+     */
+    public static function innerWhitespace(): iterable
+    {
+        yield 'space as thousands' => ['1 000', '1000'];
+        yield 'spaces as thousands, millions' => ['1 000 000', '1000000'];
+        yield 'space, three-digit first group' => ['250 000', '250000'];
+        yield 'no-break space as thousands' => ["1\u{00A0}000", '1000'];
+        yield 'narrow no-break space as thousands' => ["1\u{202F}000", '1000'];
+        yield 'tab as thousands' => ["1\t000", '1000'];
+        yield 'space thousands, comma decimal' => ['1 000,50', '1000.50'];
+        yield 'space thousands, dot decimal' => ['1 000.50', '1000.50'];
+        yield 'no-break space thousands, comma decimal' => ["1\u{00A0}000,5", '1000.50'];
+        yield 'with markers' => ['$ 1 000,50 USD', '1000.50'];
+        yield 'group of 1 after a space' => ['200 3', null];
+        yield 'group of 2 after a space' => ['2 50', null];
+        yield 'group of 4 after a space' => ['1 0000', null];
+        yield 'space, first group of 4' => ['1000 000', null];
+        yield 'space, first group with a leading zero' => ['0 500', null];
+        yield 'double space' => ['1  000', null];
+        yield 'space and no-break space' => ["1 \u{00A0}000", null];
+        yield 'space then separator' => ['1 ,000', null];
+        yield 'separator then space' => ['1, 000', null];
+        yield 'space and dot thousands' => ['1 000.000', null];
+        yield 'space and comma thousands' => ['1,000 000', null];
+        yield 'space, dot thousands and comma decimal' => ['1 000.000,50', null];
+        yield 'space thousands, three decimals' => ['1 000,505', null];
+        yield 'space inside the decimals' => ['1000,5 0', null];
+        yield 'space before a decimal group' => ['200 ,50', null];
+    }
+
+    /**
+     * Rule 2: anything left except digits, `.`, `,` and inner whitespace is unclear.
      *
      * @return iterable<string, array{string, string|null}>
      */
@@ -116,7 +167,8 @@ final class AmountParserTest extends TestCase
     }
 
     /**
-     * Rule 5: one kind, once: 1–2 digits → decimal; exactly 3 → thousands; else unclear.
+     * Rule 5: one kind, once: 1–2 digits → decimal; exactly 3 after `,` → thousands, after `.`
+     * → unclear (owner decision 2026-10-21); else unclear.
      *
      * @return iterable<string, array{string, string|null}>
      */
@@ -128,8 +180,14 @@ final class AmountParserTest extends TestCase
         yield 'dot, two digits' => ['200.55', '200.55'];
         yield 'zero point five' => ['0,5', '0.50'];
         yield 'comma, three digits' => ['1,000', '1000'];
-        yield 'dot, three digits' => ['1.000', '1000'];
-        yield 'dot, three digits after three' => ['200.505', '200505'];
+        yield 'comma, three digits after three' => ['200,505', '200505'];
+        yield 'dot, three digits' => ['1.000', null];
+        yield 'dot, three digits after three' => ['200.505', null];
+        yield 'dot, one-five-hundred' => ['1.500', null];
+        yield 'dot, zero point five hundred' => ['0.500', null];
+        yield 'dot, three digits with a marker' => ['$1.500', null];
+        yield 'dot repeated stays thousands' => ['1.500.000', '1500000'];
+        yield 'dot thousands in mixed stays' => ['1.500,25', '1500.25'];
         yield 'comma, four digits' => ['1,0000', null];
         yield 'comma, five digits' => ['1,00000', null];
         yield 'thousands with a first group of 4' => ['1234,567', null];
@@ -174,6 +232,7 @@ final class AmountParserTest extends TestCase
     }
 
     #[DataProvider('rule1Stripping')]
+    #[DataProvider('innerWhitespace')]
     #[DataProvider('rule2Characters')]
     #[DataProvider('rule3MixedSeparators')]
     #[DataProvider('rule4RepeatedSeparator')]
@@ -205,7 +264,8 @@ final class AmountParserTest extends TestCase
      */
     public static function unclearTexts(): iterable
     {
-        foreach (['1,2,3', '1e3', 'NaN', '-5', '', '$', '0,500', '1.000,505', str_repeat('9', 1000)] as $text) {
+        foreach (['1,2,3', '1e3', 'NaN', '-5', '', '$', '0,500', '1.000,505', '200.505', '1.500', '200 3', '2 50',
+            '1  000', '5$5', '1USD000', 'U SD5', str_repeat('9', 1000)] as $text) {
             yield var_export(strlen($text) > 20 ? substr($text, 0, 20) . '...' : $text, true) => [$text];
         }
     }
@@ -256,30 +316,113 @@ final class AmountParserTest extends TestCase
         self::assertSame(100_000_000, $reading->amount->cents);
     }
 
-    public function testEveryNormalizedOutputIsCanonicalOrUnclear(): void
+    /**
+     * Sweep 1: every string of length 1–6 over digits and both separators.
+     */
+    public function testSweepOverDigitsAndSeparatorsReadsTheTypedValue(): void
     {
-        // A deterministic sweep over short strings of digits and separators: the output is
-        // always null or digits without leading zeros, optionally `.` and exactly two decimals.
-        $alphabet = ['0', '1', '5', '.', ','];
-        $count = 0;
+        [$total, $read] = self::sweep(['0', '1', '5', '.', ','], 6);
+
+        self::assertSame(19_530, $total);
+        // Pinned so a rule change that widens or narrows what is read shows up here.
+        self::assertSame(self::SWEEP_1_READ, $read);
+    }
+
+    /**
+     * Sweep 2: every sequence of 1–5 tokens over digits, separators, whitespace and currency
+     * markers (in two cases, plus a stray letter).
+     */
+    public function testSweepWithWhitespaceAndMarkersReadsTheTypedValue(): void
+    {
+        [$total, $read] = self::sweep(['0', '5', '.', ',', ' ', "\u{00A0}", '$', 'USD', 'us$', 'u'], 5);
+
+        self::assertSame(111_110, $total);
+        self::assertSame(self::SWEEP_2_READ, $read);
+    }
+
+    /**
+     * Runs normalize() on every token sequence of length 1..$maxTokens and checks each non-null
+     * result against the typed text.
+     *
+     * @param list<string> $tokens
+     *
+     * @return array{int, int} [inputs swept, inputs read]
+     */
+    private static function sweep(array $tokens, int $maxTokens): array
+    {
+        $total = 0;
+        $read = 0;
         $strings = [''];
-        for ($length = 1; $length <= 6; $length++) {
+        for ($length = 1; $length <= $maxTokens; $length++) {
             $next = [];
             foreach ($strings as $prefix) {
-                foreach ($alphabet as $char) {
-                    $next[] = $prefix . $char;
+                foreach ($tokens as $token) {
+                    $next[] = $prefix . $token;
                 }
             }
             $strings = $next;
             foreach ($strings as $text) {
+                $total++;
                 $result = AmountParser::normalize($text);
-                $count++;
                 if ($result !== null) {
-                    self::assertMatchesRegularExpression('/^(0|[1-9][0-9]*)(\.[0-9]{2})?$/D', $result, $text);
+                    $read++;
+                    self::assertReadsTheTypedValue($text, $result);
                 }
             }
         }
-        self::assertSame(19_530, $count);
+
+        return [$total, $read];
+    }
+
+    /**
+     * The oracle: independent of the parser's code path, a reading must
+     * - have the canonical shape (no leading zeros, optional `.` and two decimals);
+     * - keep every typed digit: the integer part equals the typed digits before the decimal
+     *   separator with leading zeros removed, and the fraction equals the typed decimals padded
+     *   to 2;
+     * - take decimals only after `.` or `,`, with 1–2 digits;
+     * - group the integer digits as thousands (first group 1–3 digits not starting with `0`,
+     *   then groups of 3) whenever they were typed in more than one group;
+     * - never read a single `.` as thousands;
+     * - have currency markers only at the ends, once each.
+     */
+    private static function assertReadsTheTypedValue(string $text, string $result): void
+    {
+        $label = var_export($text, true) . ' -> ' . $result;
+        self::assertMatchesRegularExpression('/^(0|[1-9][0-9]*)(\.[0-9]{2})?$/D', $result, $label);
+
+        preg_match_all('/[0-9]+/', $text, $match);
+        $groups = $match[0];
+        [$integer, $fraction] = str_contains($result, '.') ? explode('.', $result) : [$result, null];
+
+        if ($fraction !== null) {
+            $typed = (string) array_pop($groups);
+            self::assertContains(strlen($typed), [1, 2], $label);
+            self::assertSame(str_pad($typed, 2, '0'), $fraction, $label);
+            self::assertMatchesRegularExpression('/[.,][0-9]{1,2}[^0-9]*$/D', $text, $label);
+        }
+
+        self::assertNotEmpty($groups, $label);
+        $digits = ltrim(implode('', $groups), '0');
+        self::assertSame($digits === '' ? '0' : $digits, $integer, $label);
+
+        if (count($groups) > 1) {
+            self::assertMatchesRegularExpression('/^[1-9][0-9]{0,2}$/D', $groups[0], $label);
+            foreach (array_slice($groups, 1) as $group) {
+                self::assertSame(3, strlen($group), $label);
+            }
+        }
+
+        if ($fraction === null) {
+            self::assertFalse(
+                substr_count($text, '.') === 1 && !str_contains($text, ','),
+                "a single dot read as thousands: {$label}",
+            );
+        }
+
+        $core = (string) preg_replace('/^[\s\x{00A0}]*(?:US\$|USD|\$)?[\s\x{00A0}]*/iu', '', $text);
+        $core = (string) preg_replace('/[\s\x{00A0}]*(?:US\$|USD|\$)?[\s\x{00A0}]*$/iuD', '', $core);
+        self::assertMatchesRegularExpression('/^[0-9.,\s\x{00A0}]+$/uD', $core, "marker inside: {$label}");
     }
 
     private static function parser(): AmountParser

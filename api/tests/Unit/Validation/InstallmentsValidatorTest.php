@@ -23,6 +23,11 @@ final class InstallmentsValidatorTest extends TestCase
         yield 'installments.max' => ['60', 60];
         yield 'surrounding spaces' => ['  3 ', 3];
         yield 'tab and newline' => ["\t12\n", 12];
+        yield 'leading zero' => ['03', 3];
+        yield 'two leading zeros' => ['007', 7];
+        yield 'leading zero on max' => ['060', 60];
+        yield 'many leading zeros' => [str_repeat('0', 40) . '12', 12];
+        yield 'leading zero and spaces' => [' 03 ', 3];
     }
 
     #[DataProvider('validTexts')]
@@ -48,8 +53,9 @@ final class InstallmentsValidatorTest extends TestCase
         yield 'decimal comma' => ['3,5', $format];
         yield 'whole decimal' => ['3.0', $format];
         yield 'exponent' => ['1e1', $format];
-        yield 'leading zero' => ['03', $format];
-        yield 'zeros' => ['00', $format];
+        yield 'zeros' => ['00', $range];
+        yield 'leading zero over max' => ['061', $range];
+        yield 'many zeros' => [str_repeat('0', 40), $range];
         yield 'empty' => ['', $format];
         yield 'only spaces' => ['   ', $format];
         yield 'inner space' => ['1 2', $format];
@@ -73,12 +79,30 @@ final class InstallmentsValidatorTest extends TestCase
         }
     }
 
-    public function testQueryValuesAreNotTrimmed(): void
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function invalidQueries(): iterable
+    {
+        yield 'leading space' => [' 3', ValidationFailed::REASON_FORMAT];
+        yield 'trailing space' => ['3 ', ValidationFailed::REASON_FORMAT];
+        yield 'leading zero' => ['03', ValidationFailed::REASON_FORMAT];
+        yield 'zeros' => ['00', ValidationFailed::REASON_FORMAT];
+        yield 'zero' => ['0', ValidationFailed::REASON_OUT_OF_RANGE];
+        yield 'one over max' => ['61', ValidationFailed::REASON_OUT_OF_RANGE];
+    }
+
+    #[DataProvider('invalidQueries')]
+    public function testQueryValuesAreStrict(string $raw, string $reason): void
     {
         self::assertSame(3, self::validator()->fromQuery('3'));
 
-        $this->expectException(ValidationFailed::class);
-        self::validator()->fromQuery(' 3');
+        try {
+            self::validator()->fromQuery($raw);
+            self::fail('expected ValidationFailed');
+        } catch (ValidationFailed $error) {
+            self::assertSame($reason, $error->reason);
+        }
     }
 
     public function testIntegersAreRangeChecked(): void

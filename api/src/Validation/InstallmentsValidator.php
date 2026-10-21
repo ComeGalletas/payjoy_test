@@ -9,9 +9,11 @@ use FxInstallments\Config\ConfigRepository;
 /**
  * The installments validator (docs/PLAN.md §3): an integer from 1 to `installments.max`.
  *
- * Text must be ASCII digits with no sign, no decimal point, no exponent and no leading zero
- * (`03` is rejected, like `0`, `-1`, `3.5` and `1e1`). `fromText()` (bot) trims surrounding
- * spaces first; `fromQuery()` (`/convert`) trims nothing.
+ * Text must be ASCII digits only: no sign, no decimal point, no exponent (`-1`, `3.5` and
+ * `1e1` are rejected).
+ * - `fromText()` (bot) trims surrounding spaces and accepts leading zeros (`03` → 3,
+ *   `007` → 7; `00` is 0, out of range), per the 2026-10-21 owner decision.
+ * - `fromQuery()` (`/convert`) trims nothing and rejects leading zeros (`03`).
  *
  * Not checked here: "at least one minor unit per installment" needs the rate and the
  * currency's minor units (P1-05). Empty input and the "Just one payment" button mean
@@ -39,17 +41,23 @@ final class InstallmentsValidator
     }
 
     /**
-     * Bot input: surrounding spaces trimmed, then digits only.
+     * Bot input: surrounding spaces trimmed, then digits only; leading zeros allowed.
      *
      * @throws ValidationFailed VALIDATION_INSTALLMENTS, reason format or out_of_range
      */
     public function fromText(string $text): int
     {
-        return $this->fromQuery(trim($text, self::TRIM));
+        $digits = trim($text, self::TRIM);
+        if (preg_match('/^[0-9]+$/D', $digits) !== 1) {
+            throw ValidationFailed::installments(ValidationFailed::REASON_FORMAT);
+        }
+        $digits = ltrim($digits, '0');
+
+        return $this->fromQuery($digits === '' ? '0' : $digits);
     }
 
     /**
-     * `/convert` input: the raw string, digits only, nothing trimmed.
+     * `/convert` input: the raw string, digits only, no leading zero, nothing trimmed.
      *
      * @throws ValidationFailed VALIDATION_INSTALLMENTS, reason format or out_of_range
      */

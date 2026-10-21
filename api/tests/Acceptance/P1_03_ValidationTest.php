@@ -28,6 +28,13 @@ use PHPUnit\Framework\TestCase;
  * so they record no country, following the owner rule (CONTEXT.md "currency-country map": a
  * country is recorded only when the user typed one). The PLAN line says "with country Brazil"
  * for all three; that discrepancy is reported for the lead to fix.
+ *
+ * Round 2 (owner decisions 2026-10-21 and the judge's wrong-number findings):
+ * - the strict validator rejects untrimmed input (` 5`, `5 `);
+ * - in the bot, `200.505` (single `.` with 3 digits), `200 3` (inner space not grouping
+ *   thousands) and `5$5` (marker inside the number) are unclear; `1 000` → `1000`;
+ * - ambiguous currency text (`peso`, `$`) is unclear;
+ * - `03` installments → 3 in the bot.
  */
 final class P1_03_ValidationTest extends TestCase
 {
@@ -36,8 +43,8 @@ final class P1_03_ValidationTest extends TestCase
      */
     public static function rejectedAmounts(): iterable
     {
-        foreach (['1e3', 'NaN', '-5', '0', '200.505'] as $raw) {
-            yield $raw => [$raw];
+        foreach (['1e3', 'NaN', '-5', '0', '200.505', ' 5', '5 '] as $raw) {
+            yield var_export($raw, true) => [$raw];
         }
     }
 
@@ -63,6 +70,7 @@ final class P1_03_ValidationTest extends TestCase
         yield '200,5' => ['200,5', '200.50'];
         yield '1.000,50' => ['1.000,50', '1000.50'];
         yield '1,000' => ['1,000', '1000'];
+        yield '1 000' => ['1 000', '1000'];
     }
 
     #[DataProvider('parsedAmounts')]
@@ -76,12 +84,24 @@ final class P1_03_ValidationTest extends TestCase
         self::assertEquals((new AmountValidator(new ConfigRepository()))->validate($canonical), $reading->amount);
     }
 
-    public function testAmountParserFindsOneTwoThreeUnclear(): void
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function unclearAmounts(): iterable
     {
-        self::assertNull(AmountParser::normalize('1,2,3'));
+        foreach (['1,2,3', '200.505', '200 3', '5$5'] as $text) {
+            yield $text => [$text];
+        }
+    }
 
-        $reading = self::amountParser()->read('1,2,3');
+    #[DataProvider('unclearAmounts')]
+    public function testAmountParserFindsUnclearText(string $text): void
+    {
+        self::assertNull(AmountParser::normalize($text));
+
+        $reading = self::amountParser()->read($text);
         self::assertSame(Outcome::Unclear, $reading->outcome);
+        self::assertNull($reading->amount);
         self::assertNotNull($reading->error);
         self::assertSame('VALIDATION_AMOUNT', $reading->error->errorCode);
         self::assertSame('unclear', $reading->error->reason);
@@ -108,6 +128,36 @@ final class P1_03_ValidationTest extends TestCase
         self::assertSame(Outcome::Ok, $resolution->outcome);
         self::assertSame($code, $resolution->currency);
         self::assertSame($country, $resolution->country);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function ambiguousCurrencies(): iterable
+    {
+        yield 'peso' => ['peso'];
+        yield '$' => ['$'];
+    }
+
+    #[DataProvider('ambiguousCurrencies')]
+    public function testAmbiguousCurrencyTextIsUnclear(string $text): void
+    {
+        $resolver = new CurrencyResolver(new CurrencyValidator(new InMemoryCurrencyAllowList()));
+
+        $resolution = $resolver->resolve($text);
+
+        self::assertSame(Outcome::Unclear, $resolution->outcome);
+        self::assertNull($resolution->currency);
+        self::assertNotNull($resolution->error);
+        self::assertSame('VALIDATION_CURRENCY', $resolution->error->errorCode);
+        self::assertSame('ambiguous', $resolution->error->reason);
+    }
+
+    public function testLeadingZeroInstallmentsAreReadInTheBot(): void
+    {
+        $validator = new InstallmentsValidator(new ConfigRepository());
+
+        self::assertSame(3, $validator->fromText('03'));
     }
 
     public function testSixtyOneInstallmentsAreRejected(): void
