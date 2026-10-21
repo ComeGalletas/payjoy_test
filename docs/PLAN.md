@@ -131,8 +131,10 @@ Reasons and consequences are in the ADR named in each row.
   unknown code uses 2 and records `meta.minor_units_default=true`.
 - `converted = amount_usd × rate`, a PHP `float`, never rounded in the API. Storage uses integer
   fixed units instead of floats (§5, ADR 0017). Set `ini_set('serialize_precision', '-1')` at
-  bootstrap. Magnitudes stay far below 2^53 (cap
-  1,000,000 × the largest rates × 10^4), so integer minor units are exact.
+  bootstrap. Integer minor units are exact while `total_m < 2^53` (≈ 9.0 × 10^15). The largest
+  real case on the 2026-10-21 table is 1,000,000 USD in IRR (rate ≈ 1,731,936.86, 2 minor units):
+  ≈ 1.73 × 10^14, about 50× below the limit. P1-05 must still check `total_m < 2^53` and reject an
+  amount that would exceed it (`VALIDATION_AMOUNT`), since rates can grow.
 - `InstallmentCalculator::display(converted, n, currency)`:
   - `e = MinorUnits::of(currency)`, `scale = 10^e`
   - `total_m = (int) round(round(converted, e) × scale)` (half away from zero; the inner `round`
@@ -256,7 +258,8 @@ Phase 1 tables:
   `amount_usd_cents` is an exact integer. `country` is set only when the user typed a country
   (e.g. "Brazil"); a bare code like `EUR` leaves it NULL.
 - `rate_cache(currency, rate_scaled, last_update_unix, next_update_unix, fetched_at)` — one row per
-  code, all rows written by one `/latest/USD` refresh; `rate_scaled = round(rate × 10^10)`.
+  code, all rows written by one `/latest/USD` refresh; `rate_scaled = round(rate × 10^10)`, built
+  from the rate's decimal text with integer arithmetic (ADR 0017 amendment).
 - `sessions(session_id, channel, step, status 'open'|'completed'|'abandoned', collected, retries,
   created_at, updated_at, expires_at)`
 - `app_state(key, value, updated_at)` — breaker state, cached quota.
@@ -460,12 +463,19 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *Acceptance:* `tests/Acceptance/P1_02_MigrateTest.php` — migrating an empty file creates all
   seven tables; running it twice is a no-op; `--prune` removes only expired rows in each table; no
   column has a floating-point type.
+  Decisions recorded in ADRs 0019 (schema-apply policy) and 0020 (migration versioning), and in the
+  ADR 0016 and 0017 amendments.
+  *DONE 2026-10-21 (PR #8, two rounds). The task that adds migration 4 must also replace tests that
+  hard-code version 3 and "seven tables" with `Migrations::latestVersion()` and a dynamic count,
+  and make the pin test fail when a migration ships without a pin.*
 - **P1-03** `Validation/`: strict amount validator, `AmountParser` (§3c), currency validator with an
   injected allow-list + `CurrencyResolver` (synonyms, countries), installments validator.
   *Acceptance:* `tests/Acceptance/P1_03_ValidationTest.php` — table of inputs: `1e3`, `NaN`, `-5`,
   `0`, `200.505` rejected; `200,5`→`200.50`, `1.000,50`→`1000.50`, `1,000`→`1000`, `1,2,3`→unclear;
   `brazil`, `reais`, `R$`→`BRL` with country `Brazil`; `eur`→`EUR` with no country; `61`
   installments rejected.
+  Also: decide whether leading zeros (`0000000.5`) are canonical; the validator enforces > 0 and
+  ≤ `amount.max`, which `Convert/UsdCents` leaves to it.
 - **P1-04** `Rates/`: `ExchangeRateClient` (`/latest/USD`, `/codes`, `/quota`), `RateCache`,
   `UpstreamBreaker`, `FallbackCurrencies`, error mapping, exception scrubbing, `bin/upstream.php
   reset`, `upstream.call` events.
@@ -473,13 +483,19 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   refresh window make one upstream call; refresh failure with a cached table serves `stale: true`;
   `quota-reached` blocks calls until next month; every error path's output contains no key.
   Also: store rates as `rate_scaled` (ADR 0017); extend the no-network guard to curl and Guzzle
-  (ADR 0018).
+  (ADR 0018). Pass upstream's decimal text to `ScaledRate::fromDecimalString` where available; a
+  rate `ScaledRate` rejects drops that one currency (logged), not the whole refresh. Fix the
+  `ScaledRate` docblock: upstream numbers round-trip exactly for 15 or fewer significant digits,
+  not 17.
 - **P1-11** Request log and IP blocking (ADR 0016). Runs after P1-04 and before P1-05, so
   `/convert` is protected from its first release.
   - A request-log step that writes one `requests` row for every request, including blocked ones.
   - A block check in the Kernel, before routing: 403 `IP_BLOCKED`, `Connection: close`, no handler,
     and no `error` event (the `requests` row with `blocked = 1` is the only write).
-  - Automatic blocking from the `block.*` thresholds; `bin/ip.php block|unblock|list`.
+  - Automatic blocking from the `block.*` thresholds; `bin/ip.php block|unblock|list`. Block rows
+    follow the ADR 0016 amendment: active while `now < expires_at`; select-then-write in one
+    transaction; a manual block replaces an automatic one, never the reverse while active; a new
+    automatic block on an active automatic one extends it to the later expiry.
   - `IP_BLOCKED` added to `ErrorCodes`; `requests` and expired `ip_blocks` pruned (P1-02 tables).
   *Acceptance:* `tests/Acceptance/P1_11_RequestLogTest.php` — every request, including 404s, 429s
   and blocked ones, writes exactly one `requests` row with the client IP (the trusted-proxy XFF hop
@@ -494,7 +510,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   mocked rate 5.2291 → display `1,045.82` / `348.60` / `348.62`, `even: false`;
   `amount=1&cy=USD&installments=60` passes and `amount=0.50&cy=USD&installments=60` returns
   `VALIDATION_INSTALLMENTS`; JPY shows no decimals; KWD shows three; `amount=1e3` →
-  `VALIDATION_AMOUNT`.
+  `VALIDATION_AMOUNT`; an injected rate that makes the minor-unit total reach 2^53 →
+  `VALIDATION_AMOUNT` (checked in `ConvertService`, before `display()`; §3a).
 - **P1-06** `Flow/`: YAML loader, `FlowEngine` (§9 rules), `SessionStore` (server ids, TTL, expiry
   sweep), `POST /bot/message`, `bin/bot.php`.
   *Acceptance:* `tests/Acceptance/P1_06_FlowTest.php` — a scripted CLI session (`200` → `brazil` →
@@ -513,9 +530,16 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
   step and channel match; days split on `reports.timezone`; a currency named `=CMD()` is escaped in
   CSV; public `/health` shows only `status`.
+  Also: decide what `/health` does when the database is behind or can't be opened (ADR 0019): treat
+  the 500 as "unhealthy", or route `/health` before the database opens.
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
-  IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup),
-  `docs/REPORTS.md`.
+  IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
+  the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
+  pull; a 500 with `SchemaOutOfDate` in the log means "run migrate"; one migrate at a time; back up
+  `api/var/app.db` first; a daily `--prune` job; `seed_demo` runs after migrate and writes cents;
+  what `migrate.php` prints and how to repair on `SchemaCorrupt`; that `ScaledRate::fromRate`
+  needs `ini_set`, which must not be in `disable_functions`), `docs/REPORTS.md`. Add an acceptance
+  test that the CLI exits 1 on a corrupt schema version.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
@@ -567,7 +591,11 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 
 - **L-01** `bin/export-typebot.php` — starter Typebot JSON from the YAML.
 - **L-02** Telegram / WhatsApp webhook channel for the static flow.
-- **L-03** Postgres metrics: `Dialect`, `db/schema.pgsql.sql`, `PostgresTest` (§8).
+- **L-03** Postgres metrics: `Dialect`, `db/schema.pgsql.sql`, `PostgresTest` (§8). Translate
+  dialect when applying migrations, never by editing shipped ones (ADR 0020); the rebuilt `events`
+  table's primary-key constraint name and `INTEGER PRIMARY KEY` need translating. Test the `42P01`
+  (missing `app_state`) branch of `Migrator::currentVersion()`, and treat a stored version `"0"`
+  as corrupt once `app_state` exists.
 - **L-04** Tooling backlog from the P0-06 review:
   - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
   - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
@@ -579,6 +607,13 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   - Compare `TRUSTED_PROXY` and `REMOTE_ADDR` as parsed addresses (`inet_pton`), so two spellings
     of the same IPv6 address match.
   - Optionally compare admin tokens through HMACs, so the comparison doesn't reveal token length.
+  - `Metrics` lets a bool through in a text column; reject it.
+  - `RateLimiter::isUniqueViolation` treats any SQLSTATE 23000 (CHECK, NOT NULL) as a key clash,
+    costing one wasted retry; match the unique-violation error only.
+  - `Database::connect` sets `PRAGMA journal_mode=WAL` before the schema check, so opening an empty
+    file writes to it (no tables are created); check the schema before changing the journal mode.
+  - The `ScaledRate` sweep calls `mt_srand` with a fixed seed; reseed in `tearDown` so later tests
+    don't inherit the RNG state.
 
 ## 11. Working agreements for the agent
 

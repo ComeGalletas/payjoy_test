@@ -7,7 +7,7 @@ name, add it here in the same commit that introduces it.
 
 | Term | Meaning | Not to be confused with |
 |---|---|---|
-| **amount** / `amount_usd` | The **total** price the customer paid, in USD. Max 2 decimals, > 0, ≤ `amount.max`. On `/convert` only the strict form `^\d{1,7}(\.\d{1,2})?$` is accepted. | A per-installment amount. The API never takes one. |
+| **amount** / `amount_usd` | The **total** price the customer paid, in USD. Max 2 decimals, > 0, ≤ `amount.max`. On `/convert` only the strict form `^\d{1,7}(\.\d{1,2})?$` is accepted. Stored as `amount_usd_cents`. | A per-installment amount. The API never takes one. |
 | **canonical amount** | The strict string form of an amount (`1000.50`). `AmountParser` produces it from bot input. | What the user typed (`1.000,50`). |
 | **currency** / `cy` | Target ISO 4217 code (`BRL`, `COP`…), uppercase, on the allow-list. | A country. Countries map to a currency via the currency-country map. |
 | **minor unit** | The smallest unit of a currency per ISO 4217 (`MinorUnits`): JPY 0 decimals, BRL 2, KWD 3, CLF 4. All splitting is done in integer minor units. | Always "cents". |
@@ -73,6 +73,9 @@ name, add it here in the same commit that introduces it.
 | **event** | One append-only row in `events`, written only through `Metrics`. |
 | **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query, exception class. |
 | **request log** | The `requests` table: one row per incoming request with the raw client IP, kept `requests.retention_days` (ADR 0016). |
+| **migration** / **migration list** | One numbered schema change in the append-only list in `Db/Migrations`; run with `bin/migrate.php` (ADR 0020). |
+| **schema version** | `app_state.schema_version`, the last migration applied; the app refuses a database behind the code (ADR 0019). |
+| **prune** / **retention** | `bin/migrate.php --prune` deleting expired rows per the ADR 0016 amendment; `events` are kept. |
 | **funnel** | Sessions per step and channel: started → each step → completed / abandoned. |
 | **report** | Output of `ReportQuery`, via `/reports` or `bin/report.php`; days split on `reports.timezone`. |
 | **rollup** | Phase 3: one `daily_rollups` row per day, built by `bin/rollup.php`. |

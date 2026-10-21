@@ -1,6 +1,6 @@
 # 0016 — Request log and IP blocking
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-10-21: retention boundaries and block rows, see "Amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -52,3 +52,21 @@ abusive IPs must be cut off instead.
 - New tables, an error code, five config keys, a bin script and a task (P1-11), scheduled before
   P1-05 so `/convert` is protected from its first release.
 - Block thresholds are first guesses and need tuning against real traffic.
+
+## Amendment (2026-10-21): retention boundaries and block rows
+
+Decided while building P1-02.
+
+- **Boundaries.** "Older than" is strict. `--prune` deletes `rate_limits` with
+  `window_start < now − 1 day`, closed (`completed`/`abandoned`) sessions with
+  `updated_at < now − 30 days`, `requests` with `ts < now − requests.retention_days`, and
+  `ip_blocks` with `expires_at <= now`. It keeps `events`, open sessions and manual blocks without
+  an expiry. The 1-day and 30-day windows are constants; `requests.retention_days` is config.
+- **When a block is active.** A block is active while `now < expires_at` (or forever when
+  `expires_at` is NULL, manual only). P1-11's block check and `--prune` use the same contract.
+- **One row per IP.** `ip_blocks.ip` is the primary key, so P1-11 writes blocks as select-then-write
+  in one transaction (ADR 0010): re-blocking an IP replaces its expired row; a manual block
+  replaces an automatic one; an automatic block never replaces an active manual block; a new
+  automatic block on an active automatic one extends its `expires_at` to the later of the two
+  (owner-confirmed). Block history lives in `requests.blocked`.
+- `--prune` refuses (exit 1) a database whose schema is behind the code.

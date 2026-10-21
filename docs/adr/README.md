@@ -23,9 +23,11 @@ new ADR, and the affected sentence in its body points to the new ADR.
 | [0013](0013-amount-input-parsing.md) | Amount input: strict API, lenient bot | Accepted |
 | [0014](0014-phase1-scope-cut.md) | Phase 1 scope cut | Accepted |
 | [0015](0015-co-lead-dual-approval.md) | Co-lead dual approval; builder, tester and judge per task | Accepted |
-| [0016](0016-request-log-and-ip-blocking.md) | Request log and IP blocking | Accepted |
-| [0017](0017-integer-fixed-unit-storage.md) | Store money and rates as integers in fixed units | Accepted |
+| [0016](0016-request-log-and-ip-blocking.md) | Request log and IP blocking | Accepted (amended 2026-10-21) |
+| [0017](0017-integer-fixed-unit-storage.md) | Store money and rates as integers in fixed units | Accepted (amended 2026-10-21) |
 | [0018](0018-test-network-isolation.md) | Keeping tests off the network | Accepted |
+| [0019](0019-schema-apply-policy.md) | Migrate explicitly; the app fails closed on an old schema | Accepted |
+| [0020](0020-migration-versioning.md) | Append-only migration list; `schema.sql` is generated | Accepted |
 
 ## Template
 
