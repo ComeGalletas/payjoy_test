@@ -4,6 +4,42 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — P1-03 Validation and AmountParser (PR #10, head 49b98c1)
+
+- PR #9 (P1-02 close-out) merged by the owner as `61e5774`.
+- **Round 1** (`2730787`). Builder: DONE_WITH_CONCERNS; strict `AmountValidator`, bot `AmountParser`
+  (§3c, no floats), `CurrencyValidator` with an injected `CurrencyAllowList`, `CurrencyResolver`
+  (synonyms, currency-country map, ambiguous list), `InstallmentsValidator`. Unit+Acceptance
+  318 → 640, guards 80. Tester: PASS (independent §3c reference over 360k strings, 0 builder bugs).
+  Judge: APPROVE WITH NITS, but found three paths where the bot reads a different number:
+  `200.505` → 200,505 USD, `200 3` → 2003, `5$5` → 55.
+- Owner decisions: a single `.` + 3 digits is unclear in the bot; bot installments accept leading
+  zeros; send back for round 2; widen the GR-030 exception to Read, Grep and Glob.
+- **Round 2** (`91d0541`): markers only at the ends, inner spaces only as thousands, value-checking
+  sweeps; 713 tests. Tester PASS (310k strings), judge APPROVE WITH NITS; both found tab, CR and LF
+  still acting as inner thousands separators (`"200\n300"` → 200300).
+- Owner decisions: quick round 3; `,` + 3 digits stays thousands (`1,234`, `200,505`).
+- **Round 3** (`49b98c1`): only space, NBSP and U+202F inside a number; shared edge-trim set for
+  installments; 746 tests (25 in the P1-03 acceptance file), sweep 2 re-pinned at 402,233 inputs.
+  Tester PASS (310k strings, 0 builder bugs), judge APPROVE (no remaining wrong-number path). CI
+  `check` pass. Co-leads: both approved.
+- Merged at the reviewed head as `abb7497` by ComeGalletas at 15:39:26 UTC, about a minute before
+  the leads' approval comment was posted (15:40:32 UTC) and before the lead's merge command ran.
+- **Process.** Round 1: two worktree-guard blocks. The first was handled by its stated remedy
+  once in Bash; for the second, the builder did the read-only check with the Grep tool. That broke
+  the letter of the rule at the time (it covered only Write and Edit); it was harmless and
+  disclosed, and the owner then widened the rule to Read, Grep and Glob, never against a guarded
+  target. Rounds 2 and 3: no blocks.
+- Lead docs: ADR 0013 amendment (nine behaviour changes vs §3c), §3c pointer, currency-step
+  `clarify` text, the P1-03 acceptance line fixed (`reais`/`R$` record no country), follow-ups in
+  P1-04, P1-06 and L-04, CONTEXT terms, and the GR-030 wording in `CLAUDE.md` and
+  `docs/GUARDRAILS.md` (owner-ratified exceptions).
+- PR #11 review: tester PASS (all nine amendment items true against the code); judge CHANGES
+  NEEDED (the amendment's Context overclaimed owner decisions and "only unclear"; fixed). Owner
+  decisions: the guarded-target exclusion covers every tool, not only Read/Grep/Glob; builder PRs
+  are merged by the lead after the approval comment is posted, never by the owner on GitHub
+  (ADR 0015 amendment); the owner still merges the lead's docs PRs.
+
 ## 2026-10-21 — P1-02 Schema and migrations (PR #8, head 2052406)
 
 - **Round 1** (`152b277`). Builder: DONE_WITH_CONCERNS; seven tables with integer and text columns

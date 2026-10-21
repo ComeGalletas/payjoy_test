@@ -37,7 +37,8 @@ name, add it here in the same commit that introduces it.
 | **quota** | The free-tier monthly request budget (1,500), read from upstream `/quota` for the admin health view. |
 | **allow-list** | Currency codes in the latest stored rate table. Input not on it never reaches upstream. |
 | **fallback currency list** | Static ISO code list (`FallbackCurrencies`) used to validate codes when the cache is empty. |
-| **synonym table** | Static map from names, country names and symbols (`Brazil`, `reais`, `R$`) to a currency code. |
+| **synonym table** | Static map from currency names and symbols, in English and Spanish (`reais`, `R$`, `euro`), to a currency code (`CurrencySynonyms`). Country names live in the currency-country map, except countries with more than one currency (`Panama`), which are on the ambiguous list. |
+| **ambiguous currency text** | Text that several currencies share (`$`, `peso`, `dollar`, `libra`); always unclear, never guessed. |
 | **currency-country map** | PHP array (`CurrencyCountryMap`) linking country names to currencies. A country is recorded only when the user typed one. |
 | **admin token** | `ADMIN_TOKEN` from `.env`, sent only as `Authorization: Bearer`; unset means all admin requests are refused. |
 | **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` equals `REMOTE_ADDR`. |
@@ -59,7 +60,10 @@ name, add it here in the same commit that introduces it.
 | **flow engine** | `Flow/FlowEngine`, the state machine that runs a flow. |
 | **session** | One conversation, with a server-issued `session_id`, stored in `sessions` with a TTL and a status (`open`, `completed`, `abandoned`). |
 | **retry** | A re-ask after invalid input. After `bot.max_retries` the session is abandoned. |
-| **clarification** | A retry asking the user to retype an amount `AmountParser` couldn't read unambiguously. |
+| **clarification** | A retry asking the user to retype an amount `AmountParser` couldn't read unambiguously, or a currency answer that was ambiguous. |
+| **ok / unclear / invalid** | The three outcomes of reading bot input (`Validation\Outcome`): read; couldn't be read unambiguously (ask again); rejected — out of range, not allowed, unknown or malformed. |
+| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`. Currency: `format`, `not_allowed`, `unknown`, `ambiguous`. Installments: `format`, `out_of_range`. |
+| **folding** | `TextNormalizer`: case-insensitive comparison of user text that also removes precomposed Latin accents (`México` = `mexico`), independent of locale. |
 | **completed session** | Reached the `result` step and showed a result. |
 | **abandoned session** | Ended by max retries (`BOT_MAX_RETRIES`), expiry (`BOT_SESSION_EXPIRED`) or an upstream error; the event records the step. |
 | **channel** | Where a session runs: `static` (built-in widget), `cli`, `typebot`. |

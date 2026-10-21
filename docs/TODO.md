@@ -5,7 +5,7 @@ The first unchecked item is the current work. From Phase 1 on, the lead ticks an
 is merged and adds its end status.
 
 **Current phase:** Phase 1 — Deterministic MVP
-**Next item:** P1-03
+**Next item:** P1-04
 
 ## Phase 0 — Pre-work
 
@@ -20,7 +20,7 @@ is merged and adds its end status.
 
 - [x] P1-01 Foundation — DONE (2026-10-20; PR #6)
 - [x] P1-02 Schema and migrations (all seven tables, integer storage per ADR 0017) — DONE (2026-10-21; PR #8)
-- [ ] P1-03 Validation and `AmountParser`
+- [x] P1-03 Validation and `AmountParser` — DONE (2026-10-21; PR #10)
 - [ ] P1-04 Rates: client, cache, breaker
 - [ ] P1-11 Request log and IP blocking (runs before P1-05)
 - [ ] P1-05 Convert and `GET /convert`

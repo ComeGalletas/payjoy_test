@@ -186,6 +186,10 @@ Reasons and consequences are in the ADR named in each row.
 
 ### 3c. Amount input in the bot (`Validation/AmountParser`)
 
+> **Refined in P1-03: the ADR 0013 amendment is authoritative.** It changes rules 1–5 below and
+> the "canonical or unclear" output: markers only at the ends; inner spaces only as thousands; a
+> single `.` + 3 digits is unclear; a first-group rule; more than 7 digits is invalid (`over_max`).
+
 The bot speaks English, but users may type either separator. `AmountParser` returns a canonical
 string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
 
@@ -203,6 +207,11 @@ string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
 200.50 or 1.000,50."). This counts as a retry and records `bot.step` invalid with
 `VALIDATION_AMOUNT` and `meta.reason=unclear`. After `bot.max_retries` the session is abandoned.
 `/convert` does not use `AmountParser`; it accepts only the strict form.
+
+**Summary of the ADR 0013 amendment:** markers only at the ends; only space, NBSP and U+202F
+inside a number, as thousands in groups of 3; a single `.` followed by exactly 3 digits is unclear
+while a single `,` followed by 3 digits is thousands; the first thousands group is 1–3 digits with
+no leading `0`; more than 64 bytes is unclear; more than 7 integer digits is invalid (`over_max`).
 
 ## 4. Repository structure (Phase 1)
 
@@ -362,6 +371,7 @@ steps:
     expecting: currency
     buttons: [BRL, COP, MXN, EUR]
     retry: "I don't know that currency. Try a code like BRL or a country like Brazil."
+    clarify: "Several currencies use that name or symbol. Please type the currency code, like MXN or COP."
   - id: installments
     ask: "How many monthly installments? (default 1)"
     expecting: installments
@@ -472,10 +482,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   injected allow-list + `CurrencyResolver` (synonyms, countries), installments validator.
   *Acceptance:* `tests/Acceptance/P1_03_ValidationTest.php` — table of inputs: `1e3`, `NaN`, `-5`,
   `0`, `200.505` rejected; `200,5`→`200.50`, `1.000,50`→`1000.50`, `1,000`→`1000`, `1,2,3`→unclear;
-  `brazil`, `reais`, `R$`→`BRL` with country `Brazil`; `eur`→`EUR` with no country; `61`
-  installments rejected.
-  Also: decide whether leading zeros (`0000000.5`) are canonical; the validator enforces > 0 and
-  ≤ `amount.max`, which `Convert/UsdCents` leaves to it.
+  `brazil`→`BRL` with country `Brazil`; `reais`, `R$`→`BRL` with no country (a country is recorded
+  only when one was typed); `eur`→`EUR` with no country; `61` installments rejected. (`200.505` is
+  rejected by the strict validator; in the bot it is unclear, ADR 0013 amendment.)
+  *DONE 2026-10-21 (PR #10, three rounds). Leading zeros: accepted, canonical rebuilt from cents
+  (ADR 0013 amendment).*
 - **P1-04** `Rates/`: `ExchangeRateClient` (`/latest/USD`, `/codes`, `/quota`), `RateCache`,
   `UpstreamBreaker`, `FallbackCurrencies`, error mapping, exception scrubbing, `bin/upstream.php
   reset`, `upstream.call` events.
@@ -486,7 +497,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   (ADR 0018). Pass upstream's decimal text to `ScaledRate::fromDecimalString` where available; a
   rate `ScaledRate` rejects drops that one currency (logged), not the whole refresh. Fix the
   `ScaledRate` docblock: upstream numbers round-trip exactly for 15 or fewer significant digits,
-  not 17.
+  not 17. Implement `Validation\CurrencyAllowList` from the rate table and `FallbackCurrencies`.
+  Decide what bare English words that are also codes should do once every code is allowed (`all`,
+  `top`, `cup`, `try` resolve as ALL, TOP, CUP, TRY; `won` gives `not_allowed`): the existing
+  shadowing test checks table entries only, so either add such words to the ambiguous list or
+  accept them as codes, and test the choice against the real list.
 - **P1-11** Request log and IP blocking (ADR 0016). Runs after P1-04 and before P1-05, so
   `/convert` is protected from its first release.
   - A request-log step that writes one `requests` row for every request, including blocked ones.
@@ -518,6 +533,15 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `3`) ends with the uneven message and `bot.session_completed`; three unclear amounts →
   `BOT_MAX_RETRIES` abandon at step `amount`; an expired session is recorded as
   `BOT_SESSION_EXPIRED` at its last step.
+  Also (from the P1-03 review): use `AmountParser::read()` (ok / unclear / invalid) and give unclear
+  and invalid amounts different wording; use the currency step's `clarify` text for ambiguous
+  currency text; consider an `InstallmentsReading` result type so all three validators return the
+  same shape; widen the ambiguous list (`won`, `dirham`, `shilling`, `lira`, `krona`, `rials`,
+  `riyals`, `leu`, `manat`, `som`) and country coverage (Uruguay, Bolivia, Paraguay, Venezuela,
+  Central America, the Dominican Republic, Puerto Rico, Canada; `yuan` → CNY); document `£` → GBP
+  while `pound` stays ambiguous; `normalize()` may return more than 7 integer digits, so call
+  `read()`; `ValidationFailed::messageForUser()` is the generic `ErrorCodes` text, so bot wording
+  comes from the flow YAML.
 - **P1-07** `resources/widget/` at `GET /bot/widget`, `channel=static`, `textContent` only, CSP,
   `nosniff`, `frame-ancestors`.
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
@@ -614,6 +638,12 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     file writes to it (no tables are created); check the schema before changing the journal mode.
   - The `ScaledRate` sweep calls `mt_srand` with a fixed seed; reseed in `tearDown` so later tests
     don't inherit the RNG state.
+  - (P1-03) `ConfigRepository` accepts `amount.max` ≤ 0 (every amount then fails `over_max`);
+    reject it at load time.
+  - (P1-03) The `AmountParser` sweep checks values but not swaps of one accepted input for another;
+    the pinned `SWEEP_*_READ` counts must change only with a rule change, explained in the commit.
+  - (P1-03) `TextNormalizer` folds only precomposed Latin accents; decomposed forms (a letter plus
+    U+0301) fall through to `unknown`. Normalize to NFC if intl becomes available.
 
 ## 11. Working agreements for the agent
 
