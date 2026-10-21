@@ -4,8 +4,8 @@ Checklist of the work IDs in `docs/PLAN.md` §10, which holds each task's spec a
 The first unchecked item is the current work. From Phase 1 on, the lead ticks an item when its PR
 is merged and adds its end status.
 
-**Current phase:** Phase 0 done; Phase 1 next
-**Next item:** P1-01
+**Current phase:** Phase 1 — Deterministic MVP
+**Next item:** P1-02
 
 ## Phase 0 — Pre-work
 
@@ -18,10 +18,11 @@ is merged and adds its end status.
 
 ## Phase 1 — Deterministic MVP
 
-- [ ] P1-01 Foundation
-- [ ] P1-02 Schema and migrations
+- [x] P1-01 Foundation — DONE (2026-10-20; PR #6)
+- [ ] P1-02 Schema and migrations (all seven tables, integer storage per ADR 0017)
 - [ ] P1-03 Validation and `AmountParser`
 - [ ] P1-04 Rates: client, cache, breaker
+- [ ] P1-11 Request log and IP blocking (runs before P1-05)
 - [ ] P1-05 Convert and `GET /convert`
 - [ ] P1-06 Flow engine and `POST /bot/message`
 - [ ] P1-07 Widget

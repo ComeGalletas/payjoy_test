@@ -40,6 +40,13 @@ name, add it here in the same commit that introduces it.
 | **synonym table** | Static map from names, country names and symbols (`Brazil`, `reais`, `R$`) to a currency code. |
 | **currency-country map** | PHP array (`CurrencyCountryMap`) linking country names to currencies. A country is recorded only when the user typed one. |
 | **admin token** | `ADMIN_TOKEN` from `.env`, sent only as `Authorization: Bearer`; unset means all admin requests are refused. |
+| **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` equals `REMOTE_ADDR`. |
+| **trusted proxy** | `TRUSTED_PROXY`: the one peer whose `X-Forwarded-For` header is believed. |
+| **rate-limit window** | A fixed one-minute UTC window (`window_start`) in which an IP's requests are counted against `ratelimit.per_minute`. |
+| **preflight** | A CORS `OPTIONS` request; answered with a 200 envelope, with `Access-Control-*` headers only for an allowed origin. |
+| **IP block** | A row in `ip_blocks`: requests from that IP get 403 `IP_BLOCKED` until `expires_at`. Automatic (`block.*` thresholds) or manual (`bin/ip.php`). |
+| **cents** / `amount_usd_cents` | A USD amount stored as an exact integer number of cents (ADR 0017). |
+| **scaled rate** / `rate_scaled` | A rate stored as `round(rate × 10^10)` (ADR 0017). |
 | **config key** | A setting such as `installments.max`; read-only defaults in Phases 1–2, editable via `PUT /config` in Phase 3. |
 | **capability** / **capability catalog** | Phase 3: documented endpoints listed by `GET /capabilities` and `docs/CAPABILITIES.md`. |
 
@@ -64,6 +71,8 @@ name, add it here in the same commit that introduces it.
 | Term | Meaning |
 |---|---|
 | **event** | One append-only row in `events`, written only through `Metrics`. |
+| **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query, exception class. |
+| **request log** | The `requests` table: one row per incoming request with the raw client IP, kept `requests.retention_days` (ADR 0016). |
 | **funnel** | Sessions per step and channel: started → each step → completed / abandoned. |
 | **report** | Output of `ReportQuery`, via `/reports` or `bin/report.php`; days split on `reports.timezone`. |
 | **rollup** | Phase 3: one `daily_rollups` row per day, built by `bin/rollup.php`. |

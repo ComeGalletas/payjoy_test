@@ -1,6 +1,6 @@
 # 0011 — Minor units, floor split and English display
 
-- **Status:** Accepted
+- **Status:** Accepted (storage clause superseded by 0017)
 - **Date:** 2026-10-20
 - **Deciders:** owner
 - **Supersedes:** 0007
@@ -16,7 +16,7 @@ decimals, the last installment absorbing the remainder with a clear message, and
 ## Decision
 
 - The API and storage keep full precision (`rate`, `converted`, `installment_amount` unrounded;
-  `serialize_precision = -1` set at bootstrap).
+  `serialize_precision = -1` set at bootstrap). (Storage: see 0017.)
 - `Convert/MinorUnits` holds a static ISO 4217 exponent table. Unknown codes use 2 and are flagged
   in the event's `meta`.
 - `InstallmentCalculator::display()` works in integer minor units:

@@ -77,7 +77,10 @@ Reasons and consequences are in the ADR named in each row.
 | Typebot | Phase 3, optional front-end calling the same endpoints. Static flow stays as fallback. | 0004 |
 | Deployment | Local install without Docker is primary through Phase 2 (PHP 8.3, Composer, `php -S`). Docker compose arrives in Phase 3. | 0005 |
 | Amount semantics | `amount` is the **total** USD price. `installment_amount = converted / installments`. | 0006 |
-| Money | Full precision in API and storage. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
+| Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
+| Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
+| Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
+| Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; curl/Guzzle covered in P1-04. | 0018 |
 | Upstream | One `/latest/USD` call per upstream refresh; always compute `amount × rate` locally; stale fallback; stop calling after quota or key errors. See §3b. | 0012 |
 | Amount input | `/convert` is strict (`.` decimal only). The bot also accepts `,` as a decimal or thousands separator; unclear input gets a clarifying question. See §3c. | 0013 |
 | Phase 1 scope | Rollups, dashboard, config API, `POST /events`, capability catalog and APCu move to Phase 3. | 0014 |
@@ -113,6 +116,10 @@ Reasons and consequences are in the ADR named in each row.
 - **Abuse limits.** Per-IP limit on `/convert` and `/bot/message` (`ratelimit.per_minute`, stored in
   SQLite) → `RATE_LIMITED` (429). `X-Forwarded-For` is trusted only when `TRUSTED_PROXY` is set and
   matches the peer. CORS on `/bot/message` only for `cors.allowed_origins`.
+- **Request log and blocking (ADR 0016).** Every request, including blocked ones, writes a
+  `requests` row with the raw client IP; the query string is never stored. An IP over the `block.*`
+  thresholds is blocked: the Kernel answers 403 `IP_BLOCKED` with `Connection: close` before
+  routing. Raw IPs live only in `requests` and `ip_blocks`.
 - **Rounding.** Only `InstallmentCalculator::display()` rounds money or rates;
   `Metrics/ReportFormatter` may format report aggregates. Nowhere else, including the widget JS.
 - Tests first for validators, `AmountParser`, installment math and display. PHPUnit stays green.
@@ -122,8 +129,9 @@ Reasons and consequences are in the ADR named in each row.
 - `Convert/MinorUnits` holds a static ISO 4217 exponent table (JPY 0, CLP 0, BRL 2, COP 2, KWD 3,
   BHD 3, OMR 3, CLF 4, …). A test asserts it covers every code in the fallback currency list; an
   unknown code uses 2 and records `meta.minor_units_default=true`.
-- `converted = amount_usd × rate`, a PHP `float`, never rounded in the API or storage. Set
-  `ini_set('serialize_precision', '-1')` at bootstrap. Magnitudes stay far below 2^53 (cap
+- `converted = amount_usd × rate`, a PHP `float`, never rounded in the API. Storage uses integer
+  fixed units instead of floats (§5, ADR 0017). Set `ini_set('serialize_precision', '-1')` at
+  bootstrap. Magnitudes stay far below 2^53 (cap
   1,000,000 × the largest rates × 10^4), so integer minor units are exact.
 - `InstallmentCalculator::display(converted, n, currency)`:
   - `e = MinorUnits::of(currency)`, `scale = 10^e`
@@ -219,7 +227,7 @@ fx-installments/
 │   │   └── Flow/               # FlowDefinition (YAML loader), FlowEngine, SessionStore
 │   ├── flows/default.yaml
 │   ├── db/schema.sql
-│   ├── bin/migrate.php, report.php, bot.php, upstream.php
+│   ├── bin/migrate.php, report.php, bot.php, upstream.php, ip.php
 │   ├── resources/widget/       # vanilla JS, no build step
 │   ├── var/                    # git-ignored: app.db (outside public/)
 │   └── tests/Unit, tests/Acceptance
@@ -237,27 +245,33 @@ them at temporary directories; GR-001 still applies to real values.
 
 ## 5. Data model (SQLite, PDO — keep SQL portable)
 
-All timestamps are UTC epoch integers; JSON columns are TEXT. SQLite runs with
-`PRAGMA journal_mode=WAL` and `busy_timeout=5000`.
+All timestamps are UTC epoch integers; JSON columns are TEXT; no column stores a float (ADR 0017).
+SQLite runs with `PRAGMA journal_mode=WAL` and `busy_timeout=5000`.
 
 Phase 1 tables:
 
 - `events(id, ts, source 'api'|'bot'|'upstream'|'llm', channel 'static'|'cli'|'typebot'|NULL,
-  event_type, session_id, step, currency, country, amount_usd, installments, status 'ok'|'error',
-  error_code, latency_ms, meta)` — append-only source of truth; amounts unrounded. `country` is set
-  only when the user typed a country (e.g. "Brazil"); a bare code like `EUR` leaves it NULL.
-- `rate_cache(currency, rate, last_update_unix, next_update_unix, fetched_at)` — one row per code,
-  all rows written by one `/latest/USD` refresh.
+  event_type, session_id, step, currency, country, amount_usd_cents, installments,
+  status 'ok'|'error', error_code, latency_ms, meta)` — append-only source of truth;
+  `amount_usd_cents` is an exact integer. `country` is set only when the user typed a country
+  (e.g. "Brazil"); a bare code like `EUR` leaves it NULL.
+- `rate_cache(currency, rate_scaled, last_update_unix, next_update_unix, fetched_at)` — one row per
+  code, all rows written by one `/latest/USD` refresh; `rate_scaled = round(rate × 10^10)`.
 - `sessions(session_id, channel, step, status 'open'|'completed'|'abandoned', collected, retries,
   created_at, updated_at, expires_at)`
 - `app_state(key, value, updated_at)` — breaker state, cached quota.
 - `rate_limits(ip, window_start, count)`
+- `requests(id, ts, ip, method, path, status, latency_ms, blocked)` — one row per request (ADR
+  0016); `path` truncated to 200 characters, no query string.
+- `ip_blocks(ip, reason, source 'auto'|'manual', blocked_at, expires_at)` — `expires_at` NULL only
+  for manual blocks.
 
 Phase 3 adds `config(key, value, updated_at)` and `daily_rollups(...)`. The currency-country map is
 a PHP array (`Convert/CurrencyCountryMap`), not a table.
 
-**Retention:** `bin/migrate.php --prune` deletes `rate_limits` rows older than a day and closed
-`sessions` older than 30 days. `events` are kept.
+**Retention:** `bin/migrate.php --prune` deletes `rate_limits` rows older than a day, closed
+`sessions` older than 30 days, `requests` rows older than `requests.retention_days` (30) and
+expired `ip_blocks`. `events` are kept.
 
 Event types (Phase 1): `upstream.call`, `api.request`, `bot.session_start`, `bot.step`
 (valid/invalid), `bot.session_completed`, `bot.session_abandoned`, `error`. Phase 2 adds
@@ -271,6 +285,7 @@ Error codes (stable strings) and HTTP status:
 | `UPSTREAM_UNSUPPORTED_CODE` | 400 |
 | `UPSTREAM_TIMEOUT`, `UPSTREAM_QUOTA`, `UPSTREAM_AUTH`, `UPSTREAM_MALFORMED` | 503 |
 | `ADMIN_UNAUTHORIZED` | 401 |
+| `IP_BLOCKED` | 403 |
 | `NOT_FOUND` | 404 |
 | `RATE_LIMITED` | 429 |
 | `BOT_MAX_RETRIES`, `BOT_SESSION_EXPIRED` | (bot events only) |
@@ -296,7 +311,10 @@ Config keys (read-only defaults in `Config/defaults.php` during Phases 1–2):
 `installments.default=1`, `installments.max=60`, `amount.max=1000000`, `bot.max_retries=3`,
 `bot.session_ttl_minutes=30`, `bot.frontend=static`, `rates.max_stale_hours=48`,
 `ratelimit.per_minute=30`, `cors.allowed_origins=[]`, `reports.timezone=America/Bogota`,
-`health.quota_cache_minutes=60`, `llm.enabled=false`, `llm.confidence_threshold=0.8`.
+`health.quota_cache_minutes=60`, `llm.enabled=false`, `llm.confidence_threshold=0.8`,
+`requests.retention_days=30`, `block.window_minutes=10`, `block.rate_limit_hits=5`,
+`block.error_responses=100`, `block.duration_minutes=60` (the `block.*` values are first guesses,
+to be tuned against real traffic).
 
 ## 7. User interfaces for the MVP
 
@@ -430,9 +448,18 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `NOT_FOUND`; admin route with no or wrong token → 401, and with `ADMIN_TOKEN` empty → 401 even
   for an empty header; 31st request in a minute from one IP → 429 `RATE_LIMITED`; a metrics write
   against a read-only DB doesn't fail the request.
+  *DONE 2026-10-20 (PR #6). Shipped only the `events` and `rate_limits` tables, by design.*
 - **P1-02** `db/schema.sql` + `bin/migrate.php` (Phase 1 tables in §5, `--prune`).
-  *Acceptance:* `tests/Acceptance/P1_02_MigrateTest.php` — migrating an empty file creates all five
-  tables; running it twice is a no-op; `--prune` removes only expired rows.
+  - Add `rate_cache`, `sessions`, `app_state`, `requests`, `ip_blocks`.
+  - Apply ADR 0017: `events.amount_usd` becomes `amount_usd_cents INTEGER`; `Metrics` takes cents;
+    remove `Database::floatParam()` once nothing binds floats.
+  - Decide and document when the schema is applied (P1-01 applies it on every first connection).
+  - Index `rate_limits(window_start)` and `requests(ts)` so `--prune` doesn't scan, and
+    `requests(ip, ts)` for the per-IP counts behind automatic blocking (P1-11).
+  - Add a test of two connections racing in the rate limiter (the unique-clash retry path).
+  *Acceptance:* `tests/Acceptance/P1_02_MigrateTest.php` — migrating an empty file creates all
+  seven tables; running it twice is a no-op; `--prune` removes only expired rows in each table; no
+  column has a floating-point type.
 - **P1-03** `Validation/`: strict amount validator, `AmountParser` (§3c), currency validator with an
   injected allow-list + `CurrencyResolver` (synonyms, countries), installments validator.
   *Acceptance:* `tests/Acceptance/P1_03_ValidationTest.php` — table of inputs: `1e3`, `NaN`, `-5`,
@@ -445,6 +472,22 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *Acceptance:* `tests/Acceptance/P1_04_RatesTest.php` (mocked handler) — two conversions in one
   refresh window make one upstream call; refresh failure with a cached table serves `stale: true`;
   `quota-reached` blocks calls until next month; every error path's output contains no key.
+  Also: store rates as `rate_scaled` (ADR 0017); extend the no-network guard to curl and Guzzle
+  (ADR 0018).
+- **P1-11** Request log and IP blocking (ADR 0016). Runs after P1-04 and before P1-05, so
+  `/convert` is protected from its first release.
+  - A request-log step that writes one `requests` row for every request, including blocked ones.
+  - A block check in the Kernel, before routing: 403 `IP_BLOCKED`, `Connection: close`, no handler,
+    and no `error` event (the `requests` row with `blocked = 1` is the only write).
+  - Automatic blocking from the `block.*` thresholds; `bin/ip.php block|unblock|list`.
+  - `IP_BLOCKED` added to `ErrorCodes`; `requests` and expired `ip_blocks` pruned (P1-02 tables).
+  *Acceptance:* `tests/Acceptance/P1_11_RequestLogTest.php` — every request, including 404s, 429s
+  and blocked ones, writes exactly one `requests` row with the client IP (the trusted-proxy XFF hop
+  when configured), method, path without query and status; the configured number of 429s blocks
+  the IP, and so does the configured number of error responses; a blocked IP gets 403 `IP_BLOCKED`
+  with `Connection: close`, its handler never runs and no `error` event is written; the block
+  expires after `block.duration_minutes`; `bin/ip.php unblock` restores access; rows older than 30
+  days are pruned.
 - **P1-05** `Convert/`: `MinorUnits`, `InstallmentCalculator` (§3a), `ConvertService` (local
   math, `rate_as_of`, `stale`) → `GET /convert`.
   *Acceptance:* `tests/Acceptance/P1_05_ConvertTest.php` — `amount=200&cy=BRL&installments=3` at
@@ -463,12 +506,15 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
   headers; widget JS contains no `innerHTML`, `toFixed` or `Intl.NumberFormat`; by hand, a
   `<script>` typed into the chat shows as text.
+  Also: remove `X-Powered-By` from every response; make the `Authorization: Bearer` parsing strict
+  (no trailing newline accepted).
 - **P1-08** `Metrics/ReportQuery`, `ReportFormatter`, `CsvWriter` → `GET /reports` (json/csv) and
   `bin/report.php` (table/csv/json); `GET /health` (public and admin views).
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
   step and channel match; days split on `reports.timezone`; a currency named `=CMD()` is escaped in
   CSV; public `/health` shows only `status`.
-- **P1-09** `db/seed_demo.php`; `docs/README.md`, `docs/INSTALL_LOCAL.md` (incl. CA bundle setup),
+- **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
+  IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup),
   `docs/REPORTS.md`.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
@@ -497,7 +543,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 
 - **P3-01** `docker-compose.yml`: `api` + `--profile typebot` (builder, viewer, postgres) +
   `--profile ollama`; `api/Dockerfile` (`php:8.3-fpm-alpine` + nginx); SQLite on a named volume;
-  `docs/INSTALL_DOCKER.md`.
+  `docs/INSTALL_DOCKER.md`. nginx reads a deny list exported from `ip_blocks` and returns 444 to
+  blocked IPs, closing the connection without a response; nginx's access log for those requests is
+  imported into `requests` with `blocked = 1`, so INV-08 still holds (ADR 0016).
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,
@@ -528,6 +576,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   - Decide how `git merge --squash` commits get a valid subject (git's default "Squashed commit of
     the following:" is rejected by `commit-msg`).
   - Optionally prune managed hook backups (those carrying the marker).
+  - Compare `TRUSTED_PROXY` and `REMOTE_ADDR` as parsed addresses (`inet_pton`), so two spellings
+    of the same IPv6 address match.
+  - Optionally compare admin tokens through HMACs, so the comparison doesn't reveal token length.
 
 ## 11. Working agreements for the agent
 
