@@ -43,10 +43,12 @@ columns (not exact in SQLite, breaks ADR 0010); keeping `REAL` with the string b
 **Context.** The first version said `rate × 10^10` computed in floats rounds correctly below 2^53.
 The P1-02 tester showed it doesn't: PHP's `round()` returns values ≥ 10^15 unchanged and `(int)`
 truncates, so `439537.6134` became `4395376133999999` instead of `4395376134000000` (about 9% of
-rates ≥ 100,000). Even ideal rounding of the float product is wrong in 4–6% of cases there.
-A live ExchangeRate-API table (2026-10-21, 166 codes) has at most 6 decimals and 7 integer digits,
-and its largest rate is IRR ≈ 1,731,936.86 — above the old 2^53 limit, so the first version would
-have rejected a real currency.
+the rates ≥ 100,000 in the round-1 tester's sample). Even perfect rounding of the float product is
+wrong for a few percent of such rates, so fixing the rounding call alone isn't enough.
+The lead measured a live ExchangeRate-API table on 2026-10-21 (the public no-key endpoint
+`open.er-api.com/v6/latest/USD`, 166 codes; the keyed endpoint wasn't checked): at most 6
+decimals and 7 integer digits, and a largest rate of IRR ≈ 1,731,936.86 — above the old 2^53
+limit, so the first version would have rejected a real currency.
 
 **Decision.**
 - `Convert/ScaledRate` never multiplies a float by 10^10. It takes the rate's decimal text — either
@@ -58,5 +60,8 @@ have rejected a real currency.
   fits a signed 64-bit integer (Postgres `BIGINT`) with margin. The earlier 2^53 limit is dropped.
 - `toRate()` (scaled → float) stays approximate by design: calculations are floats (ADR 0011).
 
-**Consequences.** Storage matches the decimal value upstream sent, for every accepted rate; a
-randomized test sweep across the whole range checks it against a string-based reference.
+**Consequences.** Storage equals upstream's decimal rounded half away from zero at ten decimals
+when upstream's text is passed to `fromDecimalString`, or when the float came from a number with
+15 or fewer significant digits (the live table has at most 13). A randomized test sweep across
+the whole range checks the arithmetic against a string-based reference. The companion helper
+`Convert/UsdCents` converts canonical USD strings to cents and back with integer arithmetic only.

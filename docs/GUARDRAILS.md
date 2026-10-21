@@ -35,10 +35,10 @@ Rules about the app itself, enforced by the test suite inside `make check`.
 | INV-04 | Every JSON endpoint returns the envelope (the widget page and CSV reports are the only exceptions) | Router-level test over every JSON route |
 | INV-05 | Unvalidated input never reaches an upstream URL | Unit tests on `ExchangeRateClient` with a mocked HTTP handler |
 | INV-06 | Tests never reach the network or load the real key | `-d allow_url_fopen=0` in the Composer gate scripts and a stream-wrapper guard that fails the run even when the exception is swallowed (P1-01, ADR 0018); curl and Guzzle added in P1-04 |
-| INV-07 | A failed metrics write never fails the user's request (a database that can't be opened, or is behind the code, gives 500 on every request by design, ADR 0019) | Acceptance test in P1-01 against a read-only database |
+| INV-07 | A failed metrics write never fails the user's request (a database that can't be opened, is behind the code, or has a corrupt schema version gives 500 on every request by design, ADR 0019) | Acceptance test in P1-01 against a read-only database |
 | INV-08 | Every request, including blocked ones, writes exactly one `requests` row; the query string is never stored. From P3-01, requests nginx drops with 444 are recorded by importing nginx's access log | Acceptance test in P1-11; import test in P3-01 (ADR 0016) |
 | INV-09 | No database column stores a float; money is integer cents, rates are integers scaled by 10^10 | `P1_02_MigrateTest` inspects every column type; `SchemaDumpTest` keeps `schema.sql` equal to the migrations (ADR 0017) |
-| INV-10 | Shipped migrations never change; schema changes are new migrations | A test pins a sha256 of each shipped migration (P1-02 round 2, ADR 0020) |
+| INV-10 | Shipped migrations never change; schema changes are new migrations | `MigrationsPinTest` pins a sha256 of migrations 1–3, plus each new pin as migrations ship (ADR 0020); it doesn't yet fail on an unpinned new migration (fix with migration 4) |
 
 ## Known limits
 

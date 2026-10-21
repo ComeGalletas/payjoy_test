@@ -49,6 +49,7 @@ Each rule has a row in `docs/GUARDRAILS.md` naming the layer that enforces it.
 | The whole gate (hook and CI run this) | `make check` |
 | Guard tests | `make test-guards` |
 | One acceptance test | `make acceptance TEST=<path>` |
+| Bring the database schema up to date (after `make init` and on every pull; the app refuses an old schema) | `php api/bin/migrate.php` |
 
 ## Conventions
 

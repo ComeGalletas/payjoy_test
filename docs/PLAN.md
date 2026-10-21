@@ -494,7 +494,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
     and no `error` event (the `requests` row with `blocked = 1` is the only write).
   - Automatic blocking from the `block.*` thresholds; `bin/ip.php block|unblock|list`. Block rows
     follow the ADR 0016 amendment: active while `now < expires_at`; select-then-write in one
-    transaction; a manual block replaces an automatic one, never the reverse while active.
+    transaction; a manual block replaces an automatic one, never the reverse while active; a new
+    automatic block on an active automatic one extends it to the later expiry.
   - `IP_BLOCKED` added to `ErrorCodes`; `requests` and expired `ip_blocks` pruned (P1-02 tables).
   *Acceptance:* `tests/Acceptance/P1_11_RequestLogTest.php` — every request, including 404s, 429s
   and blocked ones, writes exactly one `requests` row with the client IP (the trusted-proxy XFF hop
@@ -509,7 +510,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   mocked rate 5.2291 → display `1,045.82` / `348.60` / `348.62`, `even: false`;
   `amount=1&cy=USD&installments=60` passes and `amount=0.50&cy=USD&installments=60` returns
   `VALIDATION_INSTALLMENTS`; JPY shows no decimals; KWD shows three; `amount=1e3` →
-  `VALIDATION_AMOUNT`.
+  `VALIDATION_AMOUNT`; an injected rate that makes the minor-unit total reach 2^53 →
+  `VALIDATION_AMOUNT` (checked in `ConvertService`, before `display()`; §3a).
 - **P1-06** `Flow/`: YAML loader, `FlowEngine` (§9 rules), `SessionStore` (server ids, TTL, expiry
   sweep), `POST /bot/message`, `bin/bot.php`.
   *Acceptance:* `tests/Acceptance/P1_06_FlowTest.php` — a scripted CLI session (`200` → `brazil` →

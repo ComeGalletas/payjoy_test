@@ -66,6 +66,7 @@ Decided while building P1-02.
   `expires_at` is NULL, manual only). P1-11's block check and `--prune` use the same contract.
 - **One row per IP.** `ip_blocks.ip` is the primary key, so P1-11 writes blocks as select-then-write
   in one transaction (ADR 0010): re-blocking an IP replaces its expired row; a manual block
-  replaces an automatic one; an automatic block never replaces an active manual block. Block
-  history lives in `requests.blocked`.
+  replaces an automatic one; an automatic block never replaces an active manual block; a new
+  automatic block on an active automatic one extends its `expires_at` to the later of the two
+  (owner-confirmed). Block history lives in `requests.blocked`.
 - `--prune` refuses (exit 1) a database whose schema is behind the code.

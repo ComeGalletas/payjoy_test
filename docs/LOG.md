@@ -27,12 +27,18 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - Merged at the reviewed head as `b02a155` by ComeGalletas at 13:49:08 UTC, before the lead's own
   merge command ran and about 20 s before the leads' approval comment was posted.
 - **Process.** Round 1: two worktree-guard blocks, each handled by applying the stated remedy once
-  in Bash; a scratch file was then written with the Write tool, accepted because the dedicated file
-  tools are the normal way to create files. Round 2: no blocks. Briefs now say file tools are always
-  allowed.
+  in Bash; a scratch file was then written with the Write tool. Unlike the P1-01 shell switch, this
+  was accepted: the lead proposed it and the owner ratified the rule during the PR #9 review —
+  the dedicated file tools (Write, Edit) are always allowed for creating files; redoing a blocked
+  shell action through a different shell stays forbidden. Round 2: no blocks.
 - Lead docs: ADRs 0019 and 0020, ADR 0016 and 0017 amendments, INV-10, the corrected PLAN §3a
   magnitude claim (the real worst case is 1,000,000 USD in IRR, ≈ 1.73 × 10^14 minor units), and
-  the review follow-ups placed in P1-04, P1-09, L-03 and L-04.
+  the review follow-ups placed in P1-03, P1-04, P1-05, P1-08, P1-09, P1-11, L-03, L-04 and the
+  P1-02 note (for the task that adds migration 4).
+- PR #9 review: tester PASS (all docs claims true against the code); judge CHANGES NEEDED (three
+  wording overclaims, fixed). Owner decisions: ratified the file-tools rule above; approved the
+  GUARDRAILS edits (INV-07, INV-09, INV-10) and a CLAUDE.md Commands row for `migrate.php`; manual
+  blocks win, and a new automatic block extends an active automatic one.
 
 ## 2026-10-20 — P1-01 Foundation (PR #6, head 9c1eeeb)
 

@@ -8,9 +8,10 @@
 
 P1-01 applied the schema on every first connection. P1-02 adds migrations, including one that
 rebuilds `events`. Running a table rebuild inside a web request, or from several requests at once,
-is unsafe, and on Postgres the web user shouldn't need DDL rights. Measured on Windows (median of
-2,000 connections): about 1.15 ms to connect, 1.28 ms with a version check, 1.31 ms with P1-01's
-idempotent apply, so the choice is about safety, not speed.
+is unsafe, and on Postgres the web user shouldn't need DDL rights. The P1-02 builder measured the
+cost (PR #8; Windows 11, PHP 8.3.33, SQLite 3.53.2, file database, median of 2,000 connections):
+about 1.15 ms to connect, 1.28 ms with a version check, 1.31 ms with P1-01's idempotent apply, so
+the choice is about safety, not speed.
 
 ## Decision
 
