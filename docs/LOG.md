@@ -10,10 +10,11 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   finished; at the owner's request their results were posted on the PR afterwards. The merged head
   `4381593` is the reviewed head. Tester: PASS 8/8. Judge: APPROVE WITH NITS (fixed in this PR:
   status wording, GUARDRAILS rule wording, `auto` cost, LOG approval and timing details, TODO L-04
-  line).
-- P0-05: the owner added `EXCHANGERATE_API_KEY` to `.env`. `ADMIN_TOKEN` isn't needed yet; the owner
-  will set any random value. Until it is set, admin routes refuse every request (fail closed,
-  P1-01). Agents did not read `.env`.
+  line). Not applied: the two extra GUARDRAILS limits stay, since both are true and tracked in L-04.
+- P0-05: the owner added `EXCHANGERATE_API_KEY` to `.env`, then set `ADMIN_TOKEN` (any random value,
+  owner's choice). Agents did not read `.env`. P0-05 is DONE.
+- PR #5 judge: APPROVE WITH NITS on `75ea4b0`; its nits (P0-05 status and wording, P0-06 approval
+  wording in PLAN, a reflowed LOG line) are fixed in the same PR.
 
 ## 2026-10-20 — P0-06 guard hardening (PR #3, head 912c7c2)
 
@@ -23,8 +24,7 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   confirm the merge".
 - Builder: DONE_WITH_CONCERNS, one commit `912c7c2`. Guard tests 53 → 80 (1244 assertions on
   Windows, 1242 on Linux CI); `make check` took 25.3–27.7 s on Windows, the guards 1.3 s on Linux
-  CI. Pinned
-  `actions/checkout@fbc6f39… # v5.1.0`, `actions/cache@0057852… # v4.3.0`, and kept
+  CI. Pinned `actions/checkout@fbc6f39… # v5.1.0`, `actions/cache@0057852… # v4.3.0`, and kept
   `setup-php@eb7c497…` with its comment fixed to `2.40.0`.
 - Guard blocks, all reported and not worked around: two worktree-guard refusals (a complex probe,
   a CI poll) and one permission-classifier denial (`git restore --source=origin/main`, flagged as

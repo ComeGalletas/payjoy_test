@@ -400,9 +400,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *DONE 2026-10-20 (PR #1). `main` requires a PR and the `check` status check, admins included.*
 - **P0-05** Owner adds `EXCHANGERATE_API_KEY` and `ADMIN_TOKEN` to `.env`.
   *Acceptance:* owner confirms; agents don't read `.env`.
-  *DONE_WITH_CONCERNS 2026-10-20: owner added `EXCHANGERATE_API_KEY`; `ADMIN_TOKEN` not set yet
-  (owner will use any random value; admin routes fail closed until then).*
-- **P0-06** Guard hardening follow-ups from the P0-04 review (approved by both co-leads):
+  *DONE 2026-10-20: owner added `EXCHANGERATE_API_KEY` and set `ADMIN_TOKEN`.*
+- **P0-06** Guard hardening follow-ups from the P0-04 review (lead proposed; owner approved):
   - `install-hooks.php` never overwrites a `.bak` that lacks the managed-hook marker; use a
     timestamped name instead (`<hook>.bak.<YYYYMMDD-HHMMSS>`).
   - `commit-msg` honours `core.commentChar` (default `#`) and always rejects a message whose first
