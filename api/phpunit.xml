@@ -16,6 +16,12 @@
          displayDetailsOnTestsThatTriggerErrors="true"
          displayDetailsOnPhpunitDeprecations="true"
          displayDetailsOnSkippedTests="true">
+    <!-- allow_url_fopen can't be set here (it is PHP_INI_SYSTEM, so PHPUnit reports "Failed to
+         set"); the Composer scripts pass -d allow_url_fopen=0 instead. tests/bootstrap.php also
+         blocks the network stream wrappers (INV-06). -->
+    <php>
+        <env name="APP_ENV" value="test" force="true"/>
+    </php>
     <testsuites>
         <testsuite name="Unit">
             <directory>tests/Unit</directory>
