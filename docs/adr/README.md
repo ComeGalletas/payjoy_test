@@ -4,11 +4,14 @@ One file per decision: `NNNN-<slug>.md`, numbered in order, never renumbered. An
 beats `docs/PLAN.md` until a later ADR supersedes it. To change a decision, write a new ADR that
 names the one it supersedes and set the old one's status to `Superseded by NNNN`. When a new ADR
 replaces only part of an old one, the old one stays `Accepted` with a note naming the part and the
-new ADR, and the affected sentence in its body points to the new ADR.
+new ADR, and the affected sentence in its body points to the new ADR. A decision that is extended
+or refined without being reversed gets a dated "Amendment" section in the same ADR; its status
+becomes `Accepted (amended YYYY-MM-DD)`, and the changed sentences in its body point to the
+amendment.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted |
+| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended 2026-10-21) |
 | [0002](0002-sqlite-pdo-postgres-ready.md) | SQLite via PDO, Postgres-ready through `Database` + `Dialect` | Superseded by 0010 |
 | [0003](0003-static-flow-deterministic-mvp.md) | Static YAML flow and deterministic parsing for the MVP; LLM deferred | Accepted |
 | [0004](0004-typebot-optional-frontend.md) | Typebot as optional Phase 3 front-end; static flow as fallback | Accepted |
@@ -19,7 +22,7 @@ new ADR, and the affected sentence in its body points to the new ADR.
 | [0009](0009-doc-layout-with-log.md) | Doc layout per `CLAUDE.md`, plus `docs/LOG.md` | Accepted |
 | [0010](0010-portable-pdo-postgres-deferred.md) | Portable PDO now, Postgres support deferred | Accepted |
 | [0011](0011-minor-units-floor-split.md) | Minor units, floor split and English display | Accepted (storage clause superseded by 0017) |
-| [0012](0012-upstream-latest-local-math.md) | Upstream: one `/latest/USD` call per refresh, local math, stale fallback | Accepted |
+| [0012](0012-upstream-latest-local-math.md) | Upstream: one `/latest/USD` call per refresh, local math, stale fallback | Accepted (amended 2026-10-21) |
 | [0013](0013-amount-input-parsing.md) | Amount input: strict API, lenient bot | Accepted (amended 2026-10-21) |
 | [0014](0014-phase1-scope-cut.md) | Phase 1 scope cut | Accepted |
 | [0015](0015-co-lead-dual-approval.md) | Co-lead dual approval; builder, tester and judge per task | Accepted (amended 2026-10-21) |

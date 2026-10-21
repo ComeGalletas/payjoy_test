@@ -4,6 +4,43 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — P1-04 Rates: client, cache, breaker (PR #12, head cf85902)
+
+- PR #11 (P1-03 close-out) merged by the owner as `8496080`.
+- **Round 1** (`cf01ecc`). Builder: DONE_WITH_CONCERNS. It built `ExchangeRateClient` (three fixed
+  URLs, 4 s timeouts, 256 KiB body cap, exception scrubbing), rates scanned from the decimal text,
+  `RateCache` and `RateStore` with stale fallback, `UpstreamBreaker` (quota, auth and a flat
+  5-minute backoff), `FallbackCurrencies`, code words, and `bin/upstream.php`. It also extended the
+  no-network guard to curl and Guzzle and added Guzzle 8.3. Unit+Acceptance went from 746 to 1064
+  tests; guards stayed at 80.
+- Tester round 1: FAIL. Mutation g, building rates from the float instead of the decimal text,
+  survived the whole suite. An `unsupported-code` answer from `/latest/USD` never tripped the
+  backoff. The key-leak search found 0 hits. Judge round 1: APPROVE WITH NITS. It said a failed
+  `rate_cache` write lets traffic burn quota, and a flat 5-minute backoff costs 288 calls a day.
+- Owner decisions: round 2 before merge; the backoff grows from 5 minutes to 1 hour.
+- **Round 2** (`13fee73`):
+  - Every failed refresh trips the breaker. Each of 16 failure kinds costs 1 call, cold and warm.
+  - The backoff grows 5, 10, 20, 40, 60 minutes and resets on success.
+  - Tests separate the decimal-text route from the float route.
+  - Hardening: `decode_content=false` with `Accept-Encoding: identity`; `Rates\ApiKey`; an
+    `upstream.breaker_reset` event; `BreakerState` validation; `codes()` equals the keys of
+    `table()`; temp databases cleaned up on Windows.
+  - 1123 tests, 80 guards. Tester: PASS 12/12, every mutation caught. Judge: APPROVE WITH NITS.
+- Owner decision: the backoff starts at 1 minute (1, 5, 10, 20, 40, 60).
+- **Round 3** (`cf85902`): the owner asked the lead to make this change directly ("do the change
+  yourself"). That was an owner-approved, one-off exception to the lead's edit scope (CLAUDE.md
+  Roles) and to the ADR 0015 rerun of tester and judge on a new head; it is not a precedent. Only
+  the schedule constant, `backoffSeconds()`, docblocks and tests changed. 1123 tests, 80 guards;
+  CI `check` passed (run 39650531350). The owner approved it without a separate tester and judge
+  recheck.
+- Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
+  as `7cfe567` (18:13:45 UTC), following the ADR 0015 amendment's order.
+- Upstream: 0 real calls. Every test uses a mocked handler.
+- Lead docs: ADR 0012 amendment (breaker kinds, backoff schedule, strength order, refresh floor,
+  stale age, known limits); ADR 0001 amendment (Guzzle 8.3.0 and its dependencies, 3–4 days old
+  when locked); §2, §3b and §5 of PLAN; follow-ups in P1-05, P1-06, P1-08, P1-10 and L-03; new
+  CONTEXT terms (backoff, code word, dropped currency, stored table).
+
 ## 2026-10-21 — P1-03 Validation and AmountParser (PR #10, head 49b98c1)
 
 - PR #9 (P1-02 close-out) merged by the owner as `61e5774`.

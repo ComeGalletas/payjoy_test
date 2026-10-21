@@ -70,7 +70,7 @@ Reasons and consequences are in the ADR named in each row.
 
 | Topic | Decision | ADR |
 |---|---|---|
-| Language | PHP 8.3, no framework. Composer: `guzzlehttp/guzzle`, `vlucas/phpdotenv`, `symfony/yaml`; `phpunit/phpunit` as require-dev. | 0001 |
+| Language | PHP 8.3, no framework. Composer: `guzzlehttp/guzzle` (`^8.3`), `vlucas/phpdotenv`, `symfony/yaml`; `phpunit/phpunit` as require-dev. | 0001 |
 | Database | SQLite via PDO behind a `Database` factory, portable SQL, UTC epoch integers, JSON as TEXT. Postgres support (`Dialect`, second schema) deferred to L-03. | 0010 |
 | Chatbot MVP | Static flow in YAML, run by a PHP state machine. **No LLM in the MVP.** Deterministic parsing only. | 0003 |
 | LLM | Phase 2, feature-flagged normalizer in front of the deterministic validators. Never replaces validation. | 0003 |
@@ -80,8 +80,8 @@ Reasons and consequences are in the ADR named in each row.
 | Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
 | Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
 | Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
-| Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; curl/Guzzle covered in P1-04. | 0018 |
-| Upstream | One `/latest/USD` call per upstream refresh; always compute `amount × rate` locally; stale fallback; stop calling after quota or key errors. See §3b. | 0012 |
+| Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; from P1-04 also `disable_functions=curl_exec,curl_multi_exec` and Guzzle handler stubs. | 0018 |
+| Upstream | One `/latest/USD` call per upstream refresh; always compute `amount × rate` locally; stale fallback; stop calling after quota or key errors, and back off 1 to 60 minutes after any other failed refresh. See §3b. | 0012 |
 | Amount input | `/convert` is strict (`.` decimal only). The bot also accepts `,` as a decimal or thousands separator; unclear input gets a clarifying question. See §3c. | 0013 |
 | Phase 1 scope | Rollups, dashboard, config API, `POST /events`, capability catalog and APCu move to Phase 3. | 0014 |
 | Development rules | `CLAUDE.md` governs commits, branches, roles, ADRs and guardrails. | 0008 |
@@ -158,21 +158,30 @@ Reasons and consequences are in the ADR named in each row.
 
 - `Rates/ExchangeRateClient` calls `GET /v6/{key}/latest/USD`: one call refreshes every rate. It
   runs only on a cache miss, i.e. when `now ≥ next_update_unix` — about 30 calls a month,
-  regardless of traffic. `/codes` is called only to refresh currency names; `/quota` only for the
-  admin health view, cached `health.quota_cache_minutes`.
+  regardless of traffic. The stored `next_update_unix` is at least `fetched_at + 300`, so a late
+  upstream can't cause a call per lookup (ADR 0012 amendment). `/codes` is called only to refresh
+  currency names; `/quota` only for the admin health view, cached `health.quota_cache_minutes`.
 - Timeout 4 s. Check `"result":"success"` and validate types (`conversion_rates` is a map of
   3-letter codes to positive numbers) before storing.
 - **Allow-list:** the currency codes in the latest stored rate table. When the cache is empty,
-  `Rates/FallbackCurrencies` (static ISO list) validates codes so users still get
-  `VALIDATION_CURRENCY` vs an upstream error correctly.
+  `Rates/FallbackCurrencies` (static ISO 4217 list plus upstream's non-ISO territory codes)
+  validates codes so users still get `VALIDATION_CURRENCY` vs an upstream error correctly.
 - **Always compute locally.** `converted = amount × rate`; upstream `conversion_result` is not used.
 - **Stale fallback.** If the refresh fails and a cached table younger than
   `rates.max_stale_hours` exists, serve it with `stale: true`; otherwise return the mapped error.
-  Every response carries `rate_as_of` (from `time_last_update_unix`).
-- **Breaker** (`Rates/UpstreamBreaker`, state in `app_state`): after `quota-reached`, stop calling
-  until the first day of the next month (UTC); after `invalid-key`, stop until an operator runs
-  `php bin/upstream.php reset`. While blocked, serve stale or return `UPSTREAM_QUOTA` /
-  `UPSTREAM_AUTH`.
+  Every response carries `rate_as_of` (from `time_last_update_unix`). The age is measured from
+  `rate_as_of`, and a table is usable while it is strictly younger than the limit.
+- **Breaker** (`Rates/UpstreamBreaker`, state in `app_state`; ADR 0012 amendment): every failed
+  refresh trips it except `no_key`.
+  - After `quota-reached`, stop calling until the first day of the next month (UTC).
+  - After `invalid-key` or `inactive-account`, stop until an operator runs
+    `php api/bin/upstream.php reset`, which records an `upstream.breaker_reset` event.
+  - After any other failure, including `unsupported-code` on `/latest/USD` and a failed
+    `rate_cache` write, back off for 1, 5, 10, 20, 40, then 60 minutes per consecutive failure. A
+    successful refresh clears the backoff.
+  - An open trip is never replaced by one of equal or lower strength (auth > quota > backoff).
+  - While blocked, serve stale (`result=blocked`, `stale=true`) or return `UPSTREAM_QUOTA`,
+    `UPSTREAM_AUTH`, or for a backoff the code of the failed refresh that opened it.
 - **Error mapping:** `unsupported-code` → `UPSTREAM_UNSUPPORTED_CODE` (400); `quota-reached` →
   `UPSTREAM_QUOTA` (503); `invalid-key`, `inactive-account` → `UPSTREAM_AUTH` (503); timeout →
   `UPSTREAM_TIMEOUT` (503); bad JSON or types → `UPSTREAM_MALFORMED` (503). Generic
@@ -285,7 +294,7 @@ a PHP array (`Convert/CurrencyCountryMap`), not a table.
 `sessions` older than 30 days, `requests` rows older than `requests.retention_days` (30) and
 expired `ip_blocks`. `events` are kept.
 
-Event types (Phase 1): `upstream.call`, `api.request`, `bot.session_start`, `bot.step`
+Event types (Phase 1): `upstream.call`, `upstream.breaker_reset`, `api.request`, `bot.session_start`, `bot.step`
 (valid/invalid), `bot.session_completed`, `bot.session_abandoned`, `error`. Phase 2 adds
 `llm.call`; Phase 3 adds `config.changed`.
 
@@ -502,6 +511,12 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `top`, `cup`, `try` resolve as ALL, TOP, CUP, TRY; `won` gives `not_allowed`): the existing
   shadowing test checks table entries only, so either add such words to the ambiguous list or
   accept them as codes, and test the choice against the real list.
+  *DONE 2026-10-21 (PR #12, three rounds; round 3 was the lead's backoff change). Decisions in the
+  ADR 0012 amendment (breaker kinds, backoff, refresh floor, stale age) and the ADR 0001 amendment
+  (Guzzle 8). Code words: `CurrencySynonyms::CODE_WORDS` (`all bob cup kid mad mop sos top try`)
+  are codes only when typed in capitals; `pen` and `cop` stay codes. Upstream answers are read with
+  `Accept-Encoding: identity`, and any other `Content-Encoding` is `UPSTREAM_MALFORMED`. The key
+  lives in `Rates\ApiKey`, which hides it from dumps, casts and serialization.*
 - **P1-11** Request log and IP blocking (ADR 0016). Runs after P1-04 and before P1-05, so
   `/convert` is protected from its first release.
   - A request-log step that writes one `requests` row for every request, including blocked ones.
@@ -527,6 +542,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `VALIDATION_INSTALLMENTS`; JPY shows no decimals; KWD shows three; `amount=1e3` →
   `VALIDATION_AMOUNT`; an injected rate that makes the minor-unit total reach 2^53 →
   `VALIDATION_AMOUNT` (checked in `ConvertService`, before `display()`; §3a).
+  Also (from the P1-04 review): while a backoff started by `unsupported-code` on `/latest/USD` is
+  open, every lookup without a usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`, a 400 for
+  every currency. Decide before P1-05 starts (owner and lead, recorded in a lead docs PR): keep
+  the 400, or answer 503 with `UPSTREAM_UNSUPPORTED_CODE`. P1-05's acceptance test covers the
+  choice.
 - **P1-06** `Flow/`: YAML loader, `FlowEngine` (§9 rules), `SessionStore` (server ids, TTL, expiry
   sweep), `POST /bot/message`, `bin/bot.php`.
   *Acceptance:* `tests/Acceptance/P1_06_FlowTest.php` — a scripted CLI session (`200` → `brazil` →
@@ -542,6 +562,10 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   while `pound` stays ambiguous; `normalize()` may return more than 7 integer digits, so call
   `read()`; `ValidationFailed::messageForUser()` is the generic `ErrorCodes` text, so bot wording
   comes from the flow YAML.
+  Also (from the P1-04 review): decide whether Spanish or Portuguese words that are also codes
+  need the capitals rule (`CurrencySynonyms::CODE_WORDS`). If Bolivia → BOB is added to
+  `CurrencyCountryMap`, `CurrencyCodeWordsTest` fails until `bob` leaves `CODE_WORDS` (a mapped
+  currency's code must stay a code); decide what lowercase `bob` then means.
 - **P1-07** `resources/widget/` at `GET /bot/widget`, `channel=static`, `textContent` only, CSP,
   `nosniff`, `frame-ancestors`.
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
@@ -556,6 +580,16 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   CSV; public `/health` shows only `status`.
   Also: decide what `/health` does when the database is behind or can't be opened (ADR 0019): treat
   the 500 as "unhealthy", or route `/health` before the database opens.
+  Also (from the P1-04 review):
+  - Count real upstream calls as `miss` plus `stale` events, minus those with `reason=no_key`. A
+    `blocked` lookup makes no call, and a blocked lookup that served stale has `result=blocked`,
+    `stale=true`. This counts `/latest/USD` calls only: give `/codes` and `/quota` calls their own
+    events, or state in the report that they are excluded (P1-10 checks quota used).
+  - Cache `/quota` for `health.quota_cache_minutes`. The quota block ends on the 1st (UTC), but
+    upstream refreshes the quota on `refresh_day_of_month`; show both or follow upstream.
+  - Include the backoff count in the admin `/health` breaker state.
+  - The download-progress abort in `ExchangeRateClient` is unit-tested only (`MockHandler` never
+    calls `progress`); say so in its docblock.
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
   IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
   the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
@@ -570,6 +604,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `docs/LOG.md`. **Deliver MVP.**
   *Acceptance:* owner sees one completed session per channel in `/reports`, and quota used is ≤ 3
   calls.
+  Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
+  written without network access), and look for Guzzle 8.3.x patch releases (ADR 0001 amendment).
 
 ### Phase 2 — LLM normalizer (feature-flagged)
 
@@ -619,7 +655,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   dialect when applying migrations, never by editing shipped ones (ADR 0020); the rebuilt `events`
   table's primary-key constraint name and `INTEGER PRIMARY KEY` need translating. Test the `42P01`
   (missing `app_state`) branch of `Migrator::currentVersion()`, and treat a stored version `"0"`
-  as corrupt once `app_state` exists.
+  as corrupt once `app_state` exists. Make the breaker write Postgres-safe, and make
+  `UpstreamBreaker::succeeded()` read and delete in one transaction, so it can't erase a trip
+  another process wrote in between (ADR 0012 amendment).
 - **L-04** Tooling backlog from the P0-06 review:
   - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
   - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
