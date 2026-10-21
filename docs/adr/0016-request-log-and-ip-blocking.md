@@ -18,7 +18,8 @@ abusive IPs must be cut off instead.
 
 - **Request log.** Every request writes one row to a separate `requests` table: `ts`, raw client
   IP (resolved with the P1-01 trusted-proxy rule), `method`, `path` (truncated to 200 characters,
-  query string never stored), `status`, `latency_ms`, `blocked`. Business events stay in `events`.
+  query string never stored; both stored percent-encoded, see "Second amendment"), `status`,
+  `latency_ms`, `blocked`. Business events stay in `events`.
 - **Retention.** `requests` rows older than `requests.retention_days` (default 30) are deleted by
   `bin/migrate.php --prune`.
 - **Error events.** The P1-01 policy stays for requests that reach routing: every error response
@@ -26,10 +27,10 @@ abusive IPs must be cut off instead.
   row (`blocked = 1`), no `error` event, so blocking doesn't double the writes. The error
   log gets the exception class, file and line only, never the message.
 - **Automatic blocking** (owner-confirmed; the thresholds are tuned later). An IP that reaches
-  `block.rate_limit_hits` 429s or
-  `block.error_responses` error responses within `block.window_minutes` is blocked for
-  `block.duration_minutes`. Blocks live in `ip_blocks` with an expiry; manual blocks may have none.
-  Operators use `php bin/ip.php block|unblock|list`.
+  `block.rate_limit_hits` 429s (counted as rate-limited minutes, see "Second amendment" item 1) or
+  `block.error_responses` error responses (4xx other than 429, same item) within
+  `block.window_minutes` is blocked for `block.duration_minutes`. Blocks live in `ip_blocks` with
+  an expiry; manual blocks may have none. Operators use `php bin/ip.php block|unblock|list`.
 - **Blocked requests.** The Kernel checks `ip_blocks` before routing. A blocked request is still
   recorded (`blocked = 1`), gets a minimal 403 `IP_BLOCKED` envelope and `Connection: close`, and
   runs no handler.
@@ -47,7 +48,8 @@ abusive IPs must be cut off instead.
   in WAL mode absorbs a few thousand writes a second, which is enough for the MVP; from P3-01 nginx
   takes the flood and the import writes in batches.
 - Raw IPs are personal data (Colombian Ley 1581): they live only in `requests` and `ip_blocks`,
-  `requests` is pruned after 30 days, and expired blocks are pruned too. Manual blocks without an
+  `requests` is pruned after 30 days, and expired blocks are pruned too (one window after they
+  end, see "Second amendment" item 4). Manual blocks without an
   expiry keep that IP until an operator removes it; `bin/ip.php list` shows them so they can be
   reviewed. A privacy note describing the request log goes into `docs/README.md` (P1-09).
 - New tables, an error code, five config keys, a bin script and a task (P1-11), scheduled before
@@ -70,7 +72,8 @@ Decided while building P1-02.
   in one transaction (ADR 0010): re-blocking an IP replaces its expired row; a manual block
   replaces an automatic one; an automatic block never replaces an active manual block; a new
   automatic block on an active automatic one extends its `expires_at` to the later of the two
-  (owner-confirmed). Block history lives in `requests.blocked`.
+  (owner-confirmed). Block history lives in `requests.blocked` (and in `ip.*` events, see
+  "Second amendment" item 8).
 - `--prune` refuses (exit 1) a database whose schema is behind the code.
 
 ## Second amendment (2026-10-21): what counts toward a block, block events, stored paths
@@ -79,25 +82,28 @@ Decided while building P1-02.
 builder made 12 decisions and listed them. The round-1 tester found that a path cut by bytes could
 end in half a UTF-8 character, and that `unblock` followed by `--prune` lost the clean slate. The
 round-1 judge found that counting every 429 let one burst block an IP, and everyone behind a shared
-carrier NAT, for an hour. The owner then decided items 1, 4, 7 and 8 below and ratified items 5
-and 6 as built. The co-leads added that 429s don't count toward `block.error_responses` (item 1).
-The round-2 judge found that counting rate-limited minutes over `requests` made a flood's cost grow
-with the flood; round 3 counts them from `rate_limits` (item 1) and the builder added the rules in
-items 2 and 3 that this needs. Everything not attributed above is the builder's design, which the
+carrier NAT, for an hour. The owner then decided the 429 rule in item 1, the prune boundary in
+item 4, the 403 text (item 7) and that blocks are recorded as events that never hold the IP
+(item 8). The owner ratified items 5 and 6 as built. The co-leads added that 429s don't count
+toward `block.error_responses`. The round-2 judge found that counting rate-limited minutes over
+`requests` made a flood's cost grow with the flood, so the co-leads' round-3 brief required
+counting them from `rate_limits` and checking only the threshold a response can move. Everything
+else, including the event meta and the rules in items 2 and 3, is the builder's design, which the
 tester and judge accepted.
 
 **Decision.**
-1. **What counts toward a block** (owner decision for the 429 rule):
-   - `block.rate_limit_hits` counts **rate-limited minutes**: fixed one-minute UTC windows of
-     `rate_limits` (the same `window_start` as `RateLimiter`) whose `count` is over
+1. **What counts toward a block:**
+   - **Owner decision:** `block.rate_limit_hits` counts **rate-limited minutes**: fixed one-minute
+     UTC windows of `rate_limits` (the same `window_start` as `RateLimiter`) whose `count` is over
      `ratelimit.per_minute`, so the minute had at least one 429. The window is the current minute
-     plus the `block.window_minutes − 1` whole minutes before it. A burst inside one minute never
-     blocks.
-   - `block.error_responses` counts **error responses**: non-blocked 4xx responses other than 429.
-     5xx never count, since they are our failure or upstream's, not the client's. 429s don't count
-     here (co-lead decision), so a burst can't block through this threshold either.
-   - Each response checks only the threshold it can move: a 429 checks `rate_limit_hits`, any other
-     4xx checks `error_responses`. The block's `reason` is the threshold that was reached.
+     plus the `block.window_minutes − 1` whole minutes before it. While `block.rate_limit_hits` is
+     above 1, a burst inside one minute never blocks.
+   - **Co-lead decision:** `block.error_responses` counts **error responses**: non-blocked 4xx
+     responses other than 429, so a burst can't block through this threshold either. 5xx never
+     count, since they are our failure or upstream's, not the client's.
+   - **Co-lead round-3 brief:** each response checks only the threshold it can move. A 429 checks
+     `rate_limit_hits`, any other 4xx checks `error_responses`. The block's `reason` is the
+     threshold that was reached.
    - Blocked requests never count toward a block and never extend one.
    - A threshold is reached at `>=`. In `requests`, a row exactly `block.window_minutes` old has
      left the window.
@@ -123,15 +129,15 @@ tester and judge accepted.
 7. **The 403 (owner decision):** `IP_BLOCKED` says "Too many unusual requests came from your
    network. Please try again later.", with `Connection: close` and no `Retry-After`, so the
    duration isn't revealed.
-8. **Block events (owner decision),** with `events.source = api`, never the IP and never the
-   operator's reason text:
+8. **Block events (owner decision; the meta is the builder's),** with `events.source = api`, never
+   the IP and never the operator's reason text:
    - `ip.block` when an automatic block starts or is extended: meta `block_source = auto`,
      `reason` (`rate_limit_hits` or `error_responses`), `duration_minutes` (the configured
      duration, which is also the time to the new expiry), `extended`.
    - `ip.block` from `bin/ip.php block`: `block_source = manual`, `reason` (`given` or `default`),
      `duration_minutes` or null, `by = cli`.
-   - `ip.unblock` on every `bin/ip.php unblock`: `block_source` of the row or null, `was_active`,
-     `by = cli`.
+   - `ip.unblock` on every `bin/ip.php unblock`: `block_source` of the block that was lifted, or
+     null when none was active; `was_active`; `by = cli`.
    - A block that changes nothing writes no event.
 9. **Order.** The block check runs first, before CORS preflight, middleware and the rate limiter.
    The `requests` row is written after the response is built, and the automatic-block check runs
@@ -148,29 +154,34 @@ tester and judge accepted.
     operator output; events, the error log and stderr never do.
 
 **Consequences.**
-- **Cost per request:** the blocking step adds one `ip_blocks` read and one `requests` insert to
-  every request. A 429 adds one primary-key range read on `rate_limits` (at most
-  `block.window_minutes` rows), whatever the IP's traffic. Another 4xx adds a scan of the IP's `requests` rows in the window. At
-  most `block.error_responses` such scans happen per window, so the cost is linear in the IP's
-  traffic, not quadratic. The round-3 tester measured about 2 ms per 429 at 10, 5,000 and 50,000
-  rows, and about 4 ms per 404 at 20,000 rows. A covering index would need migration 4 and is
-  deferred to P3-01.
-- **Floods:** a client is blocked once it is rate-limited in 5 distinct minutes out of 10. Until
-  then a flood writes `requests` rows and `error` events at line rate: about five minutes of them
-  per block cycle, and `events` is never pruned. This partly reopens the Context's concern; it is
-  accepted with the owner's 429 decision.
+- **Cost per request:** the block check adds one `ip_blocks` read and the request log one insert
+  to every request. A 429 adds one primary-key range read on `rate_limits` (at most
+  `block.window_minutes` rows), whatever the IP's traffic. Another 4xx adds a scan of the IP's
+  `requests` rows in the window. At most `block.error_responses` such scans happen per window, so
+  the cost is linear in the IP's traffic, not quadratic. The round-3 tester measured about 2 ms per
+  429 at 10, 5,000 and 50,000 rows, and about 4 ms per 404 that led to a block with 20,000 rows in
+  the window (its report to the lead; LOG). A covering index would need migration 4 and is deferred
+  to P3-01.
+- **Floods:** with the defaults, a client is blocked once it is rate-limited in 5 distinct minutes
+  out of 10. Until then a flood writes `requests` rows and `error` events at line rate: about five
+  minutes of them per block cycle, and `events` is never pruned. This partly reopens the Context's
+  concern. It follows from the owner's 429 decision; the co-leads noted it in round 2 and no cap
+  was added.
 - **Shared addresses:** one busy minute behind a carrier NAT no longer blocks everyone behind it.
+  Five busy minutes in ten, or 100 other 4xx in the window (for example `/convert` validation
+  errors), still do (P3-01).
 - **Known limits:**
   - One global `ratelimit.per_minute` is assumed. A route with its own limit would make the
     rate-limited-minute count wrong (P1-05, P1-06).
   - The Kernel and `RateLimiter` read the clock separately. At a minute boundary a 429 can land in
     the next minute, which delays a block by at most one request (L-04).
   - Requests that fail before the Kernel (a database that can't be opened, or a schema behind the
-    code) write no `requests` row.
+    code) write no `requests` row, and a failed request-log write (item 6) leaves none either.
   - `ClientIp` doesn't canonicalize addresses, so a manual block typed in another form than the
-    proxy's `X-Forwarded-For` hop doesn't match it (P3-01). An IPv6 client can rotate addresses
-    inside its /64.
-  - Escapes the client sent aren't normalized: `%c3%a9` and `%C3%A9` log as different paths.
+    proxy's `X-Forwarded-For` hop doesn't match it (P3-01).
   - A blocked cross-origin request gets no CORS headers, so a browser sees a network error, not
     the 403 text (P1-07).
   - The thresholds are still first guesses, to be tuned against real traffic.
+  - Accepted, no task: an IPv6 client can rotate addresses inside its /64; escapes the client sent
+    aren't normalized (`%c3%a9` and `%C3%A9` log as different paths); an unblock in the same second
+    as the block doesn't forgive the requests of that second.

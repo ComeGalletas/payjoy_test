@@ -46,8 +46,9 @@ and that the flat backoff still costs 288 calls a day, so a persistent fault wou
 monthly quota in about 5 days. The co-leads' round-2 brief then required every failed refresh to
 trip the breaker. The owner made two decisions on 2026-10-21. First, the backoff grows from
 5 minutes to 1 hour and resets on a successful refresh. Second, it starts at 1 minute: 1, 5, 10,
-20, 40, 60. The rest (strength order, refresh floor, stale age, state validation) is the builder's
-design, which the tester and judge accepted in round 2.
+20, 40, 60. Before P1-05 the owner made a third (item 9). The rest (strength order, refresh
+floor, stale age, state validation) is the builder's design, which the tester and judge accepted
+in round 2.
 
 **Decision.**
 1. **Three kinds of trip**, stored as one `app_state` row (`upstream_breaker`, JSON,
@@ -84,6 +85,14 @@ design, which the tester and judge accepted in round 2.
 8. **Stored state is validated.** A row whose kind and code don't match, a backoff longer than
    1 hour or with no failures, a quota block ending after the next 1st, or an auth trip with an
    end time counts as no trip.
+9. **503 during an `unsupported-code` backoff (owner decision, 2026-10-21).** While a backoff
+   opened by `unsupported-code` on `/latest/USD` is open, a lookup without a usable stale table
+   answers 503, not 400. The fault is upstream's, not the user's (lead's rationale); a 400 there
+   would also count toward `block.error_responses` (ADR 0016) and could block users for an
+   upstream fault. The failed refresh that opens the backoff answers after the backoff is recorded,
+   so it gets the 503 too (lead's reading). A currency missing from a usable table (`not_in_table`,
+   raised by `RateCache`) stays a 400 `UPSTREAM_UNSUPPORTED_CODE`. P1-05 applies this; its
+   acceptance test covers it.
 
 **Consequences.**
 - Quota use stays bounded by time. A persistent fault that is neither quota nor auth costs at most
@@ -101,8 +110,6 @@ design, which the tester and judge accepted in round 2.
     one extra call, same data.
   - The quota block ends on the 1st (UTC). Upstream actually refreshes the quota on
     `refresh_day_of_month` from `/quota` (P1-08).
-  - While a backoff started by `unsupported-code` on `/latest/USD` is open, every lookup without a
-    usable stale table fails with `UPSTREAM_UNSUPPORTED_CODE`, today a 400 ("That currency is not
-    supported right now") for every currency. **Owner decision (2026-10-21): answer 503 instead.**
-    The fault is upstream's, not the user's, and `/latest/USD` is the code's only source. P1-05
-    applies it, with a generic upstream message, and its acceptance test covers it.
+  - Until P1-05 applies item 9, a lookup during an `unsupported-code` backoff without a usable
+    stale table fails with a 400 `UPSTREAM_UNSUPPORTED_CODE` ("That currency is not supported
+    right now") for every currency.

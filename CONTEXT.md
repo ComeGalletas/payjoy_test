@@ -50,7 +50,8 @@ name, add it here in the same commit that introduces it.
 | **rate-limit window** | A fixed one-minute UTC window (`window_start`) in which an IP's requests are counted against `ratelimit.per_minute`. |
 | **preflight** | A CORS `OPTIONS` request; answered with a 200 envelope, with `Access-Control-*` headers only for an allowed origin. |
 | **IP block** | A row in `ip_blocks`: requests from that IP get 403 `IP_BLOCKED` until `expires_at` or until unblocked. An **automatic block** comes from a `block.*` threshold; a **manual block** from `php api/bin/ip.php block`. |
-| **unblock** | `php api/bin/ip.php unblock`: ends a block now (`expires_at = now`) and keeps the row one window, so the requests before it never count again (the clean slate). |
+| **unblock** | `php api/bin/ip.php unblock`: ends a block now (`expires_at = now`) and keeps the row one window, so the requests before it never count again. |
+| **clean slate** | After a block ends or is lifted, only requests from its end on count toward the next block (ADR 0016 second amendment). |
 | **rate-limited minute** | A rate-limit window in which an IP went over `ratelimit.per_minute` (at least one 429). `block.rate_limit_hits` counts these, not 429 responses. |
 | **error response (for blocking)** | A non-blocked 4xx other than 429; what `block.error_responses` counts. 5xx never count. |
 | **block exemption** | An address never blocked automatically: loopback, the trusted proxy itself, and anything that isn't a valid IP. It can still be blocked by hand. |

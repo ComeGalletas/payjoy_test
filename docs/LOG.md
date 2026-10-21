@@ -30,12 +30,13 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - **Round 3** (`6ce7df5`): rate-limited minutes read from `rate_limits` (one primary-key range,
   at most `block.window_minutes` rows), each response checks only its own threshold,
   `block.window_minutes` capped at 1440, the flaky test fixed, the cut keeps a character's
-  escapes together; 1295 tests. Tester: PASS, about 2 ms per 429 at 10, 5,000 and 50,000 logged
-  rows, all mutations caught. Judge: APPROVE WITH NITS.
+  escapes together; 1295 tests. Tester: PASS, all mutations caught. Its report to the lead
+  measured about 2 ms per 429 at 10, 5,000 and 50,000 logged rows, and about 4 ms per 404 that led
+  to a block with 20,000 rows in the window. Judge: APPROVE WITH NITS.
 - Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
   as `a3a376b` (22:36:36 UTC).
-- **Process.** The builder hit two worktree-guard refusals in round 1 and the tester one in each of
-  rounds 1 and 3. Each was handled within the GR-030 exceptions: the stated remedy once in the same
+- **Process.** The builder hit two worktree-guard refusals in round 1 (PR #14 body), and the tester
+  one in each of rounds 1 and 3 (its reports to the lead). Each was handled within the GR-030 exceptions: the stated remedy once in the same
   tool, or the Edit, Write or Grep tool. No guarded target was touched.
 - Upstream: 0 real calls.
 - Lead docs: ADR 0016 second amendment (what counts toward a block, clean slate, settings, block
