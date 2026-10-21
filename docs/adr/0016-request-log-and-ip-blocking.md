@@ -24,7 +24,8 @@ abusive IPs must be cut off instead.
   is also an `error` event. Blocked requests are the exception: they write only their `requests`
   row (`blocked = 1`), no `error` event, so blocking doesn't double the writes. The error
   log gets the exception class, file and line only, never the message.
-- **Automatic blocking** (owner-confirmed; the thresholds are tuned later). An IP that reaches `block.rate_limit_hits` 429s or
+- **Automatic blocking** (owner-confirmed; the thresholds are tuned later). An IP that reaches
+  `block.rate_limit_hits` 429s or
   `block.error_responses` error responses within `block.window_minutes` is blocked for
   `block.duration_minutes`. Blocks live in `ip_blocks` with an expiry; manual blocks may have none.
   Operators use `php bin/ip.php block|unblock|list`.

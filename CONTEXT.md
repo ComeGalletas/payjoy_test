@@ -71,7 +71,7 @@ name, add it here in the same commit that introduces it.
 | Term | Meaning |
 |---|---|
 | **event** | One append-only row in `events`, written only through `Metrics`. |
-| **error event** | The `error` event the Kernel writes for every error response: meta `http_status`, `method`, path without query, exception class. |
+| **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query, exception class. |
 | **request log** | The `requests` table: one row per incoming request with the raw client IP, kept `requests.retention_days` (ADR 0016). |
 | **funnel** | Sessions per step and channel: started → each step → completed / abandoned. |
 | **report** | Output of `ReportQuery`, via `/reports` or `bin/report.php`; days split on `reports.timezone`. |

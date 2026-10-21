@@ -24,7 +24,8 @@ columns (not exact in SQLite, breaks ADR 0010); keeping `REAL` with the string b
   (`^\d{1,7}(\.\d{1,2})?$`) is converted to cents with integer arithmetic, never through a float.
 - Exchange rates are stored as `rate_scaled BIGINT = round(rate × 10^10)`, a fixed scale of ten
   decimals. The largest rates (LBP, about 89,500 × 10^10 ≈ 9 × 10^14) fit easily in 64 bits and
-  stay below 2^53, so even the float product before rounding is exact.
+  stay below 2^53, so the float error in `rate × 10^10` stays far below 0.5 and `round()` gives
+  the correct integer.
 - Calculations stay as in ADR 0011: `converted = amount × rate` is a PHP float, and splitting and
   display use integer minor units. Only storage changes.
 - `Database::floatParam()` is removed once nothing binds floats.
