@@ -23,7 +23,7 @@ use Throwable;
  */
 final class RateLimiter implements Middleware
 {
-    private const WINDOW_SECONDS = 60;
+    public const WINDOW_SECONDS = 60;
 
     /** @var Closure(): int */
     private readonly Closure $clock;
@@ -43,10 +43,37 @@ final class RateLimiter implements Middleware
         $this->clock = $clock ?? static fn (): int => time();
     }
 
+    /**
+     * The start of the fixed one-minute UTC window holding $now.
+     */
+    public static function windowStart(int $now): int
+    {
+        return intdiv($now, self::WINDOW_SECONDS) * self::WINDOW_SECONDS;
+    }
+
+    /**
+     * The number of $ip's windows starting in [$fromWindowStart, $toWindowStart] in which it
+     * got at least one 429: automatic blocking's "rate-limited minutes" (IpBlocking).
+     *
+     * process() counts every request it sees, the ones it refuses included, so a window's
+     * count is over the limit exactly when that window had a 429; and only this class answers
+     * 429. One primary-key range read of at most one row per window, whatever the IP's
+     * traffic. Throws on a database failure.
+     */
+    public function rateLimitedWindows(string $ip, int $fromWindowStart, int $toWindowStart): int
+    {
+        $select = $this->db->pdo()->prepare(
+            'SELECT COUNT(*) FROM rate_limits WHERE ip = ? AND window_start >= ? AND window_start <= ? AND count > ?',
+        );
+        $select->execute([$ip, $fromWindowStart, $toWindowStart, $this->perMinute]);
+
+        return (int) $select->fetchColumn();
+    }
+
     public function process(Request $request, callable $next): JsonResponse
     {
         $now = ($this->clock)();
-        $windowStart = intdiv($now, self::WINDOW_SECONDS) * self::WINDOW_SECONDS;
+        $windowStart = self::windowStart($now);
         $count = $this->increment(ClientIp::resolve($request, $this->trustedProxy), $windowStart);
 
         if ($count > $this->perMinute) {

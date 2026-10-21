@@ -22,4 +22,10 @@ return [
     'llm.enabled' => false,
     'llm.confidence_threshold' => 0.8,
     'requests.retention_days' => 30,
+    // Automatic IP blocking (ADR 0016): first guesses, to be tuned against real traffic.
+    // Http\IpBlocking validates them when the kernel is built.
+    'block.window_minutes' => 10,
+    'block.rate_limit_hits' => 5,
+    'block.error_responses' => 100,
+    'block.duration_minutes' => 60,
 ];

@@ -23,6 +23,7 @@ final class ErrorCodesTest extends TestCase
         'UPSTREAM_AUTH' => 503,
         'UPSTREAM_MALFORMED' => 503,
         'ADMIN_UNAUTHORIZED' => 401,
+        'IP_BLOCKED' => 403,
         'NOT_FOUND' => 404,
         'RATE_LIMITED' => 429,
         'BOT_MAX_RETRIES' => null,

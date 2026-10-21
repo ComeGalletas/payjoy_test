@@ -11,10 +11,13 @@ use FxInstallments\Db\Database;
 use FxInstallments\Db\Migrator;
 use FxInstallments\Http\AdminAuth;
 use FxInstallments\Http\Cors;
+use FxInstallments\Http\IpBlocking;
+use FxInstallments\Http\IpBlocks;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\RateLimiter;
 use FxInstallments\Http\Router;
 use FxInstallments\Metrics\Metrics;
+use FxInstallments\Metrics\RequestLog;
 use FxInstallments\Rates\ExchangeRateClient;
 use FxInstallments\Rates\RateCache;
 use FxInstallments\Rates\RateStore;
@@ -86,9 +89,46 @@ final class App
         return new Router();
     }
 
+    /**
+     * The kernel with the request log and the block check (ADR 0016) always wired. Throws
+     * InvalidArgumentException when a `block.*` setting is out of range.
+     */
     public function kernel(?Router $router = null): Kernel
     {
-        return new Kernel($router ?? $this->router(), $this->metrics, $this->errorLog);
+        return new Kernel(
+            $router ?? $this->router(),
+            $this->metrics,
+            $this->errorLog,
+            requestLog: $this->requestLog(),
+            blocking: $this->ipBlocking(),
+            clock: $this->clock,
+            trustedProxy: Env::nonEmpty('TRUSTED_PROXY'),
+        );
+    }
+
+    public function requestLog(): RequestLog
+    {
+        return new RequestLog($this->db, $this->errorLog);
+    }
+
+    public function ipBlocks(): IpBlocks
+    {
+        return new IpBlocks($this->db);
+    }
+
+    /**
+     * Automatic blocking from the `block.*` settings.
+     */
+    public function ipBlocking(): IpBlocking
+    {
+        return IpBlocking::fromConfig(
+            $this->ipBlocks(),
+            $this->requestLog(),
+            $this->rateLimiter(),
+            $this->metrics,
+            $this->config,
+            Env::nonEmpty('TRUSTED_PROXY'),
+        );
     }
 
     /**

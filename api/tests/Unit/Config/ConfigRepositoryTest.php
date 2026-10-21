@@ -30,8 +30,12 @@ final class ConfigRepositoryTest extends TestCase
         self::assertFalse($config->bool('llm.enabled'));
         self::assertSame(0.8, $config->float('llm.confidence_threshold'));
         self::assertSame(30, $config->int('requests.retention_days'));
+        self::assertSame(10, $config->int('block.window_minutes'));
+        self::assertSame(5, $config->int('block.rate_limit_hits'));
+        self::assertSame(100, $config->int('block.error_responses'));
+        self::assertSame(60, $config->int('block.duration_minutes'));
 
-        self::assertCount(14, $config->keys());
+        self::assertCount(18, $config->keys());
     }
 
     public function testAWrongTypeFailsLoudly(): void

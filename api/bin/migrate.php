@@ -63,7 +63,8 @@ try {
     }
 
     $migrator->assertCurrent();
-    $retention = new Retention($pdo, (new ConfigRepository())->int('requests.retention_days'));
+    $config = new ConfigRepository();
+    $retention = new Retention($pdo, $config->int('requests.retention_days'), $config->int('block.window_minutes'));
     foreach ($retention->prune(time()) as $table => $count) {
         fwrite(STDOUT, sprintf("prune: %s %d deleted\n", $table, $count));
     }
