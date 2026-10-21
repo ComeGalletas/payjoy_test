@@ -186,8 +186,9 @@ Reasons and consequences are in the ADR named in each row.
 
 ### 3c. Amount input in the bot (`Validation/AmountParser`)
 
-> **Refined in P1-03: the ADR 0013 amendment is authoritative** and changes rules 1 and 5 below
-> (markers only at the ends; inner spaces only as thousands; a single `.` + 3 digits is unclear).
+> **Refined in P1-03: the ADR 0013 amendment is authoritative.** It changes rules 1–5 below and
+> the "canonical or unclear" output: markers only at the ends; inner spaces only as thousands; a
+> single `.` + 3 digits is unclear; a first-group rule; more than 7 digits is invalid (`over_max`).
 
 The bot speaks English, but users may type either separator. `AmountParser` returns a canonical
 string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
@@ -207,11 +208,10 @@ string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
 `VALIDATION_AMOUNT` and `meta.reason=unclear`. After `bot.max_retries` the session is abandoned.
 `/convert` does not use `AmountParser`; it accepts only the strict form.
 
-**Summary of the ADR 0013 amendment:** markers
-only at the ends; only space, NBSP and U+202F inside a number, as thousands in groups of 3; a single
-`.` followed by exactly 3 digits is unclear while a single `,` followed by 3 digits is thousands;
-the first thousands group is 1–3 digits with no leading `0`; more than 64 bytes is unclear; more
-than 7 integer digits is invalid (`over_max`).
+**Summary of the ADR 0013 amendment:** markers only at the ends; only space, NBSP and U+202F
+inside a number, as thousands in groups of 3; a single `.` followed by exactly 3 digits is unclear
+while a single `,` followed by 3 digits is thousands; the first thousands group is 1–3 digits with
+no leading `0`; more than 64 bytes is unclear; more than 7 integer digits is invalid (`over_max`).
 
 ## 4. Repository structure (Phase 1)
 
