@@ -70,7 +70,7 @@ final class RateLimiter implements Middleware
         return (int) $select->fetchColumn();
     }
 
-    public function process(Request $request, callable $next): JsonResponse
+    public function process(Request $request, callable $next): Response
     {
         $now = ($this->clock)();
         $windowStart = self::windowStart($now);

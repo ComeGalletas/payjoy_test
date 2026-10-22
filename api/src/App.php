@@ -23,6 +23,7 @@ use FxInstallments\Http\IpBlocks;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\RateLimiter;
 use FxInstallments\Http\Router;
+use FxInstallments\Http\WidgetEndpoint;
 use FxInstallments\Metrics\Metrics;
 use FxInstallments\Metrics\RequestLog;
 use FxInstallments\Rates\ExchangeRateClient;
@@ -46,6 +47,9 @@ final class App
 {
     /** The flow file (docs/PLAN.md §4, §9). */
     public const DEFAULT_FLOW = __DIR__ . '/../flows/default.yaml';
+
+    /** The built-in widget's files (docs/PLAN.md §4, §7; P1-07). */
+    public const WIDGET_DIR = __DIR__ . '/../resources/widget';
 
     public readonly Metrics $metrics;
 
@@ -98,18 +102,28 @@ final class App
     }
 
     /**
-     * The production route table: `GET /convert` (P1-05) behind the rate limiter, and
+     * The production route table: `GET /convert` (P1-05) behind the rate limiter,
      * `POST /bot/message` (P1-06) behind Cors and the same global rate limiter (ADR 0016 second
-     * amendment: one `ratelimit.per_minute`). Every other path is NOT_FOUND. Building it touches
-     * neither the database, the flow file nor the upstream client.
+     * amendment: one `ratelimit.per_minute`), and the widget's page, script and style sheet
+     * (P1-07) without middleware. Every other path is NOT_FOUND. Building it touches neither the
+     * database, the flow file, the widget files nor the upstream client.
      */
     public function router(): Router
     {
         $router = new Router();
         $router->get(ConvertEndpoint::PATH, $this->convertEndpoint(), [$this->rateLimiter()]);
         $router->post(BotMessageEndpoint::PATH, $this->botMessageEndpoint(), [$this->cors(), $this->rateLimiter()]);
+        $this->widget()->register($router);
 
         return $router;
+    }
+
+    /**
+     * The built-in widget; its page may be framed by the `cors.allowed_origins` origins.
+     */
+    public function widget(): WidgetEndpoint
+    {
+        return new WidgetEndpoint(self::WIDGET_DIR, $this->config->stringList('cors.allowed_origins'));
     }
 
     public function botMessageEndpoint(): BotMessageEndpoint

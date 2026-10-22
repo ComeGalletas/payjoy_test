@@ -17,8 +17,10 @@ use stdClass;
  * failure surfaces inside the handler and becomes an INTERNAL error instead of a broken body.
  * Instances are immutable; withHeader() returns a copy.
  */
-final class JsonResponse
+final class JsonResponse implements Response
 {
+    use SendsResponse;
+
     private const JSON_FLAGS = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
 
     /**
@@ -77,17 +79,6 @@ final class JsonResponse
         return new self($status, $body, $code, []);
     }
 
-    public function withHeader(string $name, string $value): self
-    {
-        if (preg_match('/[\r\n]/', $name . $value) === 1) {
-            throw new InvalidArgumentException('Header names and values must not contain line breaks');
-        }
-        $copy = clone $this;
-        $copy->headers[strtolower($name)] = $value;
-
-        return $copy;
-    }
-
     public function status(): int
     {
         return $this->status;
@@ -119,29 +110,5 @@ final class JsonResponse
             'content-type' => 'application/json',
             'x-content-type-options' => 'nosniff',
         ] + $this->headers;
-    }
-
-    public function header(string $name): ?string
-    {
-        return $this->headers()[strtolower($name)] ?? null;
-    }
-
-    /**
-     * Writes the status line, headers and body to the SAPI output.
-     */
-    public function send(): void
-    {
-        if (!headers_sent()) {
-            http_response_code($this->status);
-            foreach ($this->headers() as $name => $value) {
-                header(self::headerCase($name) . ': ' . $value);
-            }
-        }
-        echo $this->body;
-    }
-
-    private static function headerCase(string $name): string
-    {
-        return implode('-', array_map(ucfirst(...), explode('-', $name)));
     }
 }

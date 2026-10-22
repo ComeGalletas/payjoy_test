@@ -11,7 +11,7 @@ namespace FxInstallments\Http;
 interface Middleware
 {
     /**
-     * @param callable(Request): JsonResponse $next
+     * @param callable(Request): Response $next
      */
-    public function process(Request $request, callable $next): JsonResponse;
+    public function process(Request $request, callable $next): Response;
 }

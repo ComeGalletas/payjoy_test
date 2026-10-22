@@ -11,8 +11,9 @@ use FxInstallments\Metrics\RequestLog;
 use Throwable;
 
 /**
- * Runs a request through the block check and the router, turns every outcome into an
- * envelope, and records it.
+ * Runs a request through the block check and the router, turns every failure into an
+ * envelope, and records it. A route may answer with a non-envelope TextResponse (the widget's
+ * files, P1-07); blocks, errors and exceptions are always JSON envelopes.
  *
  * - **Block check** (ADR 0016), before routing and so before any middleware or CORS preflight:
  *   a client IP with an active IP block gets a minimal 403 IP_BLOCKED envelope with
@@ -63,7 +64,7 @@ final class Kernel
         $this->clock = $clock ?? static fn (): int => time();
     }
 
-    public function handle(Request $request): JsonResponse
+    public function handle(Request $request): Response
     {
         $started = hrtime(true);
         $now = ($this->clock)();
