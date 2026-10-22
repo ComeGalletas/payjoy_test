@@ -80,7 +80,8 @@ design, which the tester and judge accepted.
    reach.
 6. **`MinorUnits` choices:** XDR uses 2 (ISO lists none); the territory codes FOK, GGP, IMP, JEP,
    KID and TVD take their parent currency's exponent; the legacy codes ANG, SLL and ZWL are listed
-   (since P1-10 also CNH, BGN and HRK, see "Third amendment").
+   (since P1-10 also the offshore yuan CNH, with CNY's exponent, and the legacy BGN and HRK; see
+   "Third amendment").
 
 **Consequences.**
 - The display is exact for the stored rate: the round-2 tester's bcmath oracle found 0 mismatches
@@ -107,11 +108,13 @@ Recorded from P1-08 (PR #23, ADR 0023); owner decision 4.
 
 ## Third amendment (2026-10-22): codes from the live table
 
-Recorded from P1-10 (PR #28, ADR 0012 third amendment); the builder's choices, accepted by the
-owner.
+Recorded from P1-10 (PR #28, ADR 0012 third amendment). CNH's and HRK's exponents are the
+builder's, which the tester and judge accepted and the owner approved with the PR; BGN's move to
+the legacy group is an owner decision (its exponent was already 2).
 
-- CNH, the offshore yuan, takes CNY's exponent 2 (the parent-currency rule of item 6).
-- The legacy codes BGN and HRK take their last ISO exponent, 2, like ANG, SLL and ZWL.
-- Both CNH and HRK already fell back to 2, so no displayed number changes; their conversions no
-  longer set `meta.minor_units_default`. `MinorUnits` now has an explicit exponent for every code
-  on the fallback list, and a test checks that the two lists match.
+- CNH, the offshore yuan, takes CNY's exponent 2 (the parent-currency rule of amendment item 6).
+- HRK takes its last ISO exponent, 2, like ANG, SLL and ZWL; BGN, now in the legacy group, keeps
+  its 2.
+- CNH and HRK already fell back to 2, so no displayed number changes; their conversions no longer
+  set `meta.minor_units_default`. `MinorUnits` now lists exactly the fallback codes (before, it
+  also had ANG, SLL and ZWL), and `P1_10_LiveCodesTest` checks that the two lists match.

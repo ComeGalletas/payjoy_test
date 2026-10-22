@@ -1,7 +1,8 @@
 # 0001 — PHP 8.3 without a framework
 
 - **Status:** Accepted (amended 2026-10-21: Guzzle 8, see "Amendment"; amended again 2026-10-21:
-  `symfony/yaml` 7.4, see "Second amendment"; note 2026-10-22: the P1-10 patch check)
+  `symfony/yaml` 7.4, see "Second amendment"; note 2026-10-22: the P1-10 patch check, LOG
+  2026-10-22)
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -44,7 +45,7 @@ amendment), and `phpunit/phpunit` (tests) as require-dev only. Required extensio
 
 **Consequences.**
 - Guzzle 8.3.0, psr7 3.2.0 and promises 3.1.0 were 3–4 days old when locked, so fixes may follow
-  soon. P1-10 checked for 8.3.x patch releases on 2026-10-22: none, and a full
+  soon. P1-10 checked for 8.3.x patch releases on 2026-10-22 (LOG): none, and a full
   `composer outdated` (transitive dependencies included) was up to date. Every later release
   checks again.
 - Moving to another major version, or dropping Guzzle, needs a new ADR.

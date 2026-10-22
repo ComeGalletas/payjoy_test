@@ -157,15 +157,18 @@ brief (named `not_writable` in round 3); the rest is the builder's design.
 
 ## Third amendment (2026-10-22): the live code list and the cost of `/quota`
 
-Recorded from P1-10: the lead's run against the real key (owner-authorized) and PR #28. Items 1 to
-3 are the builder's decisions, accepted by the owner (2026-10-22); item 4 is an owner decision;
-item 5 is the run's measurement.
+Recorded from P1-10: the lead's one-time run against the real key (owner-authorized for P1-10
+only; LOG 2026-10-22) and PR #28. Items 1 to 3 record the builder's four decisions (keep KPW, SVC
+and VED; new codes in `UPSTREAM_ONLY`; a subset check; an acceptance test), accepted by the owner
+(2026-10-22); the sha256 pin and the pin of the three extras came from the round-1 review. Item 4
+is an owner decision; item 5 is the run's measurement.
 
 1. `FallbackCurrencies` now covers every code upstream quoted on 2026-10-22: 166 codes in one
-   `/latest/USD` answer, pinned with a sha256 in `api/tests/Fixtures/upstream_latest_usd_codes.txt`
-   by `P1_10_LiveCodesTest`. `ISO_4217` holds active ISO 4217 codes; `UPSTREAM_ONLY` holds the
-   codes upstream quotes that aren't, in three groups: the territory codes (FOK, GGP, IMP, JEP,
-   KID, TVD), the offshore yuan CNH, and legacy codes (ANG, BGN, HRK, SLL, ZWL).
+   `/latest/USD` answer, kept in `api/tests/Fixtures/upstream_latest_usd_codes.txt` and pinned by
+   count and sha256 in `P1_10_LiveCodesTest`. `ISO_4217` holds active ISO 4217 codes;
+   `UPSTREAM_ONLY` holds the codes upstream quotes that aren't, in three groups: the territory
+   codes (FOK, GGP, IMP, JEP, KID, TVD), the offshore yuan CNH, and legacy codes (ANG, BGN, HRK,
+   SLL, ZWL).
 2. KPW, SVC and VED stay, although upstream didn't quote them. On a cold start they pass
    validation; the request whose refresh stores a table without them answers 400
    `UPSTREAM_UNSUPPORTED_CODE` (`not_in_table`), and after that they are refused as 400
@@ -173,17 +176,23 @@ item 5 is the run's measurement.
 3. The test checks that every captured code is on the list (not that the lists are equal), and
    pins the extras as exactly KPW, SVC and VED.
 4. BGN, replaced by EUR on 2026-01-01, moved from `ISO_4217` to the legacy group (owner decision).
-5. Upstream counts `/quota` calls against the monthly quota, and its counter shows calls late. In
-   the run, the remaining quota read 1,500 at 18:44:21Z (one `/latest/USD` call had been made at
-   18:43:21Z) and 1,498 at 19:46:45Z, with no refresh in between: the two calls counted were that
-   `/latest/USD` call and the first read's own `/quota` call.
+5. Upstream counts `/quota` calls against the monthly quota, and its remaining count lags.
+   Measured once: remaining read 1,500 at 18:44:21Z (one `/latest/USD` call made at 18:43:21Z)
+   and 1,498 at 19:46:45Z, with no refresh in between; the app made one `/latest/USD` and two
+   `/quota` calls in all (the end-of-run report the owner viewed). Assuming no other client used
+   the key, at least one `/quota` call was counted; if a `/quota` answer never includes its own
+   call, the two counted were the `/latest/USD` call and the first read's call. The lag was more
+   than a minute; its upper bound is unknown.
 
 **Known limits.**
 - A code upstream starts quoting later is refused on a cold start again until someone recaptures
   the list; nothing detects the drift, and the evidence is one answer on one day. Recapture it at
-  each release, with the dependency check (L-04).
-- The admin `/health` view's `/quota` calls cost quota: a monitor polling it every
-  `health.quota_cache_minutes` (60) would use about 744 calls a month of 1,500, so monitors use
-  the public view (`INSTALL_LOCAL.md` section 10).
-- After any refresh the app converts into the withdrawn currencies upstream still quotes (ANG,
-  BGN, HRK, SLL, ZWL). Whether to offer them is a product question for the owner (L-04).
+  each release, with the dependency check. The capture needs a real `/latest/USD` call, so the
+  owner makes it or authorizes it each time; P1-10's authorization doesn't carry over (L-04).
+- The admin `/health` view's `/quota` calls cost quota: a monitor polling it hourly or more often
+  would use about 744 calls a month of 1,500, so monitors use the public view
+  (`INSTALL_LOCAL.md` section 10).
+- The app converts into the withdrawn currencies upstream still quotes (ANG, BGN, HRK, SLL, ZWL),
+  on a cold start too, since PR #28 put them on the fallback list. Not offering them would need a
+  deny list, because the allow-list is upstream's table. Whether to offer them is the owner's call
+  (L-04).

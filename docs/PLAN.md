@@ -783,13 +783,13 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
   origin listed in `cors.allowed_origins` (never tried by hand in P1-07). For quota used, read the
   report's `latest` endpoint row: `/quota` calls are counted apart, and whether upstream counts
-  them is unverified (ADR 0012 second amendment). Check it: read the admin `/health` view twice,
-  more than `health.quota_cache_minutes` apart with no rate refresh in between, compare the quota
-  left, and log the result. Run it on a new database without demo rows (ADR 0024): start the
-  server with INSTALL section 7's real-use command and run the CLI bot, both in shells without
-  `DB_DSN` set; before the run, check that no event has `"demo": true` in its meta and that
-  `php api/bin/report.php` shows no sessions; log which database file was used. The demo's
-  completed sessions on both channels would pass the acceptance below on their own.
+  them is unverified at the time (settled in the ADR 0012 third amendment). Check it: read the
+  admin `/health` view twice, more than `health.quota_cache_minutes` apart with no rate refresh in
+  between, compare the quota left, and log the result. Run it on a new database without demo rows
+  (ADR 0024): start the server with INSTALL section 7's real-use command and run the CLI bot, both
+  in shells without `DB_DSN` set; before the run, check that no event has `"demo": true` in its
+  meta and that `php api/bin/report.php` shows no sessions; log which database file was used. The
+  demo's completed sessions on both channels would pass the acceptance below on their own.
   Also (from P1-09): on the release checkout, follow `INSTALL_LOCAL.md` by hand where the review
   couldn't: register and run the prune task (Windows, and cron where available), make a backup and
   restore it, run the `sqlite3` lines where `sqlite3` is installed, and check the `git clone` URL;
@@ -802,13 +802,16 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from P1-05): check `MinorUnits` against the live codes too (every quoted code should have
   an exponent; unknown codes fall back to 2), and close the cold-start allow-list limit (ADR 0012
   amendment, known limits).
-  *DONE 2026-10-22: MVP delivered. The lead ran the real-key steps (owner-authorized, one-time) on a
-  new `api/var/app.db`: one completed session per channel (CLI and widget), and quota used 3 calls
-  (one `/latest/USD`, two `/quota`, which upstream counts). The by-hand widget check, both embeds
-  from a second origin, and the backup and restore passed; the owner registered, ran and removed
-  the prune task. The live-code follow-ups were PR #28 (two rounds): `FallbackCurrencies` and
+  *DONE 2026-10-22: MVP delivered. The lead ran the real-key steps (owner-authorized for P1-10
+  only) on a new `api/var/app.db`. The owner viewed `/reports` with the admin token: static 2
+  started and 2 completed, cli 1 and 1, `latest` 1 call, `quota` 2 calls; quota used 3 calls,
+  which upstream counts (ADR 0012 third amendment). The by-hand widget check, both embeds from a
+  second origin, and the backup and restore passed; the owner registered, ran and removed the
+  prune task. The live-code follow-ups were PR #28 (two rounds): `FallbackCurrencies` and
   `MinorUnits` cover the 166 live codes, and no dependency had a newer release. Decisions in the
-  ADR 0012 and 0011 third amendments and the ADR 0001 note.*
+  ADR 0012 and 0011 third amendments and the ADR 0001 note. The run used `e761e7e`; PR #28
+  (`38ceb76`) changed only the two static code lists and their tests, checked by the gate with
+  the mocked upstream.*
 
 ### Phase 2 — LLM normalizer (feature-flagged)
 
@@ -976,10 +979,12 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     Owner's call: make `Env::get` prefer the process environment, so the demo server needs no
     `variables_order` option (ADR 0024).
   - (P1-10) At each release, recapture the live codes (update the fixture, its count, date and
-    sha256) with the dependency check, since nothing detects a code upstream adds; give the
-    sha256 assertion in `P1_10_LiveCodesTest` a failure message that says to recapture. Owner's
-    call: whether to offer the withdrawn currencies upstream still quotes (ANG, BGN, HRK, SLL,
-    ZWL). Still untried by hand: the S4U form of the prune task, `schtasks --%`, cron, and the
+    sha256) with the dependency check, since nothing detects a code upstream adds. The capture
+    needs a real `/latest/USD` call, so the owner makes it or authorizes it each time; P1-10's
+    authorization doesn't carry over. Give the sha256 assertion in `P1_10_LiveCodesTest` a
+    failure message that says to recapture. Owner's call: whether to offer the withdrawn
+    currencies upstream still quotes (ANG, BGN, HRK, SLL, ZWL); not offering them needs a deny
+    list. Still untried by hand: the S4U form of the prune task, `schtasks --%`, cron, and the
     `sqlite3` lines (not installed on the dev host).
 
 ## 11. Working agreements for the agent

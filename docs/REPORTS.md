@@ -172,9 +172,12 @@ session that ended on an upstream error counts its code under `bot`.
 **Quota used:** upstream counts both kinds of call against the monthly quota (ADR 0012 third
 amendment): the `latest` row's `calls` (the `/latest/USD` refreshes, about 30 a month) and the
 `quota` row's `calls` (the admin view of `/health`, at most once per
-`health.quota_cache_minutes`). `summary.upstream_calls` and `upstream.calls` add them up, which is
-the quota used. Upstream shows calls late, so its own remaining count can lag a few calls behind.
-`/codes` is never called in Phase 1.
+`health.quota_cache_minutes`). `summary.upstream_calls` and `upstream.calls` add them up: this
+database's calls in the period, an upper bound on what upstream counted, since a call that failed
+before reaching upstream is counted too. Upstream's quota month starts on its
+`refresh_day_of_month` (the admin `/health` view's `upstream_refresh_date`), not on the report's
+dates, and calls made with the same key elsewhere don't appear here. Upstream's own remaining
+count lags (in P1-10 a call wasn't shown a minute later). `/codes` is never called in Phase 1.
 
 ### `requests` (the request log)
 
