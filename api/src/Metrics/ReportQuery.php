@@ -7,8 +7,10 @@ namespace FxInstallments\Metrics;
 use Closure;
 use FxInstallments\Convert\CurrencyCountryMap;
 use FxInstallments\Db\Connection;
+use FxInstallments\Flow\FlowDefinition;
 use FxInstallments\Flow\SessionStore;
 use FxInstallments\Http\IpBlock;
+use FxInstallments\Rates\ExchangeRateClient;
 use JsonException;
 use PDO;
 use Throwable;
@@ -23,9 +25,12 @@ use Throwable;
  * any upstream text. Every label taken from an event is checked against an allow-list, and
  * anything else is counted under OTHER (round 2), so a hand-edited or imported row can't put
  * free text into any format:
- * - endpoint: ENDPOINTS; error codes and `refresh_error`: ErrorCodes; `block_source`: `auto`,
- *   `manual` (`none` when null); block `reason`: BLOCK_REASONS; channel: Metrics::CHANNELS;
- * - currency: `^[A-Z]{3}$`; country: a CurrencyCountryMap name; step: `^[a-z_]{1,32}$`.
+ * - endpoint: endpoints() (ExchangeRateClient::ENDPOINTS); error codes and `refresh_error`:
+ *   ErrorCodes; `block_source`: `auto`, `manual` (`none` when null); block `reason`:
+ *   BLOCK_REASONS; channel: Metrics::CHANNELS;
+ * - currency: `^[A-Z]{3}$`; country: a CurrencyCountryMap name; step: the flow loader's
+ *   FlowDefinition::ID_PATTERN (round 3).
+ * The `other` note counts every folded value, those only the funnel sees included.
  *
  * **Amounts:** a conversion's cents count only when they are an integer from 1 to
  * `amount.max` × 100; any other value (null, negative, REAL, text, too large) counts the
@@ -51,13 +56,18 @@ use Throwable;
  *   session that never sent an answer (an opened widget, closed as expired), `never_answered`
  *   at `amount`: its own outcome, not counted in `abandoned`; it is still a
  *   `bot.session_abandoned` event (ADR 0022). Per step, `reached` counts the sessions whose
- *   final position is this step or a later one, `answered` those that got past it (the next
- *   step's `reached`), and `abandoned`, `never_answered` and `open` those whose final position
- *   is this step; so `reached = answered + abandoned + never_answered + open` on every row (for
- *   `result`, `completed` in place of `answered`), and started = completed + abandoned +
- *   never_answered + open. `retries` counts every failed answer at a step, a conversion that
- *   sent the user back (`via: convert`) included. A step name outside the flow's order gets its
- *   own row after the known ones.
+ *   final position is this step or a later one, `passed` those that got past it (the next
+ *   step's `reached`; owner's name, round 3), and `abandoned`, `never_answered` and `open` those
+ *   whose final position is this step; so `reached = passed + abandoned + never_answered + open`
+ *   on every row (for `result`, `completed` in place of `passed`), and started = completed +
+ *   abandoned + never_answered + open. `retries` counts every failed answer at a step, a
+ *   conversion that sent the user back (`via: convert`) included.
+ *   Round 3: a session that ended at a step outside the flow's order (a renamed step, `other`,
+ *   a null step) is placed at the known step after the furthest one it answered, with a note,
+ *   so `amount.reached` always equals `started`; that step name keeps a row for its retries. A
+ *   session whose `sessions` row is closed but whose end event is missing (the write failed,
+ *   INV-07) is counted by the row's status (completed, or abandoned at the row's step with
+ *   code `other`), with a note.
  * - **errors** by code: `http`, one per error response (the Kernel's `error` event; a
  *   `/convert` 4xx or 503 also has an `api.request` event, which is not counted again;
  *   rate-limited and INTERNAL answers have only the `error` event; blocked requests have
@@ -75,7 +85,7 @@ use Throwable;
  *   `block_source`.
  *
  * Cost: one pass over the period's events, one over the funnel cohort's bot events (from the
- * period start on, through the `events_ts` index), one read of the cohort's open sessions, and
+ * period start on, through the `events_ts` index), one read of the cohort's `sessions` rows, and
  * one grouped read of `requests`.
  */
 final class ReportQuery
@@ -87,8 +97,6 @@ final class ReportQuery
 
     /** The flow's steps in order (docs/PLAN.md §9); other step names follow, sorted. */
     public const STEPS = ['amount', 'currency', 'installments', 'result'];
-
-    public const ENDPOINTS = ['latest', 'codes', 'quota'];
 
     public const RESULTS = ['hit', 'miss', 'stale', 'blocked'];
 
@@ -107,6 +115,16 @@ final class ReportQuery
 
     /** @var Closure(): int */
     private readonly Closure $clock;
+
+    /**
+     * The upstream endpoints the client can call (ExchangeRateClient::ENDPOINTS), in its order.
+     *
+     * @return list<string>
+     */
+    public static function endpoints(): array
+    {
+        return array_keys(ExchangeRateClient::ENDPOINTS);
+    }
 
     /**
      * @param (Closure(): int)|null $clock UTC epoch seconds; defaults to time()
@@ -150,8 +168,10 @@ final class ReportQuery
 
         $events = $this->eventSections($period);
         $report += $events['sections'];
-        $report['funnel'] = $this->funnel($period);
+        $funnel = $this->funnel($period);
+        $report['funnel'] = $funnel['rows'];
         $report['requests'] = $this->requestLog($period);
+        $otherLabels = $events['other_labels'] + $funnel['other_labels'];
 
         $notes[] = 'The funnel counts the sessions that started in the period, followed to their end.';
         $notes[] = 'Upstream calls are /latest/USD refreshes (miss and stale lookups, except reason no_key) and /quota calls from the admin health view; /codes is never called in Phase 1.';
@@ -169,10 +189,22 @@ final class ReportQuery
                 $unreadable,
             );
         }
-        if ($events['other_labels'] > 0) {
+        if ($otherLabels > 0) {
             $notes[] = sprintf(
                 '%d value(s) outside the known codes, currencies, countries, steps or words are counted as "other".',
-                $events['other_labels'],
+                $otherLabels,
+            );
+        }
+        if ($funnel['outside_flow'] > 0) {
+            $notes[] = sprintf(
+                '%d session(s) ended at a step outside the flow\'s order; the funnel places each at the known step after its last answer.',
+                $funnel['outside_flow'],
+            );
+        }
+        if ($funnel['closed_without_end'] > 0) {
+            $notes[] = sprintf(
+                '%d session(s) were closed without an end event (its write failed); the funnel counts them by their sessions row.',
+                $funnel['closed_without_end'],
             );
         }
         $retainedFrom = $now - $this->requestsRetentionDays * 86_400;
@@ -209,8 +241,7 @@ final class ReportQuery
         }
         if ($closed >= $this->sweepBatch) {
             return [sprintf(
-                'At least %d expired sessions were waiting; %d were closed before counting, and any others may still show as open.',
-                $passes * $this->sweepBatch,
+                '%d expired sessions were closed before counting; more may remain and show as open.',
                 $passes * $this->sweepBatch,
             )];
         }
@@ -245,7 +276,7 @@ final class ReportQuery
         $countries = [];
         $errors = [];
         $upstream = [];
-        foreach (self::ENDPOINTS as $endpoint) {
+        foreach (self::endpoints() as $endpoint) {
             $upstream[$endpoint] = self::endpointTemplate();
         }
         $failures = [];
@@ -322,11 +353,14 @@ final class ReportQuery
 
                 case 'error':
                     $days[$day]['error_responses']++;
+                    if ($code === null) {
+                        $others++; // an error event without a code is counted as `other` too
+                    }
                     self::countError($errors, $code ?? self::OTHER, 'http');
                     break;
 
                 case 'upstream.call':
-                    $endpoint = array_key_exists('endpoint', $meta) ? self::word($meta['endpoint'], self::ENDPOINTS, $others) : 'latest';
+                    $endpoint = array_key_exists('endpoint', $meta) ? self::word($meta['endpoint'], self::endpoints(), $others) : 'latest';
                     $upstream[$endpoint] ??= self::endpointTemplate();
                     $result = is_string($meta['result'] ?? null) && in_array($meta['result'], self::RESULTS, true) ? $meta['result'] : null;
                     $upstream[$endpoint]['lookups']++;
@@ -431,29 +465,33 @@ final class ReportQuery
     }
 
     /**
-     * The funnel per channel, for the sessions that started in the period.
+     * The funnel per channel, for the sessions that started in the period, with how many labels
+     * it alone folded into `other` (steps, channels, `sessions.step`, and the code of an end
+     * event after the period, which the event pass doesn't see), how many sessions ended outside
+     * the flow's order, and how many were closed without an end event.
      *
-     * @return list<array<string, mixed>>
+     * @return array{rows: list<array<string, mixed>>, other_labels: int, outside_flow: int, closed_without_end: int}
      */
     private function funnel(ReportPeriod $period): array
     {
         $cohort = "SELECT session_id FROM events WHERE event_type = 'bot.session_start' AND ts >= ? AND ts < ?";
         $statement = $this->db->pdo()->prepare(
-            "SELECT session_id, channel, event_type, step, error_code, status FROM events WHERE source = 'bot' AND ts >= ?"
+            "SELECT ts, session_id, channel, event_type, step, error_code, status FROM events WHERE source = 'bot' AND ts >= ?"
             . " AND session_id IN ({$cohort}) ORDER BY id",
         );
         $statement->execute([$period->startUnix, $period->startUnix, $period->endUnix]);
 
-        $ignored = 0;
+        $others = 0;
+        $counted = 0; // codes the event pass already counted
         /** @var array<string, array{channel: ?string, answered: array<string, true>, retries: array<string, int>, steps: int, end: ?array{string, string, ?string}}> $sessions */
         $sessions = [];
         while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
             $id = (string) $row['session_id'];
             $sessions[$id] ??= ['channel' => null, 'answered' => [], 'retries' => [], 'steps' => 0, 'end' => null];
-            $step = self::step($row['step'], $ignored);
+            $step = self::step($row['step'], $others);
             switch ($row['event_type']) {
                 case 'bot.session_start':
-                    $sessions[$id]['channel'] ??= self::word($row['channel'], self::CHANNELS, $ignored);
+                    $sessions[$id]['channel'] ??= self::word($row['channel'], self::CHANNELS, $others);
                     break;
                 case 'bot.step':
                     $sessions[$id]['steps']++;
@@ -467,20 +505,28 @@ final class ReportQuery
                     $sessions[$id]['end'] ??= ['completed', 'result', null];
                     break;
                 case 'bot.session_abandoned':
-                    $sessions[$id]['end'] ??= ['abandoned', $step, self::code($row['error_code'], $ignored) ?? self::OTHER];
+                    if ((int) $row['ts'] >= $period->endUnix) {
+                        $code = self::code($row['error_code'], $others);
+                    } else {
+                        $code = self::code($row['error_code'], $counted);
+                    }
+                    $sessions[$id]['end'] ??= ['abandoned', $step, $code ?? self::OTHER];
                     break;
             }
         }
         $statement->closeCursor();
 
-        // Where each open session waits: its `sessions.step`.
-        $waiting = [];
-        $open = $this->db->pdo()->prepare("SELECT session_id, step FROM sessions WHERE status = 'open' AND session_id IN ({$cohort})");
-        $open->execute([$period->startUnix, $period->endUnix]);
-        foreach ($open->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $waiting[(string) $row['session_id']] = self::step($row['step'], $ignored);
+        // Each cohort session's row: where an open one waits, and the status of one whose end
+        // event was never written (INV-07 swallowed the write).
+        $rows = [];
+        $read = $this->db->pdo()->prepare("SELECT session_id, step, status FROM sessions WHERE session_id IN ({$cohort})");
+        $read->execute([$period->startUnix, $period->endUnix]);
+        foreach ($read->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $rows[(string) $row['session_id']] = [(string) $row['status'], self::step($row['step'], $others)];
         }
 
+        $outsideFlow = 0;
+        $closedWithoutEnd = 0;
         $channels = [];
         foreach (self::CHANNELS as $channel) {
             $channels[$channel] = self::channelTemplate();
@@ -495,16 +541,24 @@ final class ReportQuery
             foreach ($session['retries'] as $step => $count) {
                 $funnel['retries'][(string) $step] = ($funnel['retries'][(string) $step] ?? 0) + $count;
             }
-            if ($session['end'] === null) {
-                $at = $waiting[(string) $id] ?? self::nextStep($session['answered']);
+            $end = $session['end'];
+            $row = $rows[(string) $id] ?? null;
+            if ($end === null && $row !== null && $row[0] !== 'open') {
+                // Closed, but its end event is missing: counted by the row's status.
+                $closedWithoutEnd++;
+                $end = $row[0] === 'completed' ? ['completed', 'result', null] : ['abandoned', $row[1], self::OTHER];
+            }
+            if ($end === null) {
+                $at = $row === null ? self::nextStep($session['answered']) : self::knownStep($row[1], $session['answered'], $outsideFlow);
                 $funnel['open']++;
                 $funnel['open_at'][$at] = ($funnel['open_at'][$at] ?? 0) + 1;
-            } elseif ($session['end'][0] === 'completed') {
+            } elseif ($end[0] === 'completed') {
                 $funnel['completed']++;
             } elseif ($session['steps'] === 0) {
                 $funnel['never_answered']++;
             } else {
-                [, $at, $code] = $session['end'];
+                [, $step, $code] = $end;
+                $at = self::knownStep($step, $session['answered'], $outsideFlow);
                 $funnel['abandoned']++;
                 $funnel['abandoned_at'][$at] = ($funnel['abandoned_at'][$at] ?? 0) + 1;
                 $funnel['abandoned_by_code'][(string) $code] = ($funnel['abandoned_by_code'][(string) $code] ?? 0) + 1;
@@ -512,17 +566,36 @@ final class ReportQuery
             unset($funnel);
         }
 
-        $rows = [];
+        $out = [];
         foreach ($channels as $channel => $funnel) {
-            $rows[] = self::funnelRow((string) $channel, $funnel);
+            $out[] = self::funnelRow((string) $channel, $funnel);
         }
 
-        return $rows;
+        return ['rows' => $out, 'other_labels' => $others, 'outside_flow' => $outsideFlow, 'closed_without_end' => $closedWithoutEnd];
     }
 
     /**
-     * The step an open session without a `sessions` row waits at: the one after the furthest
-     * known step it answered (never `result`), or the first.
+     * $step when it is one of the flow's steps; otherwise (a renamed or unknown step, `other`,
+     * `none`) the known step after the furthest one the session answered, counted in
+     * $outsideFlow (round 3: so `amount.reached` always equals the sessions started).
+     *
+     * @param array<string, true> $answered
+     */
+    private static function knownStep(string $step, array $answered, int &$outsideFlow): string
+    {
+        if (in_array($step, self::STEPS, true)) {
+            return $step;
+        }
+        $outsideFlow++;
+
+        return self::nextStep($answered);
+    }
+
+    /**
+     * The known step after the furthest known step the session answered, or the first; never
+     * `result` (a session there either completed or was abandoned there by an upstream error).
+     * Used for an open session with no `sessions` row and for a session that ended outside the
+     * flow's order.
      *
      * @param array<string, true> $answered
      */
@@ -559,7 +632,7 @@ final class ReportQuery
             if ($step === 'result') {
                 $row['completed'] = $funnel['completed'];
             } else {
-                $row['answered'] = $atOrBeyond($index + 1);
+                $row['passed'] = $atOrBeyond($index + 1);
                 $row['retries'] = $funnel['retries'][$step] ?? 0;
             }
             $row['abandoned'] = $funnel['abandoned_at'][$step] ?? 0;
@@ -568,6 +641,8 @@ final class ReportQuery
             $steps[] = $row;
         }
 
+        // Steps outside the flow's order keep a row for their retries; the sessions that ended
+        // there are placed at a known step (knownStep()), so these rows reach nobody.
         $others = array_map('strval', array_keys($funnel['retries'] + $funnel['abandoned_at'] + $funnel['open_at']));
         $others = array_values(array_diff(array_unique($others), self::STEPS));
         sort($others, SORT_STRING);
@@ -577,7 +652,7 @@ final class ReportQuery
             $steps[] = [
                 'step' => $step,
                 'reached' => $abandoned + $open,
-                'answered' => 0,
+                'passed' => 0,
                 'retries' => $funnel['retries'][$step] ?? 0,
                 'abandoned' => $abandoned,
                 'never_answered' => 0,
@@ -798,7 +873,8 @@ final class ReportQuery
     }
 
     /**
-     * A step name (`^[a-z_]{1,32}$`), `none` for null, otherwise OTHER.
+     * A step id as the flow loader accepts it (FlowDefinition::ID_PATTERN: a letter, then up to
+     * 39 letters, digits or `_`), `none` for null, otherwise OTHER.
      */
     public static function step(mixed $value, int &$others = 0): string
     {
@@ -806,7 +882,7 @@ final class ReportQuery
             return 'none';
         }
 
-        return is_string($value) && preg_match('/^[a-z_]{1,32}$/D', $value) === 1 ? $value : self::word(null, [], $others);
+        return is_string($value) && preg_match(FlowDefinition::ID_PATTERN, $value) === 1 ? $value : self::word(null, [], $others);
     }
 
     /**

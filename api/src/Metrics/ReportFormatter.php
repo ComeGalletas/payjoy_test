@@ -200,7 +200,7 @@ final class ReportFormatter
             $steps = array_map(static fn (array $step): array => [
                 (string) $step['step'],
                 $step['reached'] === null ? '-' : self::integer($step['reached']),
-                isset($step['answered']) ? self::integer($step['answered']) : '-',
+                isset($step['passed']) ? self::integer($step['passed']) : '-',
                 isset($step['retries']) ? self::integer($step['retries']) : '-',
                 isset($step['completed']) ? self::integer($step['completed']) : '-',
                 self::integer($step['abandoned']),
@@ -209,7 +209,7 @@ final class ReportFormatter
             ], $funnel['steps']);
             $out .= self::section(
                 "Funnel, channel {$funnel['channel']} (sessions started in the period)",
-                ['Step', 'Reached', 'Answered', 'Retries', 'Completed', 'Abandoned', 'Never answered', 'Open'],
+                ['Step', 'Reached', 'Passed', 'Retries', 'Completed', 'Abandoned', 'Never answered', 'Open'],
                 $steps,
             );
             $codes = array_map(static fn (array $row): string => "{$row['code']} {$row['count']}", $funnel['abandoned_by_code']);

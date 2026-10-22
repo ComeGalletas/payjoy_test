@@ -159,11 +159,11 @@ final class ReportFormatterTest extends TestCase
             'funnel' => [[
                 'channel' => 'static', 'started' => 3, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 3, 'answered' => 2, 'retries' => 3, 'abandoned' => 0],
-                    ['step' => 'currency', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0],
+                    ['step' => 'amount', 'reached' => 3, 'passed' => 2, 'retries' => 3, 'abandoned' => 0],
+                    ['step' => 'currency', 'reached' => 2, 'passed' => 1, 'retries' => 0, 'abandoned' => 0],
+                    ['step' => 'installments', 'reached' => 1, 'passed' => 1, 'retries' => 0, 'abandoned' => 0],
                     ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0],
-                    ['step' => 'nickname', 'reached' => null, 'answered' => 0, 'retries' => 1, 'abandoned' => 1],
+                    ['step' => 'nickname', 'reached' => null, 'passed' => 0, 'retries' => 1, 'abandoned' => 1],
                 ],
                 'abandoned_by_code' => [['code' => 'BOT_MAX_RETRIES', 'count' => 1]],
             ]],

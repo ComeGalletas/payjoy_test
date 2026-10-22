@@ -134,7 +134,8 @@ final class QuotaCacheTest extends TestCase
 
         self::assertSame([QuotaStatus::BLOCKED, self::NOW, 1497, null], [$old->source, $old->checkedAt, $old->quota?->requestsRemaining, $old->errorCode]);
         self::assertSame(1, $upstream->calls());
-        self::assertSame(['result' => 'blocked', 'endpoint' => 'quota', 'reason' => 'read_only'], $this->events()[3][4]);
+        self::assertSame(['result' => 'blocked', 'endpoint' => 'quota', 'reason' => QuotaCache::NOT_WRITABLE], $this->events()[3][4]);
+        self::assertSame('not_writable', QuotaCache::NOT_WRITABLE);
     }
 
     public function testOtherTripsDoNotStopTheQuotaCall(): void

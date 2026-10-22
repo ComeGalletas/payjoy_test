@@ -103,9 +103,9 @@ final class P1_08_ReportsTest extends TestCase
             [
                 'channel' => 'static', 'started' => 3, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 3, 'answered' => 1, 'retries' => 3, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0],
-                    ['step' => 'currency', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
-                    ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'amount', 'reached' => 3, 'passed' => 1, 'retries' => 3, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0],
+                    ['step' => 'currency', 'reached' => 1, 'passed' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'installments', 'reached' => 1, 'passed' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                     ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ],
                 'abandoned_by_code' => [['code' => 'BOT_MAX_RETRIES', 'count' => 1]],
@@ -113,9 +113,9 @@ final class P1_08_ReportsTest extends TestCase
             [
                 'channel' => 'cli', 'started' => 2, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 2, 'answered' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
-                    ['step' => 'currency', 'reached' => 2, 'answered' => 2, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
-                    ['step' => 'installments', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'amount', 'reached' => 2, 'passed' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'currency', 'reached' => 2, 'passed' => 2, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'installments', 'reached' => 2, 'passed' => 1, 'retries' => 0, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0],
                     ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ],
                 'abandoned_by_code' => [['code' => 'BOT_SESSION_EXPIRED', 'count' => 1]],
@@ -123,9 +123,9 @@ final class P1_08_ReportsTest extends TestCase
             [
                 'channel' => 'typebot', 'started' => 0, 'completed' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
-                    ['step' => 'currency', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
-                    ['step' => 'installments', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'amount', 'reached' => 0, 'passed' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'currency', 'reached' => 0, 'passed' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'installments', 'reached' => 0, 'passed' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                     ['step' => 'result', 'reached' => 0, 'completed' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ],
                 'abandoned_by_code' => [],

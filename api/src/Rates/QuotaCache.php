@@ -33,6 +33,9 @@ final class QuotaCache
 {
     public const STATE_KEY = 'upstream_quota';
 
+    /** The blocked event's reason while the database can't be written, read-only or locked. */
+    public const NOT_WRITABLE = 'not_writable';
+
     /** @var Closure(): ExchangeRateClient */
     private readonly Closure $client;
 
@@ -63,9 +66,10 @@ final class QuotaCache
     }
 
     /**
-     * @param bool $mayAsk false while the database can't be written: the answer couldn't be
+     * @param bool $mayAsk false while the database can't be written (a read-only file or
+     *        connection, or a write lock held past the busy timeout): the answer couldn't be
      *        cached, so upstream isn't asked; the last stored answer comes back as `blocked`
-     *        (event reason `read_only`).
+     *        (event reason NOT_WRITABLE, round 3).
      */
     public function status(bool $mayAsk = true): QuotaStatus
     {
@@ -79,7 +83,7 @@ final class QuotaCache
         }
 
         if (!$mayAsk) {
-            $this->record('blocked', $started, $cached?->errorCode, 'read_only');
+            $this->record('blocked', $started, $cached?->errorCode, self::NOT_WRITABLE);
 
             return new QuotaStatus(QuotaStatus::BLOCKED, $cached?->checkedAt, $cached?->quota, $cached?->errorCode);
         }

@@ -11,6 +11,7 @@ use FxInstallments\Metrics\Metrics;
 use FxInstallments\Metrics\ReportFormatter;
 use FxInstallments\Metrics\ReportPeriod;
 use FxInstallments\Metrics\ReportQuery;
+use FxInstallments\Rates\ExchangeRateClient;
 use FxInstallments\Tests\Support\FakeClock;
 use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\TestEnvironment;
@@ -101,9 +102,9 @@ final class ReportQueryTest extends TestCase
             'channel' => 'static', 'started' => 4, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 1,
             'steps' => [
                 // s3 never answered, s2 gave up here; s6 (no sessions row) waits after amount.
-                ['step' => 'amount', 'reached' => 4, 'answered' => 2, 'retries' => 3, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0],
-                ['step' => 'currency', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 1],
-                ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                ['step' => 'amount', 'reached' => 4, 'passed' => 2, 'retries' => 3, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0],
+                ['step' => 'currency', 'reached' => 2, 'passed' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 1],
+                ['step' => 'installments', 'reached' => 1, 'passed' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
             ],
             'abandoned_by_code' => [['code' => 'BOT_MAX_RETRIES', 'count' => 1]],
@@ -111,10 +112,10 @@ final class ReportQueryTest extends TestCase
         self::assertSame([
             'channel' => 'cli', 'started' => 3, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0,
             'steps' => [
-                ['step' => 'amount', 'reached' => 3, 'answered' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 1, 'open' => 0],
+                ['step' => 'amount', 'reached' => 3, 'passed' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 1, 'open' => 0],
                 // The conversion retry counts at the step it re-asked, and the session once.
-                ['step' => 'currency', 'reached' => 2, 'answered' => 2, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
-                ['step' => 'installments', 'reached' => 2, 'answered' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                ['step' => 'currency', 'reached' => 2, 'passed' => 2, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                ['step' => 'installments', 'reached' => 2, 'passed' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ['step' => 'result', 'reached' => 2, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0],
             ],
             'abandoned_by_code' => [['code' => 'UPSTREAM_TIMEOUT', 'count' => 1]],
@@ -138,10 +139,111 @@ final class ReportQueryTest extends TestCase
         $report = $this->report('2026-10-21', '2026-10-21');
         $static = $report['funnel'][0];
 
-        // A session that ended outside the flow's order is counted on that step's row only.
-        self::assertSame(['step' => 'nickname', 'reached' => 1, 'answered' => 0, 'retries' => 1, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0], $static['steps'][4]);
+        // Round 3: the session is placed at the known step after its last answer (currency), so
+        // amount.reached is the sessions started; the unknown step keeps a row for its retries.
+        self::assertSame(['step' => 'nickname', 'reached' => 0, 'passed' => 0, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0], $static['steps'][4]);
         self::assertSame(['amount', 'currency', 'installments', 'result', 'nickname'], array_column($static['steps'], 'step'));
+        self::assertSame([1, 1, 1], [$static['started'], $static['steps'][0]['reached'], $static['steps'][1]['abandoned']]);
         self::assertFunnelAddsUp($report['funnel']);
+        self::assertStringContainsString('1 session(s) ended at a step outside the flow', implode("\n", $report['notes']));
+    }
+
+    /**
+     * Round 3 (item 8): sessions that ended at steps outside the flow's order (a renamed step, a
+     * null step) still count in every known step they reached, so amount.reached = started.
+     */
+    public function testSessionsEndingOutsideTheFlowStillReachTheKnownSteps(): void
+    {
+        $this->session('a', 'cli', self::DAY + 10, [
+            ['bot.step', 'amount', null, []],
+            ['bot.step', 'currency', null, []],
+            ['bot.step', 'installments', null, []],
+            ['bot.session_abandoned', 'confirm', 'BOT_SESSION_EXPIRED', []],
+        ]);
+        $this->session('b', 'cli', self::DAY + 20, [
+            ['bot.step', 'amount', 'VALIDATION_AMOUNT', []],
+            ['bot.session_abandoned', null, 'BOT_MAX_RETRIES', []],
+        ]);
+
+        $report = $this->report('2026-10-21', '2026-10-21');
+        $cli = $report['funnel'][1];
+
+        self::assertSame([2, 2, 1, 1, 0], [$cli['started'], $cli['steps'][0]['reached'], $cli['steps'][1]['reached'], $cli['steps'][2]['reached'], $cli['steps'][3]['reached']]);
+        // a answered installments: placed at installments (never result); b answered nothing: amount.
+        self::assertSame([1, 0, 1], [$cli['steps'][0]['abandoned'], $cli['steps'][1]['abandoned'], $cli['steps'][2]['abandoned']]);
+        self::assertFunnelAddsUp($report['funnel']);
+        self::assertStringContainsString('2 session(s) ended at a step outside the flow', implode("\n", $report['notes']));
+    }
+
+    /**
+     * Round 3 (item 3): an open session with no `sessions` row waits after the furthest step it
+     * answered, and never at `result`, even when it answered installments.
+     */
+    public function testAnOpenSessionWithoutARowWaitsAfterItsLastAnswerButNeverAtResult(): void
+    {
+        $this->session('a', 'static', self::DAY + 10, [
+            ['bot.step', 'amount', null, []],
+            ['bot.step', 'currency', null, []],
+            ['bot.step', 'installments', null, []],
+        ]);
+
+        $static = $this->report('2026-10-21', '2026-10-21')['funnel'][0];
+
+        self::assertSame([0, 0, 1, 0], array_column($static['steps'], 'open'));
+        self::assertSame([1, 0], [$static['steps'][2]['reached'], $static['steps'][3]['reached']]);
+        self::assertFunnelAddsUp([$static]);
+    }
+
+    /**
+     * Round 3 (item 4): a session whose `sessions` row is closed but whose end event was never
+     * written (INV-07) is counted by the row's status, not as open forever, with a note.
+     */
+    public function testASessionClosedWithoutAnEndEventCountsByItsRow(): void
+    {
+        $store = new SessionStore(Connection::wrap($this->pdo), 30);
+        $rows = [];
+        foreach (['completed' => 'result', 'abandoned' => 'currency', 'open' => 'installments'] as $status => $step) {
+            $this->clock->now = self::DAY + 100;
+            $session = $store->create('static', 'amount', $this->clock->now);
+            $this->pdo->prepare('UPDATE sessions SET status = ?, step = ? WHERE session_id = ?')->execute([$status, $step, $session->id]);
+            $this->event($this->clock->now, 'bot.session_start', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session->id, 'step' => 'greet']);
+            $this->event($this->clock->now + 1, 'bot.step', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session->id, 'step' => 'amount']);
+            $rows[$status] = $session->id;
+        }
+
+        $report = $this->report('2026-10-21', '2026-10-21');
+        $static = $report['funnel'][0];
+
+        self::assertSame([3, 1, 1, 1], [$static['started'], $static['completed'], $static['abandoned'], $static['open']]);
+        self::assertSame([['code' => 'other', 'count' => 1]], $static['abandoned_by_code']);
+        self::assertSame([0, 1, 1, 0], [$static['steps'][0]['abandoned'] + $static['steps'][0]['open'], $static['steps'][1]['abandoned'], $static['steps'][2]['open'], $static['steps'][3]['open']]);
+        self::assertSame(1, $static['steps'][3]['completed']);
+        self::assertFunnelAddsUp([$static]);
+        self::assertStringContainsString('2 session(s) were closed without an end event', implode("\n", $report['notes']));
+    }
+
+    /**
+     * Round 3 (item 2): labels the funnel alone folds, and an error event without a code, are
+     * in the `other` note's count.
+     */
+    public function testTheOtherNoteCountsWhatOnlyTheFunnelFolds(): void
+    {
+        $this->session('s1', 'static', self::DAY + 10, [['bot.step', '2024', null, []]]);
+
+        $notes = implode("\n", $this->report('2026-10-21', '2026-10-21')['notes']);
+
+        self::assertStringContainsString('1 value(s) outside the known codes', $notes);
+
+        $this->raw(self::DAY + 20, 'error', ['status' => 'error']);
+        $report = $this->report('2026-10-21', '2026-10-21');
+        self::assertSame([['code' => 'other', 'http' => 1, 'bot' => 0, 'total' => 1]], $report['errors']);
+        self::assertStringContainsString('2 value(s) outside the known codes', implode("\n", $report['notes']));
+    }
+
+    public function testTheEndpointsAreTheClients(): void
+    {
+        self::assertSame(array_keys(ExchangeRateClient::ENDPOINTS), ReportQuery::endpoints());
+        self::assertSame(['latest', 'codes', 'quota'], ReportQuery::endpoints());
     }
 
     /**
@@ -164,7 +266,7 @@ final class ReportQueryTest extends TestCase
 
         self::assertSame([4, 4, 0], [$typebot['started'], $typebot['open'], $typebot['never_answered']], 'open sessions are not swept here (no sweep given)');
         self::assertSame([[4, 3, 1], [3, 2, 1], [2, 0, 2], [0, 0, 0]], array_map(
-            static fn (array $row): array => [$row['reached'], $row['answered'] ?? $row['completed'], $row['open']],
+            static fn (array $row): array => [$row['reached'], $row['passed'] ?? $row['completed'], $row['open']],
             $typebot['steps'],
         ));
         self::assertFunnelAddsUp([$typebot]);
@@ -191,7 +293,7 @@ final class ReportQueryTest extends TestCase
         });
         $notes = $endless->run(ReportPeriod::fromStrings('2026-10-21', '2026-10-21', 'UTC', self::DAY))['notes'];
         self::assertSame(ReportQuery::MAX_SWEEP_PASSES, $calls, 'bounded');
-        self::assertSame('At least 10000 expired sessions were waiting; 10000 were closed before counting, and any others may still show as open.', $notes[0]);
+        self::assertSame('10000 expired sessions were closed before counting; more may remain and show as open.', $notes[0]);
     }
 
     /**
@@ -279,7 +381,7 @@ final class ReportQueryTest extends TestCase
 
         self::assertSame('other', $report['funnel'][0]['steps'][4]['step']);
         self::assertStringContainsString('  other ', ReportFormatter::table($report));
-        self::assertStringContainsString("\r\nfunnel_step,static,other,abandoned,1\r\n", ReportFormatter::csv($report));
+        self::assertStringContainsString("\r\nfunnel_step,static,other,retries,1\r\n", ReportFormatter::csv($report));
     }
 
     /**
@@ -482,9 +584,15 @@ final class ReportQueryTest extends TestCase
         self::assertSame([null, 'BRL', 'other', 'other'], [ReportQuery::currency(null), ReportQuery::currency('BRL'), ReportQuery::currency('brl'), ReportQuery::currency(7)]);
         self::assertSame(['Brazil', 'other', null], [ReportQuery::country('Brazil'), ReportQuery::country('brazil'), ReportQuery::country(null)]);
         self::assertSame(['UPSTREAM_QUOTA', 'other', null], [ReportQuery::code('UPSTREAM_QUOTA'), ReportQuery::code('upstream_quota'), ReportQuery::code(null)]);
-        self::assertSame(['not_in_flow', 'other', 'other', 'none'], [ReportQuery::step('not_in_flow'), ReportQuery::step('Amount'), ReportQuery::step(str_repeat('a', 33)), ReportQuery::step(null)]);
+        // Round 3: steps follow the flow loader's FlowDefinition::ID_PATTERN.
+        $forty = 'a' . str_repeat('b', 38) . '9';
+        self::assertSame(
+            ['not_in_flow', 'step2', $forty, 'other', 'other', 'other', 'other', 'other', 'none'],
+            [ReportQuery::step('not_in_flow'), ReportQuery::step('step2'), ReportQuery::step($forty), ReportQuery::step($forty . 'x'),
+                ReportQuery::step('Amount'), ReportQuery::step('2024'), ReportQuery::step('_x'), ReportQuery::step('2step'), ReportQuery::step(null)],
+        );
         $others = 0;
-        self::assertSame(['quota', 'other'], [ReportQuery::word('quota', ReportQuery::ENDPOINTS, $others), ReportQuery::word('Quota', ReportQuery::ENDPOINTS, $others)]);
+        self::assertSame(['quota', 'other'], [ReportQuery::word('quota', ReportQuery::endpoints(), $others), ReportQuery::word('Quota', ReportQuery::endpoints(), $others)]);
         self::assertSame(1, $others);
     }
 
@@ -518,7 +626,7 @@ final class ReportQueryTest extends TestCase
     }
 
     /**
-     * Every step row of every channel adds up: reached = answered (or completed) + abandoned +
+     * Every step row of every channel adds up: reached = passed (or completed) + abandoned +
      * never_answered + open; and started = completed + abandoned + never_answered + open.
      *
      * @param list<array<string, mixed>> $funnel
@@ -530,7 +638,7 @@ final class ReportQueryTest extends TestCase
             foreach ($channel['steps'] as $row) {
                 self::assertSame(
                     $row['reached'],
-                    ($row['answered'] ?? $row['completed']) + $row['abandoned'] + $row['never_answered'] + $row['open'],
+                    ($row['passed'] ?? $row['completed']) + $row['abandoned'] + $row['never_answered'] + $row['open'],
                     "{$channel['channel']} {$row['step']}",
                 );
             }
