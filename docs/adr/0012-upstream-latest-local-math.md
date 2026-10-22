@@ -1,7 +1,8 @@
 # 0012 — Upstream: one `/latest/USD` call per refresh, local math, stale fallback
 
 - **Status:** Accepted (amended 2026-10-21: breaker kinds and backoff, refresh floor, stale age,
-  503 during an `unsupported-code` backoff; see "Amendment")
+  503 during an `unsupported-code` backoff; see "Amendment"; amended again 2026-10-22: the
+  `/quota` cache, see "Second amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -31,7 +32,8 @@ the key.
 
 ## Consequences
 
-- Quota use depends on time, not traffic, and can't be burned by a script.
+- Quota use depends on time, not traffic, and can't be burned by a script (but see the `/quota`
+  known limit in "Second amendment").
 - One code path for conversion.
 - Users may see a result based on a rate up to `rates.max_stale_hours` old, clearly marked.
 
@@ -122,8 +124,33 @@ in round 2.
   - Processes don't lock each other. Two lookups that miss at the same moment can both refresh:
     one extra call, same data.
   - The quota block ends on the 1st (UTC). Upstream actually refreshes the quota on
-    `refresh_day_of_month` from `/quota` (P1-08).
+    `refresh_day_of_month` from `/quota`; since P1-08 the admin health view shows both dates (see
+    "Second amendment").
   - On a cold start (no stored table), a code upstream quotes but `FallbackCurrencies` lacks
     answers 400 `VALIDATION_CURRENCY` (`not_allowed`) until a refresh stores the table, and that
     400 counts toward `block.error_responses` (ADR 0016). `/convert` exposes this from P1-05;
     P1-10's comparison of `FallbackCurrencies` with the live codes closes it.
+
+## Second amendment (2026-10-22): the `/quota` cache for the admin health view
+
+Recorded from P1-08 (PR #23, ADR 0023). Showing both dates and `meta.endpoint=quota` are owner
+decisions 2 and 3; the skip while the database can't be written came from the co-leads' round-2
+brief (named `not_writable` in round 3); the rest is the builder's design.
+
+- `Rates/QuotaCache` calls `/quota` only for the admin `/health` view, at most once per
+  `health.quota_cache_minutes`, and caches failures too. A fresh cached answer is always served
+  as a hit. Once it has expired, it doesn't call during an auth block (event reason `auth`) or
+  while the database can't be written (event reason `not_writable`: a read-only database, or a
+  write lock held past the busy timeout); either way the view shows the last stored answer with
+  `source: "blocked"`. A `/quota` failure never trips the breaker.
+- Each lookup writes an `upstream.call` event with `meta.endpoint=quota` and result `hit`, `miss`
+  or `blocked`, so reports count real calls per endpoint (ADR 0023). `/codes` has no caller in
+  Phase 1.
+- The admin view shows both reset dates: upstream's next `refresh_day_of_month`, on or after
+  today (UTC), as `upstream_refresh_date`, and, while a quota block is open, the breaker's end on
+  the 1st (UTC) as `breaker_quota_block_until`. The breaker still ends quota blocks on the 1st.
+- **Known limits:** the cache isn't locked, so two admin views at the same moment can each call
+  `/quota`. Whether upstream counts `/quota` calls against the quota is unverified. If it does, a
+  monitor polling the admin view adds up to one call per `health.quota_cache_minutes` (about 744
+  a month at 60) to a 1,500 budget. P1-10 checks this, and reads quota used from the report's
+  `latest` row.

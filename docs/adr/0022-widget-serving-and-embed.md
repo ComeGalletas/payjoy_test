@@ -1,6 +1,6 @@
 # 0022 — Built-in widget: serving, embedding and non-JSON responses
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-10-22: the CSV report, see "Amendment")
 - **Date:** 2026-10-22
 - **Deciders:** owner
 - **Relates to:** 0016 (blocking), 0018 (tests off the network), 0021 (bot message contract)
@@ -43,8 +43,8 @@ accepted.
    body or type); `SendsResponse` sends them and stops PHP adding its default `text/html` type.
    Errors on the widget routes are still envelopes, and the request log and blocking are unchanged
    (a 2xx never counts toward a block). **INV-04** is now checked over the production route table
-   (`Router::routes()`): only the widget files and `/favicon.ico` may answer without the envelope,
-   and the test pins the route list.
+   (`Router::routes()`): only the widget files and `/favicon.ico` may answer without the envelope
+   (since P1-08 also the CSV report, see "Amendment"), and the test pins the route list.
 3. **CSP** (from the round-1 judge, required by the co-leads): the page sends `default-src 'none';
    script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none';
    base-uri 'none'; form-action 'none'; frame-ancestors 'self' <allowed origins>;
@@ -130,3 +130,13 @@ accepted.
     process; the harness uses only `fs` and `vm`, and review is the backstop.
   - On a host with `display_errors=1`, a PHP startup warning (an oversized POST) leaks as a 200
     HTML page; INSTALL sets `display_errors=Off` and `expose_php=Off` (P1-09).
+
+## Amendment (2026-10-22): the CSV report
+
+Recorded from P1-08 (PR #23, ADR 0023).
+
+- `GET /reports?format=csv` answers a `TextResponse` (`text/csv; charset=utf-8`, attachment,
+  `nosniff`, `no-store`), the third kind of non-envelope response, after the widget files and the
+  204 `/favicon.ico`. The INV-04 route-table test now covers `/reports` and `/health` and allows
+  the CSV report as the only non-envelope answer besides the widget files and `/favicon.ico`.
+  Errors on `/reports`, a bad `format` included, are envelopes.

@@ -4,6 +4,55 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — P1-08 Reports and health (PR #23, head 2e9b293)
+
+- PR #22 (P1-07 close-out) merged by the owner as `24ac2b9`.
+- **Round 1** (`3617926`). Builder: DONE_WITH_CONCERNS, for its seven open decisions (its report
+  to the lead; the PR body, rewritten after round 3, says DONE). It built
+  `ReportQuery`, `ReportPeriod`, `ReportFormatter`, `CsvWriter`, `GET /reports`, `bin/report.php`,
+  `GET /health` and `QuotaCache`, and stored the rate per conversion. Unit+Acceptance went from
+  1772 to 1888 tests; guards stayed at 80. Tester: PASS WITH NITS, 21 of 24 mutations caught;
+  should-fix: the report sweeps at most 500 expired sessions, `9999-12-31` crashes into a 500,
+  labels copied from events can show a seeded IP or key, a `;` opens a formula in a
+  semicolon-locale spreadsheet, a digit-only step crashes the table, and cents sums can overflow
+  to a float. Judge: APPROVE WITH NITS; should-fix: the funnel's step rows don't
+  add up.
+- Owner decisions: all seven accepted as built (`GET /health` before the database opens, with 503
+  `UNHEALTHY`; both quota dates; `meta.endpoint=quota`; the rate stored per conversion; the cohort
+  funnel with `never_answered`; `from`/`to` with `BAD_REQUEST`; CLI exit codes 0/1/2), no rate
+  limit on `/reports` and `/health` until P3-01, and the full round 2.
+- **Round 2** (`8531ef5`): a bounded sweep, a year cap of 9998, allow-lists on every label, a
+  semicolon-safe CSV writer, string step labels, a cents range check with `unreadable_amounts`,
+  funnel rows that add up, `GET`-only and Bearer-only `/health`, and no `/quota` call while the
+  database can't be written; 1913 tests. Tester: PASS WITH NITS, 17 of 18 mutations caught. Judge:
+  APPROVE WITH NITS; should-fix: the step allow-list was narrower than the flow loader's pattern.
+- Owner decisions: a short round 3, and the funnel field `answered` renamed `passed`.
+- **Round 3** (`2e9b293`): the rename, `FlowDefinition::ID_PATTERN` for steps, a complete `other`
+  count, two placement rules (sessions that ended outside the flow order, sessions closed without
+  an end event), `not_writable` for the skipped `/quota` lookup, and `ReportQuery::endpoints()`;
+  1918 tests, guards 80. Tester: PASS, 6 of 6 mutations caught. Judge: APPROVE.
+- Co-leads: both approved. The lead posted the approval comment (15:24:24 UTC), then merged at the
+  reviewed head as `5e93139` (15:24:28 UTC).
+- **Process.** No guard or hook blocked any agent. The round-1 tester joined its PATH refresh and
+  `make init` in one call, a minor break of the "one plain shell command per tool call" rule; no
+  other break. The tests' real-socket runs go through `BuiltInServer` (checked by the judge).
+- Upstream: 0 real calls (every test uses the mocked handler).
+- **GUARDRAILS wording (for the owner; `docs/GUARDRAILS.md` unchanged).** INV-07's parenthetical
+  says a database that can't be opened, is behind the code or has a corrupt schema version "gives
+  500 on every request by design, ADR 0019". Since P1-08 `GET /health` answers 503 `UNHEALTHY`
+  for it instead (ADR 0019 amendment). Proposed wording: "…gives 500 on every request by design,
+  except `GET /health`, which answers 503 `UNHEALTHY` (ADR 0019 and its amendment)".
+- Lead docs: ADR 0023 (reports); ADR 0019 amendment (`GET /health`); ADR 0012 second amendment
+  (the `/quota` cache); ADR 0011 second amendment (the rate per conversion); ADR 0021 amendment
+  (completion meta, report sweeps); ADR 0016 fourth amendment (`/reports` and `/health` without a
+  rate limit, request kinds); ADR 0022 amendment (the CSV report); PLAN §2, §3, §5, §6, the P1-08
+  done note and follow-ups in P1-09, P1-10, P3-01 and L-04; CONTEXT terms.
+- Review of this docs PR (#24): tester PASS WITH NITS, judge REQUEST CHANGES (ADR 0019's "500 on
+  every request" sentence had no pointer to the amendment; round-2 and amendment attributions;
+  the placement and "answer" wording; "allow-list" used in two senses; no P3-01 item for the
+  unthrottled routes; the `/quota` cost untracked). All findings applied in round 2 (`587bc30`);
+  the judge's re-check confirmed them (APPROVE WITH NITS, four wording nits applied).
+
 ## 2026-10-22 — P1-07 Widget (PR #21, head 37fb584)
 
 - PR #20 (P1-06 close-out) merged by the owner as `c99bb15`, and PR #19 (P0-07, deferred) as

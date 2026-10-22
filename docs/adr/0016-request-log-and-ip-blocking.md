@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (amended 2026-10-21: retention boundaries and block rows, see "Amendment";
   amended again 2026-10-21: what counts toward a block, events, see "Second amendment"; amended
-  a third time 2026-10-22: widget routes, see "Third amendment")
+  a third time 2026-10-22: widget routes, see "Third amendment"; amended a fourth time
+  2026-10-22: `/reports` and `/health`, see "Fourth amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -201,3 +202,18 @@ is a known limit recorded by the co-leads' round-3 brief.
   `requests` row. This is a known limit until P3-01, when nginx serves or limits static files.
 - Other paths browsers and crawlers ask for, such as `/apple-touch-icon*.png` and `/robots.txt`,
   still 404 and count toward `block.error_responses` (P3-01, or threshold tuning).
+
+## Fourth amendment (2026-10-22): `/reports` and `/health`
+
+Recorded from P1-08 (PR #23, ADR 0023). The first item is an owner decision (2026-10-22); the
+other two are consequences and the builder's design.
+
+- Neither `/reports` nor `/health` has a rate limiter, a known limit until P3-01, like the widget
+  routes. `RateLimiter` writes to the database and fails closed, so it would break `/health` on a
+  read-only database. A refused `/reports` or admin `/health` request is a 401, which counts
+  toward `block.error_responses`.
+- On a healthy database, `HEAD /health` is a 404 that counts toward `block.error_responses`, so
+  monitors use `GET` (P1-09).
+- Reports split the request log by kind (`api`, `widget_asset`, `favicon`), status class and
+  blocked, and count `ip.block` events by source and reason and `ip.unblock` events by source.
+  No report shows an IP or a path.
