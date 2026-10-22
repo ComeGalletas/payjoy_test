@@ -1,7 +1,8 @@
 # 0011 — Minor units, floor split and English display
 
 - **Status:** Accepted (storage clause superseded by 0017; amended 2026-10-21: exact display
-  total, see "Amendment")
+  total, see "Amendment"; amended again 2026-10-22: the rate per conversion, see "Second
+  amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 - **Supersedes:** 0007
@@ -83,10 +84,21 @@ design, which the tester and judge accepted.
 - The display is exact for the stored rate: the round-2 tester's bcmath oracle found 0 mismatches
   in 2.5M cases (e = 0, 2, 3, 4, amounts to 1,000,000.00, rates up to the storable maximum), and
   the round-2 judge found 0 in 600,728 cases of its own. It can be reproduced from the amount's
-  cents and the `rate_scaled` used. Nothing stores the rate per conversion today (`api.request`
-  keeps `amount_usd_cents` only, and `rate_cache` is replaced on every refresh), so P1-08 must add
-  it before reports can recompute amounts.
+  cents and the `rate_scaled` used. Since P1-08 each conversion stores the rate it used (see
+  "Second amendment").
 - The raw `converted` and `installment_amount` stay full-precision floats, computed from the
   nearest doubles of the amount and the rate (not the nearest double of the exact product), so
   their last digits can differ from the exact `display` strings. Front-ends show `display` only.
 - The tests carry their own schoolbook decimal-string oracle, so they need no `bcmath`.
+
+## Second amendment (2026-10-22): the rate is stored per conversion
+
+Recorded from P1-08 (PR #23, ADR 0023); owner decision 4.
+
+- A successful `/convert` stores `rate_scaled` and `rate_as_of` in its `api.request` meta, and a
+  completed bot session in its `bot.session_completed` meta, as JSON integers (INV-09 is
+  unaffected). A conversion's display can now be recomputed from its cents and its rate.
+- Rows written before P1-08 have neither; reports count them in `summary.conversions_missing_rate`
+  with a note. Phase 1 reports don't recompute converted amounts.
+- A `rate_scaled` above 2^53 (a rate above about 900,000 per USD) can't be read exactly as a
+  JavaScript Number, so a JavaScript consumer must read it as text.

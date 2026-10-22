@@ -1,6 +1,7 @@
 # 0021 — Flow engine and bot message contract
 
-- **Status:** Accepted (note 2026-10-22: the widget opens sessions lazily, ADR 0022)
+- **Status:** Accepted (note 2026-10-22: the widget opens sessions lazily, ADR 0022; amended
+  2026-10-22: completion meta and report sweeps, see "Amendment")
 - **Date:** 2026-10-21
 - **Deciders:** owner
 - **Relates to:** 0003 (static flow), 0004 (Typebot), 0011, 0012, 0013, 0016, 0018
@@ -80,9 +81,10 @@ which the tester and judge accepted.
    busy timeout and the message is still answered.
 8. **Events.** `bot.session_start` (step `greet`, meta `flow`); `bot.step` (ok, or the
    `VALIDATION_*` or `UPSTREAM_UNSUPPORTED_CODE` code with `reason`, `retry` and `via: convert`
-   when a conversion re-asked the step); `bot.session_completed` (meta `template`, `stale`);
-   `bot.session_abandoned`. Columns come from `collected`. No event, `sessions` row or error-log
-   line holds the typed text, an IP or a key. The IP is stored only by the HTTP layer
+   when a conversion re-asked the step); `bot.session_completed` (meta `template`, `stale`;
+   since P1-08 also `rate_scaled` and `rate_as_of`, see "Amendment"); `bot.session_abandoned`.
+   Columns come from `collected`. No event, `sessions` row or error-log line holds the typed
+   text, an IP or a key. The IP is stored only by the HTTP layer
    (`requests`, `rate_limits`, `ip_blocks`; ADR 0016), never by the flow.
 9. **Flow file.** Top-level keys are exactly `name`, `max_retries` (1–20), `max_retries_reply` and
    `steps`; steps may carry `reasons` (per field; the conversion reasons may use
@@ -117,13 +119,26 @@ which the tester and judge accepted.
   - `below_minor_unit` at 1 installment can't be fixed by re-asking installments, so it ends by
     max retries; only an amount of about a cent reaches it.
   - The first message of a session is dropped, so a user who opens with `200` retypes it, and
-    sessions that never answer count as abandoned at `amount` (P1-08). Since P1-07 the widget
-    opens a session only on the first focus or "Start chat" (ADR 0022), so a page view alone opens
-    none; a focus still does.
-  - Bot conversions write no `api.request` event and no `rate_scaled` (P1-08).
+    sessions that never answer are abandoned at `amount`; since P1-08 the report's funnel keeps
+    them apart as `never_answered` (ADR 0023). Since P1-07 the widget opens a session only on the
+    first focus or "Start chat" (ADR 0022), so a page view alone opens none; a focus still does.
+  - Bot conversions write no `api.request` event; since P1-08 the completion event carries the
+    rate (see "Amendment").
   - The busy wait before a skipped sweep can add up to the busy timeout to a message; on Postgres
     the sweep needs a savepoint per event (L-03).
   - Typebot can't use `{{resultId}}` as the session id, and the body can't set `channel=typebot`
     (ADR 0004 amendment, P3-05).
   - Renaming a step in the YAML restarts every session in progress (their step is no longer asked).
   - A Windows console needs `chcp 65001` for accented CLI input.
+
+## Amendment (2026-10-22): completion meta and report sweeps
+
+Recorded from P1-08 (PR #23, ADR 0023); owner decision 4.
+
+- `bot.session_completed` meta adds `rate_scaled` and `rate_as_of`, the stored rate the result
+  step's conversion used (ADR 0011 second amendment).
+- Reports sweep with `App::sessionSweeper()` before counting, repeating while a pass closes a full
+  batch of 500, at most 20 passes. The sweep on `/bot/message` (item 7) still runs one batch.
+- Reports place a session that was closed without its end event by its `sessions` row, and a
+  session that ended at a step outside the flow's order at the known step after its furthest
+  answer (ADR 0023 item 7).

@@ -83,6 +83,7 @@ Reasons and consequences are in the ADR named in each row.
 | Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
 | Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
 | Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
+| Reports | `/reports` and `bin/report.php` share one query: a cohort funnel, allow-listed labels (anything else is `other`), integer money, a formula-safe long-format CSV. | 0023 |
 | Widget | Built-in `static` front-end at `/bot/widget`: lazy open, strict CSP with Trusted Types, embeddable by iframe or `<script>`. | 0022 |
 | Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; from P1-04 also `disable_functions=curl_exec,curl_multi_exec` and Guzzle handler stubs. | 0018 |
 | Upstream | One `/latest/USD` call per upstream refresh; always compute `amount × rate` locally; stale fallback; stop calling after quota or key errors, and back off 1 to 60 minutes after any other failed refresh. See §3b. | 0012 |
@@ -104,8 +105,8 @@ Reasons and consequences are in the ADR named in each row.
 - **Response envelope** on every JSON endpoint: `{ "ok": true, "data": {...} }` or
   `{ "ok": false, "error": { "code": "...", "message_for_user": "..." } }`. Front-ends branch on
   `ok` and display `message_for_user` verbatim. The widget's files (page, script, style sheet,
-  icon), the 204 `/favicon.ico` and, from P1-08, CSV reports are the only non-envelope responses
-  (ADR 0022).
+  icon), the 204 `/favicon.ico` and the CSV report are the only non-envelope responses (ADR 0022,
+  ADR 0023).
 - **Every** meaningful action writes an event through the single `Metrics` class. No ad-hoc
   logging. A failed metrics write is caught and never fails the user's request.
 - **Secrets.** Only in `.env` (the owner fills it; agents never read it). The API key never appears
@@ -119,7 +120,9 @@ Reasons and consequences are in the ADR named in each row.
   text with `textContent`, never `innerHTML`, and its page sends a Content-Security-Policy with
   Trusted Types and `X-Content-Type-Options: nosniff`. No response carries `X-Powered-By`
   (ADR 0022).
-  CSV cells starting with `=`, `+`, `-`, `@`, tab or CR get a leading `'`.
+  CSV is long format (`section,key,subkey,metric,value`). A cell holding `"`, `,`, `;`, CR or LF
+  is quoted, and the cell and each `;`-separated segment get a leading `'` when they start with
+  `=`, `+`, `-`, `@`, tab or CR, or with whitespace before `=`, `+`, `-` or `@` (ADR 0023).
 - **Abuse limits.** Per-IP limit on `/convert` and `/bot/message` (`ratelimit.per_minute`, stored in
   SQLite) → `RATE_LIMITED` (429). `X-Forwarded-For` is trusted only when `TRUSTED_PROXY` is set and
   matches the peer. CORS on `/bot/message` only for `cors.allowed_origins`.
@@ -326,9 +329,10 @@ Error codes (stable strings) and HTTP status:
 | Code | HTTP |
 |---|---|
 | `VALIDATION_AMOUNT`, `VALIDATION_CURRENCY`, `VALIDATION_INSTALLMENTS` | 400 |
-| `BAD_REQUEST` | 400 (an unreadable `/bot/message` body; ADR 0021) |
+| `BAD_REQUEST` | 400 (an unreadable `/bot/message` body, ADR 0021; a bad `/reports` query, ADR 0023) |
 | `UPSTREAM_UNSUPPORTED_CODE` | 400; 503 while an `unsupported-code` backoff is open (from P1-05, ADR 0012 amendment item 9) |
 | `UPSTREAM_TIMEOUT`, `UPSTREAM_QUOTA`, `UPSTREAM_AUTH`, `UPSTREAM_MALFORMED` | 503 |
+| `UNHEALTHY` | 503 (public `GET /health` only, when the database is behind, corrupt, can't be opened or can't be written; ADR 0019 amendment) |
 | `ADMIN_UNAUTHORIZED` | 401 |
 | `IP_BLOCKED` | 403 |
 | `NOT_FOUND` | 404 |
@@ -344,8 +348,8 @@ Error codes (stable strings) and HTTP status:
 | `GET /convert?amount&cy&installments?` | 1 | Conversion, installment amount (unrounded), `display` block, `rate_as_of`, `stale`. `amount` and `cy` required; `installments` defaults to `installments.default`; a missing `amount` or `cy`, an empty value, or an array answers `format`; checked in the order amount, currency, installments; extra parameters ignored, and a repeated one keeps its last value (PHP) |
 | `POST /bot/message {session_id?, text}` → `{session_id, reply, buttons?, step, done}` | 1 | Static flow engine; the contract every channel uses. A JSON object of at most 4 KiB with `Content-Type: application/json`, else 400 `BAD_REQUEST`; `buttons` only while the waiting step has them; `done` once completed or abandoned; `reply` empty only with `done` for a double-submit on a closed session (ADR 0021) |
 | `GET /bot/widget` | 1 | Built-in chat page, with `/bot/widget.js`, `.css` and `.svg`; `GET /favicon.ico` answers 204 (ADR 0022) |
-| `GET /reports?from&to&format=json\|csv` (admin) | 1 | Summary, currencies/countries, funnel by step and channel, errors by code, upstream usage (calls, hits, stale, blocked) |
-| `GET /health` | 1 | Public: `status` only. Admin: quota left (cached), cache age, DB writable, breaker state |
+| `GET /reports?from&to&format=json\|csv` (admin) | 1 | Summary, days, currencies/countries, funnel by channel and step, errors by code, upstream calls per endpoint, request log by kind, IP blocks, notes. `from`/`to` are `YYYY-MM-DD` in `reports.timezone`, both included, years 1970–9998, default the last 7 days, at most 366; a bad query answers 400 `BAD_REQUEST`; `no-store`; sweeps expired sessions first (ADR 0023) |
+| `GET /health` | 1 | Public: `status` only, or 503 `UNHEALTHY` when the database is unusable; `GET /health` skips the database open before routing (ADR 0019 amendment). Admin (Bearer scheme only; other schemes get the public view): always 200 with database, rate-table ages, breaker state with `failures`, and quota (cached `health.quota_cache_minutes`, both reset dates, no call while the database can't be written; ADR 0012 second amendment) |
 | `POST /normalize {text, expecting}` | 2 | LLM extraction → validated fields or `ok:false` |
 | `POST /events` (per-channel ingest token) | 3 | External channels push funnel events |
 | `GET /config`, `PUT /config` (admin) | 3 | Runtime settings, validated per key; every change logged |
@@ -730,6 +734,12 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from P1-07): serve CSV through `TextResponse` (add it to the INV-04 route-table test);
   request-log reports should separate widget asset and `/favicon.ico` hits; sessions opened by a
   focus and never answered still count as abandoned at `amount` (ADR 0022).
+  *DONE 2026-10-22 (PR #23, three rounds). Decisions in ADR 0023 and amendments to ADRs 0011,
+  0012, 0016, 0019, 0021 and 0022; the owner accepted all seven as built, plus no rate limit on
+  `/reports` and `/health` until P3-01 and the field name `passed`. `GET /health` routes before
+  the database opens and answers 503 `UNHEALTHY`, which settles the ADR 0019 question above. The
+  acceptance currency `=CMD()` now folds to `other` and never reaches a CSV cell; `CsvWriter`
+  guards it directly.*
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
   IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
   the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
@@ -750,12 +760,21 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   page's CSP must allow the API origin in `script-src`, `style-src` and `connect-src`; for the
   iframe, in `frame-src`); and says Node is optional locally (the widget harness skips without it,
   CI runs it).
+  Also (from P1-08): `docs/REPORTS.md` covers the sections, the CSV columns, every report note
+  (outside the flow, closed without an end event, `other`, unreadable amounts, the sweep bound,
+  request-log retention, no stored rate) and how to read the funnel identity and `passed`
+  (ADR 0023); `INSTALL_LOCAL.md` says monitors must use `GET /health` (`HEAD` is a counted 404)
+  and that `/health` is the one route that answers on an old schema (503 `UNHEALTHY`);
+  `seed_demo` writes canonical labels and `rate_scaled`/`rate_as_of`, or demo data shows `other`
+  and the "no stored rate" note.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
   `docs/LOG.md`. **Deliver MVP.** The lead repeats the by-hand widget check (a typed `<script>`
   shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
-  origin listed in `cors.allowed_origins` (never tried by hand in P1-07).
+  origin listed in `cors.allowed_origins` (never tried by hand in P1-07). For quota used, read the
+  report's `latest` endpoint row: `/quota` calls are counted apart, and whether upstream counts
+  them is unverified (ADR 0012 second amendment).
   *Acceptance:* owner sees one completed session per channel in `/reports`, and quota used is ≤ 3
   calls.
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
@@ -898,6 +917,14 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     line 243). Move `EntryPointEndToEndTest` onto `BuiltInServer`, so its server gets ADR 0018's
     gate flags and an empty `EXCHANGERATE_API_KEY`. Proposal for the owner (CI is owner-owned):
     pin Node with `actions/setup-node` so the widget harness doesn't depend on the runner image.
+  - (P1-08) Derive `ReportQuery::STEPS` from `FlowDefinition`, keeping the list as a fallback when
+    the YAML is broken; word the "outside the flow" note to cover open sessions too; split
+    `ReportQuery` (about 900 lines) into per-section parts before the P3 rollups; add a
+    `SessionSweeper::sweepAll()` instead of the batch size wired in `App::reportQuery()`; read
+    `bin/report.php`'s timezone from `App`'s config once config is editable (P3); add an
+    `AppState` helper for the three `app_state` upserts (`Migrator`, `UpstreamBreaker`,
+    `QuotaCache`) before L-03. `CsvWriter` doesn't guard a segment that starts with `"` or with a
+    non-ASCII space before `=`; reports can't produce either.
 
 ## 11. Working agreements for the agent
 
