@@ -63,7 +63,10 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   `-Force`, R2-5 config failures; round 3: R3-1 and R3-2 the server wording; tester round 2: C,
   F); the rest are in L-04 with their ids.
 - Review of this docs PR (#27): tester PASS WITH NITS, judge REQUEST CHANGES (the repair had a
-  PHP form only for the update, not for the schema checks); all findings applied in round 2.
+  PHP form only for the update, not for the schema checks); all findings applied in round 2
+  (`051cb46`); the judge's re-check confirmed them (APPROVE WITH NITS, six nits applied: the
+  update now comes after the checks in its own block, the demo block's rate-limited minutes,
+  tester G and the reclassified [16] in L-04, `EGPCS` without a `php.ini`).
 
 ## 2026-10-22 — P1-08 Reports and health (PR #23, head 2e9b293)
 

@@ -228,23 +228,28 @@ migrate: failed: FxInstallments\Db\SchemaCorrupt: app_state.schema_version is no
    has the seven tables `app_state`, `events`, `ip_blocks`, `rate_cache`, `rate_limits`,
    `requests` and `sessions`, and `events` has an `amount_usd_cents` column (`api/db/schema.sql`
    is the full version 3 schema). Run these on the existing file only (opening a missing one
-   creates it empty), and if `DB_DSN` points at another file, use that path instead. With the
-   `sqlite3` tool, which is not one of the prerequisites:
+   creates it empty), and if `DB_DSN` points at another file, use that path instead. First the
+   three checks, with the `sqlite3` tool, which is not one of the prerequisites:
 
    ```
    sqlite3 api/var/app.db ".tables"
    sqlite3 api/var/app.db "PRAGMA table_info(events);"
    sqlite3 api/var/app.db "SELECT key, value FROM app_state;"
-   sqlite3 api/var/app.db "UPDATE app_state SET value = '3' WHERE key = 'schema_version';"
    ```
 
-   Without `sqlite3`, the same four through PHP (each line works as typed in PowerShell and in a
+   Without `sqlite3`, the same three through PHP (each line works as typed in PowerShell and in a
    Linux or macOS shell):
 
    ```
    php -r "echo implode(PHP_EOL, (new PDO('sqlite:api/var/app.db'))->query('SELECT name FROM sqlite_master WHERE type = \'table\' ORDER BY name')->fetchAll(PDO::FETCH_COLUMN)), PHP_EOL;"
    php -r "echo implode(PHP_EOL, (new PDO('sqlite:api/var/app.db'))->query('SELECT name FROM pragma_table_info(\'events\')')->fetchAll(PDO::FETCH_COLUMN)), PHP_EOL;"
    php -r "print_r((new PDO('sqlite:api/var/app.db'))->query('SELECT key, value FROM app_state')->fetchAll(PDO::FETCH_KEY_PAIR));"
+   ```
+
+   Only if the checks show version 3, set the row, with `sqlite3` or with PHP:
+
+   ```
+   sqlite3 api/var/app.db "UPDATE app_state SET value = '3' WHERE key = 'schema_version';"
    php -r "echo (new PDO('sqlite:api/var/app.db'))->exec('UPDATE app_state SET value = \'3\' WHERE key = \'schema_version\''), ' row(s) updated', PHP_EOL;"
    ```
 

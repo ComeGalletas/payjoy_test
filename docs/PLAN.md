@@ -961,11 +961,13 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     zone's change day. Tighten `P1_09_SeedAndDocsTest`: anchor the REPORTS example parts and
     check its quoted notes against `ReportQuery` [19], count the demo `DB_DSN` lines per section
     [E2b], normalise whitespace in the open-ids check [R2-6], drop the duplicated DSN check
-    [R3-3], and make the backup test tell `VACUUM INTO` from a plain copy [tester r2 D]. Indent
-    INSTALL's code blocks inside numbered lists, from section 5 on [round-1 nit]. Accepted as is:
-    the seed's raw session INSERT and its template choice [16]. Owner's call: make `Env::get`
-    prefer the process environment, so the demo server needs no `variables_order` option
-    (ADR 0024).
+    [R3-3], make the backup test tell `VACUUM INTO` from a plain copy [tester r2 D], and call
+    `Bootstrap` itself in the dotenv test instead of phpdotenv directly [tester r2 G]. Indent the
+    code blocks under INSTALL section 8's "The report:" bullet (the marker regex in
+    `P1_09_SeedAndDocsTest` must then allow leading spaces) [round-1 nit]. Lead: accepted as a
+    known limit (ADR 0024), not fixed: the seed's raw session INSERT and its template choice [16].
+    Owner's call: make `Env::get` prefer the process environment, so the demo server needs no
+    `variables_order` option (ADR 0024).
 
 ## 11. Working agreements for the agent
 

@@ -86,12 +86,14 @@ of rounds 2 and 3) are process decisions, recorded in `docs/LOG.md`.
     database.
   - The numbers in the docs hold over the dates the seed prints (or on the day you seed).
   - The demo `ip.block` event records `duration_minutes` 60 whatever `block.duration_minutes`
-    says, and its five rate-limited minutes have no matching requests behind them. A very long
+    says, and each of its five rate-limited minutes has a single 429 and no `rate_limits` row,
+    not the 31 or more requests that would cause it. A very long
     `bot.session_ttl_minutes` can place a demo row in the future, which aborts the seed, and in
     a time zone with daylight saving the fixed local times shift by an hour on a change day
     (L-04).
   - Under `php -S`, a shell `DB_DSN` loses to a `DB_DSN` line in `.env` (the template's empty one
-    included) unless `E` is in `variables_order` (`-d` or `php.ini`). Making `Env::get` prefer
+    included) unless `E` is in `variables_order` (`-d` or `php.ini`; PHP without a `php.ini`
+    defaults to `EGPCS`). Making `Env::get` prefer
     the process environment would remove the option (L-04, owner's call).
   - The seed's session INSERT repeats `SessionStore`'s columns, and its template choice repeats
     the flow engine's (a test pins it to `display()->even`).
