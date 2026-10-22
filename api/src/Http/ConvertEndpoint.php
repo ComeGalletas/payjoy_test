@@ -22,13 +22,12 @@ use FxInstallments\Validation\ValidationFailed;
  *   present but empty or an array fails with `format`.
  * - Validation order: amount, then currency, then installments; the first failure answers.
  *   Nothing reaches the rate cache until all three are valid.
- * - Other parameters are ignored. A repeated plain parameter keeps PHP's behaviour (the last
- *   value wins, `$_GET`).
+ * - Other parameters are ignored. A repeated plain parameter (`amount=1&amount=2`) is not
+ *   detected: PHP's `$_GET` parsing keeps the last value, and that is what arrives here.
  *
- * Errors: a ValidationFailed answers 400 with its code; an UpstreamError answers with its own
- * status and message (UpstreamError::status(): 503, or 400 for UPSTREAM_UNSUPPORTED_CODE
- * except during its backoff, ADR 0012 amendment item 9). Anything else reaches the Kernel as
- * 500 INTERNAL.
+ * Errors: a ValidationFailed answers 400 with its code; an UpstreamError answers with its
+ * code's status and message (503, or 400 for UPSTREAM_UNSUPPORTED_CODE except during its
+ * backoff, ADR 0012 amendment item 9). Anything else reaches the Kernel as 500 INTERNAL.
  *
  * Every answered request writes one `api.request` event (source `api`): the validated
  * currency, `amount_usd_cents` and installments as far as validation got, status, error code,
@@ -75,7 +74,7 @@ final class ConvertEndpoint
             $response = JsonResponse::error($e->errorCode);
             $meta['reason'] = $e->reason;
         } catch (UpstreamError $e) {
-            $response = JsonResponse::error($e->errorCode, $e->messageForUser(), $e->status());
+            $response = JsonResponse::error($e->errorCode, null, $e->duringUnsupportedCodeBackoff);
             $meta['reason'] = $e->reason;
         }
 

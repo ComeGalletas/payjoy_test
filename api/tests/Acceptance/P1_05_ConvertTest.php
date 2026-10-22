@@ -154,13 +154,13 @@ final class P1_05_ConvertTest extends TestCase
     }
 
     /**
-     * 1,000,000 USD in a 3-decimal currency: a rate of 9,007,199.254741 makes the minor-unit
-     * total 9,007,199,254,741,000, past 2^53 (9,007,199,254,740,992); 9,007,199.25474 stays
-     * 992 minor units below it.
+     * 1,000,000 USD in a 3-decimal currency: the exact total is rate × 10^9 minor units, so a
+     * rate of 9,007,199.254740992 reaches 2^53 exactly (rejected, in ConvertService before
+     * display()) and 9,007,199.254740991 is 2^53 − 1 (accepted).
      */
     public function testAnInjectedRateThatReachesTwoToThe53rdMinorUnitsIsRejected(): void
     {
-        $app = $this->app(new MockUpstream([MockUpstream::latest(['USD' => 1, 'KWD' => '9007199.254741', 'BHD' => '9007199.25474'])]));
+        $app = $this->app(new MockUpstream([MockUpstream::latest(['USD' => 1, 'KWD' => '9007199.254740992', 'BHD' => '9007199.254740991'])]));
 
         $over = $this->get($app, ['amount' => '1000000', 'cy' => 'KWD']);
         self::assertSame(400, $over->status());
@@ -170,12 +170,50 @@ final class P1_05_ConvertTest extends TestCase
         $under = $this->get($app, ['amount' => '1000000', 'cy' => 'BHD', 'installments' => '7']);
         self::assertSame(200, $under->status());
         $display = self::data($under)['display'];
-        $total = (int) str_replace([',', '.'], '', $display['converted']);
-        self::assertEqualsWithDelta(9_007_199_254_740_000, $total, 4);
-        self::assertLessThan(2 ** 53, $total);
+        self::assertSame('9,007,199,254,740.991', $display['converted']);
+        self::assertSame('1,000,000.00', $display['amount_usd']);
         $base = (int) str_replace([',', '.'], '', $display['installment']);
         $last = (int) str_replace([',', '.'], '', $display['last_installment']);
-        self::assertSame($total, $base * 6 + $last);
+        self::assertSame(2 ** 53 - 1, $base * 6 + $last);
+    }
+
+    /**
+     * The display total is exact for the stored rate (owner decision 2026-10-21), even where
+     * the float product would round the other way; the raw number stays the nearest float.
+     */
+    public function testTheDisplayIsExactForLargeTotals(): void
+    {
+        $app = $this->app(new MockUpstream([MockUpstream::latest()]));
+
+        $data = self::data($this->get($app, ['amount' => '999999.24', 'cy' => 'IRR', 'installments' => '2']));
+
+        // 999,999.24 × 1,731,936.861971 = 1,731,935,545,698.98490204
+        self::assertSame('1,731,935,545,698.98', $data['display']['converted']);
+        self::assertSame('865,967,772,849.49', $data['display']['installment']);
+        self::assertSame(['865,967,772,849.49', true], [$data['display']['last_installment'], $data['display']['even']]);
+        self::assertEqualsWithDelta(1_731_935_545_698.9849, $data['converted'], 0.001);
+        self::assertSame('999,999.24', $data['display']['amount_usd']);
+    }
+
+    /**
+     * When the breaker row can't be stored, no backoff exists, so an `unsupported-code`
+     * refresh answers the plain 400 (ADR 0012 item 9, lead's reading), not 503; and every
+     * lookup calls upstream again (ADR 0012 known limit).
+     */
+    public function testWithoutAStoredBackoffUnsupportedCodeStays400(): void
+    {
+        $this->pdo->exec("CREATE TRIGGER no_breaker_rows BEFORE INSERT ON app_state BEGIN SELECT RAISE(ABORT, 'no'); END");
+        $upstream = new MockUpstream(array_map(static fn (): mixed => MockUpstream::error('unsupported-code', 404), range(1, 4)));
+        $app = $this->app($upstream);
+
+        $statuses = [];
+        for ($i = 0; $i < 4; $i++) {
+            $statuses[] = $this->get($app, ['amount' => '200', 'cy' => 'BRL'])->status();
+        }
+
+        self::assertSame([400, 400, 400, 400], $statuses);
+        self::assertSame(4, $upstream->calls());
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM app_state WHERE key = 'upstream_breaker'")->fetchColumn());
     }
 
     /**
@@ -207,7 +245,10 @@ final class P1_05_ConvertTest extends TestCase
         );
         self::assertSame(
             [503, 503, 503],
-            array_map('intval', $this->pdo->query("SELECT json_extract(meta, '$.http_status') FROM events WHERE event_type = 'error' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN)),
+            array_map(
+                static fn (string $meta): int => json_decode($meta, true, 8, JSON_THROW_ON_ERROR)['http_status'],
+                $this->pdo->query("SELECT meta FROM events WHERE event_type = 'error' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN),
+            ),
         );
 
         // Three error responses over block.error_responses = 2, yet no block: 5xx never count.

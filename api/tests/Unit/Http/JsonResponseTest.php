@@ -75,22 +75,26 @@ final class JsonResponseTest extends TestCase
         self::assertStringContainsString('"message_for_user":"Too many installments for this amount."', $response->body());
     }
 
-    public function testErrorAcceptsAnErrorStatusOverride(): void
+    public function testOnlyUnsupportedCodeHasABackoffAnswer(): void
     {
-        [$status, $message] = ErrorCodes::unsupportedCodeDuringBackoff();
-        $response = JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $message, $status);
+        $response = JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, null, true);
 
         self::assertSame(503, $response->status());
         self::assertSame(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $response->errorCode());
         self::assertSame(
-            ['ok' => false, 'error' => ['code' => 'UPSTREAM_UNSUPPORTED_CODE', 'message_for_user' => $message]],
+            ['ok' => false, 'error' => ['code' => 'UPSTREAM_UNSUPPORTED_CODE', 'message_for_user' => 'Exchange rates are temporarily unavailable. Please try again later.']],
             json_decode($response->body(), true, flags: JSON_THROW_ON_ERROR),
         );
+        self::assertSame(400, JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE)->status());
 
-        foreach ([200, 302, 399, 600] as $bad) {
+        // No other code can change its status.
+        foreach (ErrorCodes::all() as $code) {
+            if ($code === ErrorCodes::UPSTREAM_UNSUPPORTED_CODE) {
+                continue;
+            }
             try {
-                JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, null, $bad);
-                self::fail("accepted status {$bad}");
+                JsonResponse::error($code, null, true);
+                self::fail("{$code} took the backoff answer");
             } catch (InvalidArgumentException) {
                 $this->addToAssertionCount(1);
             }

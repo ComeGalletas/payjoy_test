@@ -21,12 +21,16 @@ use FxInstallments\Validation\ValidationFailed;
  *   (P1-06) validates its own text and calls convert() with the results.
  * - **Rate**: RateCache (hit, miss, stale or blocked; it writes the `upstream.call` event). The
  *   float rate is the stored decimal's nearest float (ScaledRate::toRate()).
- * - **Math**, never rounded: `converted = amount_usd × rate`, `installment_amount =
- *   converted / installments` (amount is the total, ADR 0006). Upstream's
- *   `conversion_result` is never used.
- * - **Exactness**: a converted total of 2^53 minor units or more is rejected with
- *   VALIDATION_AMOUNT (`too_large`) before display() (§3a). Then InstallmentCalculator rounds
- *   and splits; a total below one minor unit per installment is VALIDATION_INSTALLMENTS.
+ * - **Raw numbers**, floats at full precision, never rounded: `converted = amount_usd × rate`,
+ *   `installment_amount = converted / installments` (amount is the total, ADR 0006; floats
+ *   by ADR 0011). They are the nearest doubles, so their last digits may differ from the
+ *   exact decimal. Upstream's `conversion_result` is never used.
+ * - **Display**, exact: InstallmentCalculator computes the minor-unit total from the cents
+ *   and `rate_scaled` with integer arithmetic (owner decision 2026-10-21). A total of 2^53
+ *   minor units or more is rejected here, before display(), with VALIDATION_AMOUNT
+ *   (`too_large`; the user sees the generic amount text although the amount itself is valid —
+ *   unreachable with real rates, §3a). A total below one minor unit per installment is
+ *   VALIDATION_INSTALLMENTS.
  */
 final class ConvertService
 {
@@ -92,24 +96,25 @@ final class ConvertService
         $installments = $this->installments->validate($installments);
         $result = $this->rates->rate($currency);
 
-        $rate = $result->rate();
-        $converted = $amount->cents / 100 * $rate;
-        if (!InstallmentCalculator::fitsExactly($converted, $currency)) {
+        // The exact minor-unit total must stay below 2^53 (§3a). Checked here, before display(),
+        // which treats a larger total as a programming error.
+        if (InstallmentCalculator::minorUnitTotal($amount->cents, $result->rateScaled, $currency) === null) {
             throw ValidationFailed::amount(ValidationFailed::REASON_TOO_LARGE);
         }
         $display = InstallmentCalculator::display(
-            $converted,
+            $amount->cents,
+            $result->rateScaled,
             $installments,
             $currency,
-            $result->rateScaled,
-            $amount->cents,
             $result->rateAsOf,
         );
+
+        $rate = $result->rate();
+        $converted = $amount->cents / 100 * $rate;
 
         return new Conversion(
             $amount,
             $currency,
-            $result->rateScaled,
             $rate,
             $converted,
             $installments,

@@ -23,8 +23,10 @@ final class ValidationFailed extends RuntimeException
     /** The bot couldn't read the amount unambiguously; the flow asks for a clarification. */
     public const REASON_UNCLEAR = 'unclear';
     /**
-     * The converted total would reach 2^53 minor units, where integers stop being exact in a
-     * float (docs/PLAN.md §3a; checked by ConvertService before display()).
+     * The converted total would reach 2^53 minor units (docs/PLAN.md §3a; checked by
+     * ConvertService before display()). The amount itself is valid, yet the user sees the
+     * generic VALIDATION_AMOUNT text; unreachable with real rates (the largest real total is
+     * about 50× below the limit).
      */
     public const REASON_TOO_LARGE = 'too_large';
 

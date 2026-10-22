@@ -148,7 +148,7 @@ final class ConvertEndpointTest extends TestCase
         self::assertSame(1_000_000 * 1_731_936.861971, (float) $data['converted']);
         self::assertSame(1_000_000 * 1_731_936.861971 / 7, $data['installment_amount']);
         self::assertSame(1_000_000, $data['amount_usd']);
-        self::assertSame('1000000.00', $data['display']['amount_usd']);
+        self::assertSame('1,000,000.00', $data['display']['amount_usd']);
         self::assertSame('1,731,936.861971', $data['display']['rate']);
         self::assertStringContainsString('"amount_usd":1000000,', $response->body());
 

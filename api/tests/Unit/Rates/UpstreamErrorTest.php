@@ -51,7 +51,22 @@ final class UpstreamErrorTest extends TestCase
     {
         // Not remapped globally: only the marked error answers 503.
         self::assertSame(400, ErrorCodes::httpStatus(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE));
-        self::assertSame([503, 'Exchange rates are temporarily unavailable. Please try again later.'], ErrorCodes::unsupportedCodeDuringBackoff());
-        self::assertSame(ErrorCodes::messageForUser(ErrorCodes::UPSTREAM_QUOTA), ErrorCodes::unsupportedCodeDuringBackoff()[1]);
+        self::assertSame(503, ErrorCodes::httpStatus(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, true));
+        self::assertSame('Exchange rates are temporarily unavailable. Please try again later.', ErrorCodes::messageForUser(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, true));
+        self::assertSame(ErrorCodes::messageForUser(ErrorCodes::UPSTREAM_QUOTA), ErrorCodes::messageForUser(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, true));
+
+        foreach (ErrorCodes::all() as $code) {
+            if ($code === ErrorCodes::UPSTREAM_UNSUPPORTED_CODE) {
+                continue;
+            }
+            foreach ([static fn () => ErrorCodes::httpStatus($code, true), static fn () => ErrorCodes::messageForUser($code, true)] as $call) {
+                try {
+                    $call();
+                    self::fail("{$code} accepted the backoff flag");
+                } catch (InvalidArgumentException) {
+                    $this->addToAssertionCount(1);
+                }
+            }
+        }
     }
 }

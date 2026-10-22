@@ -8,14 +8,14 @@ use FxInstallments\Validation\UsdAmount;
 
 /**
  * One conversion (docs/PLAN.md §1): the full-precision numbers computed locally, `rate_as_of`,
- * `stale`, and the display block. Nothing here is rounded except the display strings.
+ * `stale`, and the display block. Nothing here is rounded except the display strings, which
+ * are exact for the stored rate; the raw numbers are the nearest doubles (ADR 0011).
  */
 final readonly class Conversion
 {
     public function __construct(
         public UsdAmount $amount,
         public string $currency,
-        public int $rateScaled,
         public float $rate,
         public float $converted,
         public int $installments,
@@ -35,7 +35,7 @@ final readonly class Conversion
     public function toArray(): array
     {
         return [
-            // Exact: cents / 100 is the nearest double to the 2-decimal amount.
+            // cents / 100: the nearest double to the 2-decimal amount (an int when whole).
             'amount_usd' => $this->amount->cents / 100,
             'currency' => $this->currency,
             'rate' => $this->rate,

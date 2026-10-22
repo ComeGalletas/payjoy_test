@@ -475,7 +475,7 @@ final class RateCacheTest extends TestCase
             self::assertSame($reason, $error->reason);
             self::assertTrue($error->duringUnsupportedCodeBackoff);
             self::assertSame(503, $error->status());
-            self::assertSame(ErrorCodes::unsupportedCodeDuringBackoff()[1], $error->messageForUser());
+            self::assertSame('Exchange rates are temporarily unavailable. Please try again later.', $error->messageForUser());
         }
         self::assertSame(1, $upstream->calls());
 
@@ -511,6 +511,34 @@ final class RateCacheTest extends TestCase
         self::assertSame('unsupported-code', $error->reason);
         self::assertFalse($error->duringUnsupportedCodeBackoff);
         self::assertSame(400, $error->status());
+    }
+
+    /**
+     * The round-1 tester's repro: an INSERT into app_state that fails used to be swallowed, so
+     * trip() reported a backoff that was never stored. Now trip() throws, the lookup records
+     * `breaker_write_failed`, and with no backoff the answer is the plain 400.
+     */
+    public function testAFailedBreakerInsertIsNotReportedAsABackoff(): void
+    {
+        $this->pdo->exec("CREATE TRIGGER no_breaker_rows BEFORE INSERT ON app_state BEGIN SELECT RAISE(ABORT, 'no'); END");
+        $upstream = new MockUpstream(array_map(static fn (): mixed => MockUpstream::error('unsupported-code', 404), range(1, 4)));
+        $cache = $this->cache($upstream);
+
+        $statuses = [];
+        for ($i = 0; $i < 4; $i++) {
+            $error = $this->failure(fn () => $cache->rate('BRL'));
+            self::assertFalse($error->duringUnsupportedCodeBackoff);
+            $statuses[] = $error->status();
+        }
+
+        self::assertSame([400, 400, 400, 400], $statuses);
+        // No backoff stored, so every lookup calls upstream (ADR 0012 known limit).
+        self::assertSame(4, $upstream->calls());
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM app_state WHERE key = 'upstream_breaker'")->fetchColumn());
+        foreach ($this->events() as $event) {
+            self::assertTrue($event['meta']['breaker_write_failed']);
+            self::assertArrayNotHasKey('breaker', $event['meta']);
+        }
     }
 
     public function testOtherBackoffsKeepTheirOwnStatus(): void

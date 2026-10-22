@@ -8,16 +8,21 @@ use FxInstallments\Validation\ValidationFailed;
 use InvalidArgumentException;
 
 /**
- * Splitting and display (docs/PLAN.md §3a, ADR 0011): the only place that rounds money or
- * rates (§3 "Rounding"). Everything here works in integer minor units of the target currency
- * (MinorUnits); the strings are built from those integers, never by printing floats.
+ * Splitting and display (docs/PLAN.md §3a, ADR 0011; exact total by owner decision
+ * 2026-10-21, P1-05 round 2): the only place that rounds money or rates (§3 "Rounding").
+ * Everything here works in integer minor units of the target currency (MinorUnits), and the
+ * strings are built from those integers, never by printing floats.
  *
- * - `total_m = (int) round(round(converted, e) × 10^e)`, half away from zero; the inner round
- *   absorbs `x.xx5` float drift (1.005 is stored as 1.00499999…).
- * - A total of 2^53 minor units or more is rejected (VALIDATION_AMOUNT, `too_large`): from
- *   there on a float no longer holds every integer, so the cast could be off. ConvertService
- *   checks it first (minorUnitTotal()); display() checks again so it can never cast an
- *   inexact value.
+ * - **Exact total.** `total_m = round_half_away_from_zero(cents × rate_scaled × 10^e / 10^12)`,
+ *   computed from the canonical amount's cents (ADR 0017) and the stored `rate_scaled` with
+ *   integer arithmetic only: no float, no bcmath. `cents × rate_scaled` can pass 2^63, so
+ *   rate_scaled is split into 10^9 limbs and the division carries its remainder
+ *   (minorUnitTotal()). The display is therefore exact for the stored rate, while the raw
+ *   `converted` and `installment_amount` in the response stay the nearest floats (ADR 0011).
+ * - A total of 2^53 minor units or more is too large (VALIDATION_AMOUNT, `too_large`):
+ *   ConvertService checks minorUnitTotal() before display(), and display() refuses such a
+ *   total as a programming error (InvalidArgumentException), so the check can't silently
+ *   move.
  * - `total_m < n` is rejected (VALIDATION_INSTALLMENTS, `below_minor_unit`): every installment
  *   is at least one minor unit.
  * - `base_m = intdiv(total_m, n)`, `last_m = base_m + total_m % n`: the final payment absorbs
@@ -26,73 +31,106 @@ use InvalidArgumentException;
  */
 final class InstallmentCalculator
 {
-    /** 2^53, the first integer a float can't tell from its neighbour. */
+    /** 2^53: totals must stay below it (docs/PLAN.md §3a). */
     public const EXACT_LIMIT = 9_007_199_254_740_992;
 
     /** display.rate keeps at most this many decimals. */
     public const RATE_DECIMALS = 6;
 
-    /**
-     * total_m before the int cast: round(round(converted, e) × 10^e), as a float, so a caller
-     * can compare it with EXACT_LIMIT before display().
-     *
-     * @throws InvalidArgumentException for a negative or non-finite amount
-     */
-    public static function minorUnitTotal(float $converted, string $currency): float
-    {
-        if (!is_finite($converted) || $converted < 0.0) {
-            throw new InvalidArgumentException('A converted amount must be finite and not negative');
-        }
-        $exponent = MinorUnits::of($currency);
-        $total = round(round($converted, $exponent) * (10 ** $exponent));
-        if ($total !== floor($total)) {
-            // PHP's round() returns a value of 10^15 or more unchanged, and below 2^52 such a
-            // float can still have a fraction (a multiple of 0.25 or 0.5). Round it half away
-            // from zero here; adding 0.5 is exact at that size.
-            $total = floor($total + 0.5);
-        }
+    /** cents (10^2) × rate_scaled (10^10): the product's scale is 10^12. */
+    private const PRODUCT_DECIMALS = 12;
 
-        return $total;
+    private const LIMB = 1_000_000_000;
+
+    /**
+     * The exact total in minor units, `round_half_away_from_zero(cents × rate_scaled × 10^e /
+     * 10^12)`, or null when it is 2^53 or more (including any product too large for the
+     * limbed arithmetic, which is far above that).
+     *
+     * @throws InvalidArgumentException for negative cents, a rate outside ScaledRate's range,
+     *         or an exponent outside 0..12
+     */
+    public static function minorUnitTotal(int $cents, int $rateScaled, string $currency): ?int
+    {
+        return self::exactTotal($cents, $rateScaled, MinorUnits::of($currency));
     }
 
     /**
-     * Whether the converted total fits the exact integer range (below 2^53 minor units).
+     * @see minorUnitTotal(), with the exponent given directly
      */
-    public static function fitsExactly(float $converted, string $currency): bool
+    public static function exactTotal(int $cents, int $rateScaled, int $exponent): ?int
     {
-        return self::minorUnitTotal($converted, $currency) < (float) self::EXACT_LIMIT;
+        // Canonical amounts have at most 7 + 2 digits (UsdCents), so cents < 10^9.
+        if ($cents < 0 || $cents >= self::LIMB || $rateScaled < 1 || $rateScaled >= ScaledRate::MAX_SCALED) {
+            throw new InvalidArgumentException('Cents are in 0..10^9 − 1 and a scaled rate is in range');
+        }
+        if ($exponent < 0 || $exponent > self::PRODUCT_DECIMALS) {
+            throw new InvalidArgumentException('An exponent is between 0 and 12');
+        }
+
+        // rate_scaled = hi × 10^9 + lo, so cents × rate_scaled = high × 10^9 + low, low < 10^9.
+        $hi = intdiv($rateScaled, self::LIMB);
+        $lo = $rateScaled % self::LIMB;
+        if ($hi > 0 && $cents > intdiv(PHP_INT_MAX - self::LIMB, $hi)) {
+            // high would pass PHP_INT_MAX − 10^9 ≈ 9.2 × 10^18, so the product is at least
+            // 9.2 × 10^27 at scale 10^12: 9.2 × 10^15 whole units, past 2^53 for any e ≥ 0.
+            // (Unreachable with real inputs: cents < 10^9 and hi < 9 × 10^9 keep it below.)
+            return null;
+        }
+        $low = $cents * $lo; // < 10^9 × 10^9
+        $high = $cents * $hi + intdiv($low, self::LIMB); // fits: checked above
+        $low %= self::LIMB;
+
+        // Divide high × 10^9 + low by 10^k, k = 12 − e.
+        $k = self::PRODUCT_DECIMALS - $exponent;
+        if ($k >= 9) {
+            $split = 10 ** ($k - 9);
+            $quotient = intdiv($high, $split);
+            $remainder = ($high % $split) * self::LIMB + $low; // < 10^k ≤ 10^12
+        } else {
+            $multiplier = 10 ** (9 - $k);
+            if ($high >= intdiv(self::EXACT_LIMIT, $multiplier) + 1) {
+                return null; // quotient ≥ high × multiplier > 2^53
+            }
+            $split = 10 ** $k;
+            $quotient = $high * $multiplier + intdiv($low, $split);
+            $remainder = $low % $split;
+        }
+        if (2 * $remainder >= 10 ** $k) {
+            $quotient++; // half away from zero (all values are positive)
+        }
+
+        return $quotient >= self::EXACT_LIMIT ? null : $quotient;
     }
 
     /**
-     * The display block for $converted (in $currency) split into $installments payments.
+     * The display block for $amountUsdCents converted at $rateScaled into $currency, split into
+     * $installments payments.
      *
-     * @param float $converted amount_usd × rate, full precision
-     * @param int $rateScaled the stored rate (ADR 0017), for display.rate
-     * @param int $amountUsdCents the total USD price in cents, for display.amount_usd
+     * @param int $amountUsdCents the total USD price in cents (ADR 0006, 0017)
+     * @param int $rateScaled the stored rate (ADR 0017)
      * @param int $rateAsOf upstream's time_last_update_unix, for display.rate_as_of
      *
-     * @throws ValidationFailed VALIDATION_AMOUNT (`too_large`) at 2^53 minor units or more;
-     *         VALIDATION_INSTALLMENTS (`below_minor_unit`) when the total has fewer minor units
-     *         than installments
-     * @throws InvalidArgumentException for out-of-range arguments (callers validate first)
+     * @throws ValidationFailed VALIDATION_INSTALLMENTS (`below_minor_unit`) when the total has
+     *         fewer minor units than installments
+     * @throws InvalidArgumentException for out-of-range arguments, including a total of 2^53
+     *         minor units or more (callers check minorUnitTotal() first)
      */
     public static function display(
-        float $converted,
+        int $amountUsdCents,
+        int $rateScaled,
         int $installments,
         string $currency,
-        int $rateScaled,
-        int $amountUsdCents,
         int $rateAsOf,
     ): Display {
         if ($installments < 1) {
             throw new InvalidArgumentException('At least one installment');
         }
         $exponent = MinorUnits::of($currency);
-        $total = self::minorUnitTotal($converted, $currency);
-        if ($total >= (float) self::EXACT_LIMIT) {
-            throw ValidationFailed::amount(ValidationFailed::REASON_TOO_LARGE);
+        $totalMinor = self::exactTotal($amountUsdCents, $rateScaled, $exponent);
+        if ($totalMinor === null) {
+            throw new InvalidArgumentException('The total is 2^53 minor units or more; check minorUnitTotal() first');
         }
-        $totalMinor = (int) $total;
         if ($totalMinor < $installments) {
             throw ValidationFailed::installments(ValidationFailed::REASON_BELOW_MINOR_UNIT);
         }
@@ -102,7 +140,7 @@ final class InstallmentCalculator
         $even = $lastMinor === $baseMinor;
 
         return new Display(
-            UsdCents::toCanonical($amountUsdCents),
+            self::formatMinor($amountUsdCents, 2),
             self::formatRate($rateScaled),
             self::formatMinor($totalMinor, $exponent),
             self::formatMinor($baseMinor, $exponent),

@@ -21,8 +21,8 @@ use RuntimeException;
  * `duringUnsupportedCodeBackoff` is set by RateCache when the error is answered while a breaker
  * backoff opened by `unsupported-code` on `/latest/USD` is open, including the failed refresh
  * that opened it (ADR 0012 amendment item 9). Only UPSTREAM_UNSUPPORTED_CODE can carry it; it
- * turns that code's 400 into ErrorCodes::unsupportedCodeDuringBackoff() (503, generic upstream
- * text). A currency missing from a usable table (`not_in_table`) never carries it.
+ * turns that code's 400 into ErrorCodes' backoff answer (503, generic upstream text). A
+ * currency missing from a usable table (`not_in_table`) never carries it.
  */
 final class UpstreamError extends RuntimeException
 {
@@ -57,11 +57,7 @@ final class UpstreamError extends RuntimeException
      */
     public function messageForUser(): string
     {
-        if ($this->duringUnsupportedCodeBackoff) {
-            return ErrorCodes::unsupportedCodeDuringBackoff()[1];
-        }
-
-        return (string) ErrorCodes::messageForUser($this->errorCode);
+        return (string) ErrorCodes::messageForUser($this->errorCode, $this->duringUnsupportedCodeBackoff);
     }
 
     /**
@@ -70,11 +66,7 @@ final class UpstreamError extends RuntimeException
      */
     public function status(): int
     {
-        if ($this->duringUnsupportedCodeBackoff) {
-            return ErrorCodes::unsupportedCodeDuringBackoff()[0];
-        }
-
-        return (int) ErrorCodes::httpStatus($this->errorCode);
+        return (int) ErrorCodes::httpStatus($this->errorCode, $this->duringUnsupportedCodeBackoff);
     }
 
     /**
