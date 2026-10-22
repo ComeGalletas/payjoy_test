@@ -68,8 +68,8 @@ design, which the tester and judge accepted.
    programming error (`InvalidArgumentException`, so a removed check shows up as a 500, not a
    wrong number). The total is now exact in int64 well past 2^53; the limit is kept as PLAN §3a's
    bound because the raw `converted` and `installment_amount` are doubles and JSON numbers, which
-   above 2^53 can't hold every whole unit, also for JavaScript clients such as the widget (lead's
-   rationale).
+   above 2^53 minor units can't resolve every minor unit, also for any JavaScript client that reads
+   the raw numbers (lead's rationale).
 5. **Reasons:** `too_large` (amount; the total reaches 2^53 minor units; it answers with the
    `VALIDATION_AMOUNT` text, and no real rate reaches it) and `below_minor_unit` (installments;
    `total_m < n`). `too_large` is a 400, so it counts toward `block.error_responses` (ADR 0016).
