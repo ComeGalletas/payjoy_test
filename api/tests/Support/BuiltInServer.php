@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace FxInstallments\Tests\Support;
 
+use InvalidArgumentException;
 use PHPUnit\Framework\Assert;
 
 /**
@@ -11,13 +12,17 @@ use PHPUnit\Framework\Assert;
  * skipped when no loopback port can be bound.
  *
  * The server runs with APP_ENV=test (so it never reads .env), an empty ADMIN_TOKEN and
- * EXCHANGERATE_API_KEY, the given database, and ADR 0018's gate flags (`allow_url_fopen=0`,
- * curl_exec and curl_multi_exec disabled) unless $ini overrides them, so it can't reach the
- * network either. Its stdout and stderr, where error_log lines go, are in log().
+ * EXCHANGERATE_API_KEY, the given database, and always ADR 0018's gate flags
+ * (`allow_url_fopen=0`, curl_exec and curl_multi_exec disabled), so it can't reach the network
+ * either: an $ini entry that would change one of them is refused. Its stdout and stderr, where
+ * error_log lines go, are in log().
  */
 final class BuiltInServer
 {
     private const STARTUP_SECONDS = 10;
+
+    /** ADR 0018's gate flags: always set, and a caller can't change them. */
+    private const GATE_INI = ['allow_url_fopen' => '0', 'disable_functions' => 'curl_exec,curl_multi_exec'];
 
     /** @var resource|null */
     private $process;
@@ -52,8 +57,13 @@ final class BuiltInServer
             'EXCHANGERATE_API_KEY' => '',
         ], $env);
 
+        foreach (self::GATE_INI as $name => $value) {
+            if (array_key_exists($name, $ini) && $ini[$name] !== $value) {
+                throw new InvalidArgumentException("BuiltInServer always runs with {$name}={$value} (ADR 0018)");
+            }
+        }
         $command = [PHP_BINARY];
-        foreach (array_replace(['allow_url_fopen' => '0', 'disable_functions' => 'curl_exec,curl_multi_exec'], $ini) as $name => $value) {
+        foreach (array_replace($ini, self::GATE_INI) as $name => $value) {
             $command[] = '-d';
             $command[] = "{$name}={$value}";
         }

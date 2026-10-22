@@ -15,6 +15,7 @@ use FxInstallments\Flow\FlowEngine;
 use FxInstallments\Flow\SessionStore;
 use FxInstallments\Flow\SessionSweeper;
 use FxInstallments\Http\AdminAuth;
+use FxInstallments\Http\AllowedOrigins;
 use FxInstallments\Http\BotMessageEndpoint;
 use FxInstallments\Http\ConvertEndpoint;
 use FxInstallments\Http\Cors;
@@ -37,6 +38,7 @@ use FxInstallments\Validation\CurrencyResolver;
 use FxInstallments\Validation\CurrencyValidator;
 use FxInstallments\Validation\InstallmentsValidator;
 use PDO;
+use Throwable;
 
 /**
  * Wires the shared services (config, database, metrics, middleware) and the production route
@@ -57,6 +59,8 @@ final class App
     private readonly Closure $clock;
 
     private ?RateCache $rates = null;
+
+    private ?AllowedOrigins $allowedOrigins = null;
 
     /**
      * @param (Closure(): int)|null $clock UTC epoch seconds; defaults to time()
@@ -119,11 +123,45 @@ final class App
     }
 
     /**
-     * The built-in widget; its page may be framed by the `cors.allowed_origins` origins.
+     * The built-in widget; its page may be framed by the allowed origins.
      */
     public function widget(): WidgetEndpoint
     {
-        return new WidgetEndpoint(self::WIDGET_DIR, $this->config->stringList('cors.allowed_origins'));
+        return new WidgetEndpoint(self::WIDGET_DIR, $this->allowedOrigins());
+    }
+
+    /**
+     * `cors.allowed_origins`, checked once per app (AllowedOrigins). When entries are dropped,
+     * one error-log line gives their number; the values themselves aren't logged (they are
+     * config text of any length and content, and the operator has the config file).
+     *
+     * @return list<string>
+     */
+    public function allowedOrigins(): array
+    {
+        if ($this->allowedOrigins === null) {
+            $this->allowedOrigins = AllowedOrigins::fromConfig($this->config->stringList('cors.allowed_origins'));
+            if ($this->allowedOrigins->dropped > 0) {
+                $this->note(sprintf(
+                    'fx-installments config: cors.allowed_origins dropped %d invalid %s (each must be a lowercase http(s)://host[:port] with no path)',
+                    $this->allowedOrigins->dropped,
+                    $this->allowedOrigins->dropped === 1 ? 'entry' : 'entries',
+                ));
+            }
+        }
+
+        return $this->allowedOrigins->origins;
+    }
+
+    private function note(string $message): void
+    {
+        try {
+            ($this->errorLog ?? static function (string $line): void {
+                error_log($line);
+            })($message);
+        } catch (Throwable) {
+            // A failed note must not fail the request.
+        }
     }
 
     public function botMessageEndpoint(): BotMessageEndpoint
@@ -254,7 +292,7 @@ final class App
 
     public function cors(): Cors
     {
-        return new Cors($this->config->stringList('cors.allowed_origins'));
+        return new Cors($this->allowedOrigins());
     }
 
     public function upstreamBreaker(): UpstreamBreaker

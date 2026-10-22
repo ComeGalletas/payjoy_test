@@ -146,9 +146,10 @@
   cursor: not-allowed;
 }
 
+/* Dark outline, offset onto the white panel: about 16:1 against #ffffff, so well over 3:1. */
 .fxw button:focus-visible,
 .fxw input:focus-visible {
-  outline: 3px solid #f2a900;
+  outline: 3px solid #1d2026;
   outline-offset: 2px;
 }
 

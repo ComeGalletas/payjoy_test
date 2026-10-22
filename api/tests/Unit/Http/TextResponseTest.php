@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Http;
 
 use FxInstallments\Http\JsonResponse;
+use FxInstallments\Http\NoContentResponse;
 use FxInstallments\Http\TextResponse;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -71,7 +72,7 @@ final class TextResponseTest extends TestCase
      */
     public function testNoResponseCarriesXPoweredBy(): void
     {
-        foreach ([TextResponse::ok('x', 'text/plain'), JsonResponse::ok(), JsonResponse::error('NOT_FOUND')] as $response) {
+        foreach ([TextResponse::ok('x', 'text/plain'), NoContentResponse::create(), JsonResponse::ok(), JsonResponse::error('NOT_FOUND')] as $response) {
             self::assertArrayNotHasKey('x-powered-by', $response->headers());
         }
     }

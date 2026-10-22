@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace FxInstallments\Tests\Unit\Http;
 
+use FxInstallments\Http\NoContentResponse;
 use FxInstallments\Http\Request;
 use FxInstallments\Http\Router;
 use FxInstallments\Http\WidgetEndpoint;
@@ -14,7 +15,9 @@ use RuntimeException;
 
 final class WidgetEndpointTest extends TestCase
 {
-    private const BASE_POLICY = "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+    private const POLICY_HEAD = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+
+    private const POLICY_TAIL = "; require-trusted-types-for 'script'; trusted-types 'none'";
 
     private string $directory;
 
@@ -24,20 +27,22 @@ final class WidgetEndpointTest extends TestCase
         file_put_contents($this->directory . '/widget.html', '<!doctype html><title>t</title>');
         file_put_contents($this->directory . '/widget.js', 'console.log(1);');
         file_put_contents($this->directory . '/widget.css', 'p { color: red; }');
+        file_put_contents($this->directory . '/widget.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>');
     }
 
     /**
-     * @return iterable<string, array{string, string, string}>
+     * @return iterable<string, array{string, string, string, string|null}>
      */
     public static function files(): iterable
     {
-        yield 'page' => [WidgetEndpoint::PAGE_PATH, '<!doctype html><title>t</title>', 'text/html; charset=utf-8'];
-        yield 'script' => [WidgetEndpoint::SCRIPT_PATH, 'console.log(1);', 'text/javascript; charset=utf-8'];
-        yield 'style sheet' => [WidgetEndpoint::STYLE_PATH, 'p { color: red; }', 'text/css; charset=utf-8'];
+        yield 'page' => [WidgetEndpoint::PAGE_PATH, '<!doctype html><title>t</title>', 'text/html; charset=utf-8', self::POLICY_HEAD . self::POLICY_TAIL];
+        yield 'script' => [WidgetEndpoint::SCRIPT_PATH, 'console.log(1);', 'text/javascript; charset=utf-8', null];
+        yield 'style sheet' => [WidgetEndpoint::STYLE_PATH, 'p { color: red; }', 'text/css; charset=utf-8', null];
+        yield 'icon' => [WidgetEndpoint::ICON_PATH, '<svg xmlns="http://www.w3.org/2000/svg"/>', 'image/svg+xml', "default-src 'none'"];
     }
 
     #[DataProvider('files')]
-    public function testEachPathServesItsFileWithItsType(string $path, string $body, string $type): void
+    public function testEachPathServesItsFileWithItsType(string $path, string $body, string $type, ?string $policy): void
     {
         $router = new Router();
         (new WidgetEndpoint($this->directory, []))->register($router);
@@ -50,10 +55,34 @@ final class WidgetEndpointTest extends TestCase
         self::assertSame('nosniff', $response->header('x-content-type-options'));
         self::assertSame('no-cache', $response->header('cache-control'));
         self::assertSame('no-referrer', $response->header('referrer-policy'));
+        self::assertSame($policy, $response->header('content-security-policy'));
+    }
+
+    public function testFaviconIsA204WithNoBodyOrType(): void
+    {
+        $router = new Router();
+        (new WidgetEndpoint($this->directory, []))->register($router);
+
+        $response = $router->dispatch(new Request('GET', WidgetEndpoint::FAVICON_PATH));
+
+        self::assertInstanceOf(NoContentResponse::class, $response);
+        self::assertSame(204, $response->status());
+        self::assertSame('', $response->body());
+        self::assertNull($response->errorCode());
+        self::assertSame(['x-content-type-options' => 'nosniff', 'cache-control' => 'max-age=86400'], $response->headers());
+        self::assertArrayNotHasKey('content-type', $response->withHeader('Content-Type', 'text/plain')->headers());
+    }
+
+    public function testRegisterAddsExactlyTheListedPaths(): void
+    {
+        $router = new Router();
+        (new WidgetEndpoint($this->directory, []))->register($router);
+
         self::assertSame(
-            $path === WidgetEndpoint::PAGE_PATH ? self::BASE_POLICY : null,
-            $response->header('content-security-policy'),
+            [['GET', '/bot/widget'], ['GET', '/bot/widget.js'], ['GET', '/bot/widget.css'], ['GET', '/bot/widget.svg'], ['GET', '/favicon.ico']],
+            $router->routes(),
         );
+        self::assertSame(array_column($router->routes(), 1), WidgetEndpoint::paths());
     }
 
     public function testOnlyGetIsServedAndNoOtherPathMapsToAFile(): void
@@ -61,7 +90,7 @@ final class WidgetEndpointTest extends TestCase
         $router = new Router();
         (new WidgetEndpoint($this->directory, []))->register($router);
 
-        foreach ([['POST', '/bot/widget'], ['GET', '/bot/widget/'], ['GET', '/bot/widget.html'], ['GET', '/bot/widget.js/..'], ['GET', '/bot/../bot/widget']] as [$method, $path]) {
+        foreach ([['POST', '/bot/widget'], ['GET', '/bot/widget/'], ['GET', '/bot/widget.html'], ['GET', '/bot/widget.js/..'], ['GET', '/bot/../bot/widget'], ['POST', '/favicon.ico'], ['GET', '/bot/favicon.ico']] as [$method, $path]) {
             self::assertSame('NOT_FOUND', $router->dispatch(new Request($method, $path))->errorCode(), "{$method} {$path}");
         }
     }
@@ -77,7 +106,7 @@ final class WidgetEndpointTest extends TestCase
     public function testAnUnknownPathThrows(): void
     {
         $this->expectException(RuntimeException::class);
-        (new WidgetEndpoint($this->directory, []))->serve('/bot/widget.txt');
+        (new WidgetEndpoint($this->directory, []))->serve(WidgetEndpoint::FAVICON_PATH);
     }
 
     public function testTheAllowedOriginsMayFrameThePage(): void
@@ -86,60 +115,19 @@ final class WidgetEndpointTest extends TestCase
             ->serve(WidgetEndpoint::PAGE_PATH);
 
         self::assertSame(
-            "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' https://shop.example http://localhost:8081",
+            self::POLICY_HEAD . ' https://shop.example http://localhost:8081' . self::POLICY_TAIL,
             $response->header('content-security-policy'),
         );
     }
 
-    #[DataProvider('originsLeftOut')]
-    public function testAnOriginThatIsNotPlainIsLeftOutOfFrameAncestors(string $origin): void
-    {
-        self::assertFalse(WidgetEndpoint::isPlainOrigin($origin));
-        self::assertSame(self::BASE_POLICY, WidgetEndpoint::contentSecurityPolicy([$origin]));
-    }
-
     /**
-     * @return iterable<string, array{string}>
+     * Even an unfiltered list can't add a directive: the endpoint checks each origin again.
      */
-    public static function originsLeftOut(): iterable
+    public function testAnInvalidOriginIsLeftOutOfFrameAncestors(): void
     {
-        yield 'empty' => [''];
-        yield 'null' => ['null'];
-        yield 'wildcard' => ['*'];
-        yield 'wildcard host' => ['https://*.example'];
-        yield 'directive injection' => ["https://shop.example; script-src 'unsafe-inline'"];
-        yield 'space-separated list' => ['https://a.example https://b.example'];
-        yield 'keyword' => ["'unsafe-inline'"];
-        yield 'trailing slash' => ['https://shop.example/'];
-        yield 'path' => ['https://shop.example/app'];
-        yield 'query' => ['https://shop.example?x=1'];
-        yield 'credentials' => ['https://user@shop.example'];
-        yield 'other scheme' => ['ftp://shop.example'];
-        yield 'data scheme' => ['data:'];
-        yield 'no scheme' => ['shop.example'];
-        yield 'port zero' => ['https://shop.example:0'];
-        yield 'port too large' => ['https://shop.example:65536'];
-        yield 'trailing newline' => ["https://shop.example\n"];
-        yield 'leading dash label' => ['https://-shop.example'];
-    }
-
-    #[DataProvider('plainOrigins')]
-    public function testPlainOriginsAreKept(string $origin): void
-    {
-        self::assertTrue(WidgetEndpoint::isPlainOrigin($origin));
-        self::assertSame(self::BASE_POLICY . ' ' . $origin, WidgetEndpoint::contentSecurityPolicy([$origin]));
-    }
-
-    /**
-     * @return iterable<string, array{string}>
-     */
-    public static function plainOrigins(): iterable
-    {
-        yield 'https host' => ['https://shop.example'];
-        yield 'http with port' => ['http://localhost:8081'];
-        yield 'highest port' => ['https://shop.example:65535'];
-        yield 'IPv4' => ['http://127.0.0.1:8080'];
-        yield 'IPv6' => ['http://[::1]:8080'];
-        yield 'subdomains and dashes' => ['https://my-shop.eu.example'];
+        self::assertSame(
+            self::POLICY_HEAD . self::POLICY_TAIL,
+            WidgetEndpoint::contentSecurityPolicy(['*', "https://shop.example; script-src 'unsafe-inline'", 'HTTPS://SHOP.EXAMPLE', "'self'"]),
+        );
     }
 }

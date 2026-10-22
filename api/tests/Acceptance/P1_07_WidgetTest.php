@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace FxInstallments\Tests\Acceptance;
 
+use ArrayObject;
+use FilesystemIterator;
 use FxInstallments\App;
+use FxInstallments\Http\JsonResponse;
+use FxInstallments\Http\Kernel;
 use FxInstallments\Http\Request;
 use FxInstallments\Http\Response;
 use FxInstallments\Http\WidgetEndpoint;
@@ -15,6 +19,7 @@ use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\OverridesEnvironment;
 use FxInstallments\Tests\Support\TestEnvironment;
 use FxInstallments\Tests\Support\TestRoutes;
+use InvalidArgumentException;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
@@ -24,18 +29,26 @@ use SplFileInfo;
 /**
  * P1-07 acceptance (docs/PLAN.md §10), on the production route table through App::kernel()
  * and, for the headers PHP itself adds, through `php -S` over a socket:
- * - `GET /bot/widget` has a strict Content-Security-Policy (`default-src 'self'`, no inline
- *   script or style, `frame-ancestors 'self'` plus `cors.allowed_origins`) and
- *   `X-Content-Type-Options: nosniff`; the script and style sheet have their types and nosniff;
- * - the page loads only its own two files and has no inline script, style or event handler;
- * - no file in `api/resources/widget/` names an HTML sink or a number-formatting API
- *   (INV-01, the widget half; FORBIDDEN lists each name and why), and the scanner is shown to
- *   catch every one of them;
- * - the conversation the widget runs: it opens with `{"text": ""}` as JSON, a `<script>` typed
- *   at the amount step only gets the clarify text back (as data), buttons come only with a
- *   step that has them, and nothing reaches upstream before the result step;
+ * - `GET /bot/widget` has a strict Content-Security-Policy (nothing by default, only this
+ *   origin's files, no inline script or style, Trusted Types with no policy,
+ *   `frame-ancestors 'self'` plus `cors.allowed_origins`) and `X-Content-Type-Options: nosniff`;
+ *   the script, style sheet and icon have their types and nosniff; `/favicon.ico` is a 204;
+ * - repeated page views from one IP never answer a 4xx and never block it (owner decision
+ *   2026-10-21: the favicon 404 counted toward `block.error_responses`);
+ * - INV-04: on the production route table only the widget routes answer without the envelope;
+ * - the page loads only its own files and has no inline script, style or event handler;
+ * - no file in `api/resources/widget/` names an HTML sink, a code-from-string API or a
+ *   number-formatting API (INV-01, the widget half; FORBIDDEN lists each name and why), and the
+ *   scanner is shown to catch every one of them;
+ * - the widget's behaviour, by the Node harness `api/tests/js/widget.test.js` (lazy open, input
+ *   locked in flight, empty reply skipped, no HTML sink, buttons sent once, session id reused,
+ *   restart opens a fresh session...); skipped without Node, except on CI;
+ * - the conversation the widget runs, through the kernel: `{"text": ""}` opens it, a `<script>`
+ *   typed at the amount step only gets the clarify text back, buttons come only with a step that
+ *   has them, and nothing reaches upstream before the result step;
  * - the errors it shows verbatim are envelopes (BAD_REQUEST, 429 with CORS headers, the
  *   same-origin 403), and a cross-origin blocked request has no CORS headers;
+ * - invalid `cors.allowed_origins` entries are dropped with one error-log line;
  * - no response carries `X-Powered-By`, even with `expose_php` on;
  * - the admin `Authorization: Bearer` parse is strict (no trailing newline or whitespace).
  *
@@ -47,7 +60,7 @@ final class P1_07_WidgetTest extends TestCase
 
     private const CLIENT = '203.0.113.7';
 
-    private const POLICY = "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+    private const POLICY = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; require-trusted-types-for 'script'; trusted-types 'none'";
 
     private const GREETING = "Hi! Tell me what you paid in USD and I'll show your monthly installment in your local currency.\nWhat was the total price in USD?";
 
@@ -57,11 +70,13 @@ final class P1_07_WidgetTest extends TestCase
 
     private const SCRIPT_TAG = '<script>alert("x")</script>';
 
+    private const HARNESS = __DIR__ . '/../js/widget.test.js';
+
     /**
-     * Names no widget file may contain, with the reason. Matched case-sensitively (JavaScript
-     * names are) on the whole text, comments included: JavaScript comments can't be stripped
-     * reliably with a pattern (`//` in strings and URLs, regular expression literals), so the
-     * widget files simply never mention these names.
+     * Patterns no widget file may contain, with the reason. Matched on the whole text, comments
+     * included: JavaScript comments can't be stripped reliably with a pattern (`//` in strings
+     * and URLs, regular expression literals), so the widget files simply never mention these.
+     * Case-sensitive (JavaScript names are), except `javascript:` URLs.
      */
     private const FORBIDDEN = [
         // Output safety (§3): every text goes in through textContent, never parsed as HTML.
@@ -73,19 +88,30 @@ final class P1_07_WidgetTest extends TestCase
         'DOMParser' => '/DOMParser/',
         'setHTML' => '/setHTML/', // setHTMLUnsafe too
         'srcdoc' => '/srcdoc/',
+        'javascript:' => '/javascript\s*:/i',
+        // An attribute that runs code, styles inline or loads a URL; or one whose name is computed.
+        'setAttribute(on|style|src|href|srcdoc)' => '/setAttribute\s*\(\s*[\'"`]\s*(?:on|style|src|href|srcdoc)/i',
+        'setAttribute(computed name)' => '/setAttribute\s*\(\s*[^\'"`\s]/',
+        // Code from strings, and ways around the name checks.
         'eval(' => '/\beval\s*\(/',
+        'Function(' => '/\bFunction\s*\(/', // with or without `new`
         'new Function' => '/\bnew\s+Function\b/',
+        'Reflect' => '/\bReflect\b/',
+        'setTimeout/setInterval(string)' => '/\bset(?:Timeout|Interval)\s*\(\s*[\'"`]/',
+        // Computed member access (`node['inner' + 'HTML']`, `list[0]`) in JavaScript, after a
+        // name, `)` or `]`; an array literal after `return` and similar keywords is allowed.
+        'computed member access' => '/(?:[)\]]|\b(?!(?:return|typeof|in|of|case|else|void|await|yield|throw)\b)[A-Za-z_$][\w$]*)\s*\[/',
         // INV-01: the widget shows `display` strings verbatim and never rounds or formats a number.
         'toFixed' => '/toFixed/',
         'toPrecision' => '/toPrecision/',
         'toLocaleString' => '/toLocale[A-Za-z]*String/', // toLocaleDateString etc. too
         'Intl.NumberFormat' => '/\bIntl\b/', // any Intl formatter
-        'Math.round' => '/Math\s*\.\s*round/',
-        'Math.floor' => '/Math\s*\.\s*floor/',
-        'Math.ceil' => '/Math\s*\.\s*ceil/',
-        'Math.trunc' => '/Math\s*\.\s*trunc/',
+        'Math' => '/\bMath\b/', // Math.round, floor, ceil, trunc...
         'parseFloat' => '/parseFloat/',
     ];
+
+    /** Checked in `.js` files only: CSS and HTML use `[` in selectors and attributes. */
+    private const JS_ONLY = ['computed member access'];
 
     private string $path;
 
@@ -125,10 +151,15 @@ final class P1_07_WidgetTest extends TestCase
         self::assertSame([], $this->rows('SELECT event_type FROM events'));
     }
 
-    public function testTheScriptAndStyleSheetHaveTheirTypesAndNosniff(): void
+    public function testTheScriptStyleSheetAndIconHaveTheirTypesAndNosniff(): void
     {
         $app = $this->app();
-        foreach ([[WidgetEndpoint::SCRIPT_PATH, 'widget.js', 'text/javascript; charset=utf-8'], [WidgetEndpoint::STYLE_PATH, 'widget.css', 'text/css; charset=utf-8']] as [$path, $file, $type]) {
+        $files = [
+            [WidgetEndpoint::SCRIPT_PATH, 'widget.js', 'text/javascript; charset=utf-8'],
+            [WidgetEndpoint::STYLE_PATH, 'widget.css', 'text/css; charset=utf-8'],
+            [WidgetEndpoint::ICON_PATH, 'widget.svg', 'image/svg+xml'],
+        ];
+        foreach ($files as [$path, $file, $type]) {
             $response = $this->get($app, $path);
 
             self::assertSame(200, $response->status(), $path);
@@ -136,14 +167,94 @@ final class P1_07_WidgetTest extends TestCase
             self::assertSame('nosniff', $response->header('X-Content-Type-Options'), $path);
             self::assertSame(self::widgetFile($file), $response->body(), $path);
         }
+        self::assertSame("default-src 'none'", $this->get($app, WidgetEndpoint::ICON_PATH)->header('Content-Security-Policy'));
+        self::assertStringNotContainsString('<script', self::widgetFile('widget.svg'));
+
+        $favicon = $this->get($app, WidgetEndpoint::FAVICON_PATH);
+        self::assertSame(204, $favicon->status());
+        self::assertSame('', $favicon->body());
+        self::assertSame('nosniff', $favicon->header('X-Content-Type-Options'));
+        self::assertNull($favicon->header('Content-Type'));
+    }
+
+    /**
+     * Owner decision 2026-10-21: page views from one IP (a shared office or mobile network) never
+     * add up to a block. Each view is the page, its script, style sheet and icon, and the
+     * `/favicon.ico` a browser asks for on any top-level page.
+     */
+    public function testRepeatedPageViewsFromOneIpNeverBlockIt(): void
+    {
+        $kernel = $this->app(['block.error_responses' => 10])->kernel();
+        $view = [WidgetEndpoint::PAGE_PATH, WidgetEndpoint::SCRIPT_PATH, WidgetEndpoint::STYLE_PATH, WidgetEndpoint::ICON_PATH, WidgetEndpoint::FAVICON_PATH];
+
+        for ($i = 0; $i < 40; $i++) {
+            foreach ($view as $path) {
+                $status = $kernel->handle(new Request('GET', $path, remoteAddr: self::CLIENT))->status();
+                self::assertContains($status, [200, 204], "view {$i}, {$path}");
+            }
+        }
+
+        self::assertSame([['count' => 200, 'worst' => 204]], $this->rows("SELECT COUNT(*) AS count, MAX(status) AS worst FROM requests WHERE ip = '" . self::CLIENT . "'"));
+        self::assertSame([], $this->rows('SELECT ip FROM ip_blocks'));
+
+        // Control: the threshold is live, so 404s from another IP do block it.
+        for ($i = 0; $i < 11; $i++) {
+            $kernel->handle(new Request('GET', '/favicon.png', remoteAddr: '203.0.113.8'));
+        }
+        self::assertSame([['ip' => '203.0.113.8']], $this->rows('SELECT ip FROM ip_blocks'));
+    }
+
+    /**
+     * INV-04 over the production route table: every route answers the JSON envelope except the
+     * widget's files and the favicon 204, and that exception list is exactly WidgetEndpoint's.
+     */
+    public function testOnlyTheWidgetRoutesAnswerWithoutTheEnvelope(): void
+    {
+        $app = $this->app(upstream: new MockUpstream());
+        $routes = $app->router()->routes();
+        self::assertSame(
+            [['GET', '/convert'], ['POST', '/bot/message'], ['GET', '/bot/widget'], ['GET', '/bot/widget.js'], ['GET', '/bot/widget.css'], ['GET', '/bot/widget.svg'], ['GET', '/favicon.ico']],
+            $routes,
+            'a new route must be added here, with its envelope status',
+        );
+
+        $kernel = $app->kernel();
+        $nonEnvelope = [];
+        $requests = [];
+        foreach ($routes as [$method, $path]) {
+            $requests[] = new Request($method, $path, [], ['Content-Type' => 'application/json'], '{}', self::CLIENT);
+        }
+        $requests[] = new Request('GET', '/no/such/route', remoteAddr: self::CLIENT);
+        $requests[] = new Request('OPTIONS', '/bot/message', [], ['Origin' => 'https://shop.example', 'Access-Control-Request-Method' => 'POST'], remoteAddr: self::CLIENT);
+
+        foreach ($requests as $request) {
+            $response = $kernel->handle($request);
+            $label = $request->method() . ' ' . $request->path();
+            if (!$response instanceof JsonResponse) {
+                $nonEnvelope[] = $request->path();
+                self::assertNotSame('application/json', $response->header('Content-Type'), $label);
+                continue;
+            }
+            self::assertSame('application/json', $response->header('Content-Type'), $label);
+            $envelope = json_decode($response->body(), true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsBool($envelope['ok'] ?? null, $label);
+            self::assertSame($envelope['ok'] ? ['ok', 'data'] : ['ok', 'error'], array_keys($envelope), $label);
+        }
+        self::assertSame(WidgetEndpoint::paths(), $nonEnvelope);
     }
 
     public function testTheAllowedOriginsMayFrameThePageAndCallTheBot(): void
     {
-        $app = $this->app(['cors.allowed_origins' => ['https://shop.example', "https://bad.example; script-src 'unsafe-inline'"]]);
+        $log = new ArrayObject();
+        $app = TestEnvironment::app($this->clock, ['cors.allowed_origins' => [
+            'https://shop.example',
+            "https://bad.example; script-src 'unsafe-inline'",
+            'HTTPS://SHOP.EXAMPLE',
+            'https://shop.example/',
+        ]], $this->pdo, $log);
 
         self::assertSame(
-            self::POLICY . ' https://shop.example',
+            str_replace("frame-ancestors 'self'", "frame-ancestors 'self' https://shop.example", self::POLICY),
             $this->get($app, WidgetEndpoint::PAGE_PATH)->header('Content-Security-Policy'),
         );
 
@@ -155,6 +266,12 @@ final class P1_07_WidgetTest extends TestCase
         ], remoteAddr: self::CLIENT));
         self::assertSame('https://shop.example', $preflight->header('Access-Control-Allow-Origin'));
         self::assertSame('Content-Type', $preflight->header('Access-Control-Allow-Headers'));
+
+        // Dropped loudly: one line for the app, with the count and not the values.
+        self::assertSame(
+            ['fx-installments config: cors.allowed_origins dropped 3 invalid entries (each must be a lowercase http(s)://host[:port] with no path)'],
+            $log->getArrayCopy(),
+        );
     }
 
     public function testThePageLoadsOnlyItsOwnFilesWithNoInlineScriptOrStyle(): void
@@ -170,18 +287,22 @@ final class P1_07_WidgetTest extends TestCase
         self::assertSame(0, preg_match('~<style\b~i', $html), 'no style element');
         self::assertSame(0, preg_match('~\sstyle\s*=~i', $html), 'no style attribute');
         self::assertSame(0, preg_match('~\son[a-z]+\s*=~i', $html), 'no event-handler attribute');
-        self::assertSame(0, preg_match('~javascript:~i', $html), 'no javascript: URL');
 
         preg_match_all('~\s(?:src|href)\s*=\s*"([^"]*)"~i', $html, $urls);
-        self::assertSame(['widget.css', 'widget.js'], $urls[1], 'only the two widget files, by relative URL');
+        self::assertSame(['widget.svg', 'widget.css', 'widget.js'], $urls[1], 'only the widget files, by relative URL');
+        self::assertMatchesRegularExpression('~<link rel="icon" href="widget\.svg" type="image/svg\+xml">~', $html);
+        self::assertMatchesRegularExpression('~\.fxw-msg \{[^}]*white-space: pre-line;~', self::widgetFile('widget.css'), 'line breaks in replies are kept');
     }
 
-    public function testNoWidgetFileNamesAnHtmlSinkOrANumberFormatter(): void
+    public function testNoWidgetFileNamesAForbiddenApi(): void
     {
         $files = self::scanDirectory(App::WIDGET_DIR);
 
-        self::assertSame(['widget.css', 'widget.html', 'widget.js'], array_keys($files), 'the files scanned');
-        self::assertSame(['widget.css' => [], 'widget.html' => [], 'widget.js' => []], $files);
+        self::assertSame(
+            ['widget.css' => [], 'widget.html' => [], 'widget.js' => [], 'widget.svg' => []],
+            $files,
+            'the files scanned, and what each names',
+        );
     }
 
     public function testTheScannerCatchesEveryForbiddenName(): void
@@ -196,48 +317,68 @@ final class P1_07_WidgetTest extends TestCase
             'DOMParser' => 'new DOMParser().parseFromString(reply, "text/html");',
             'setHTML' => 'box.setHTMLUnsafe(reply);',
             'srcdoc' => 'frame.srcdoc = reply;',
+            'javascript:' => 'link.href = "JavaScript :alert(1)";',
+            'setAttribute(on|style|src|href|srcdoc)' => "box.setAttribute( 'onClick', reply);",
+            'setAttribute(computed name)' => 'box.setAttribute(name, reply);',
             'eval(' => 'eval (reply);',
-            'new Function' => "new Function('return 1');",
+            'Function(' => "Function('return 1')();",
+            'new Function' => 'const make = new Function;',
+            'Reflect' => "Reflect.set(box, 'inner' + 'HTML', reply);",
+            'setTimeout/setInterval(string)' => "setInterval('tick()', 10);",
+            'computed member access' => "box ['inner' + 'HTML'] = reply;",
             'toFixed' => 'total.toFixed(2);',
             'toPrecision' => 'total.toPrecision(4);',
             'toLocaleString' => "total.toLocaleString('en-US');",
             'Intl.NumberFormat' => "new Intl.NumberFormat('en-US').format(total);",
-            'Math.round' => 'Math.round(total * 100);',
-            'Math.floor' => 'Math . floor(total);',
-            'Math.ceil' => 'Math.ceil(total);',
-            'Math.trunc' => 'Math.trunc(total);',
+            'Math' => 'const m = Math; m.round(total);',
             'parseFloat' => 'parseFloat(reply);',
         ];
-        self::assertSame(array_keys(self::FORBIDDEN), array_keys($samples), 'one sample per forbidden name');
+        self::assertSame(array_keys(self::FORBIDDEN), array_keys($samples), 'one sample per forbidden pattern');
+        $names = [];
         foreach ($samples as $name => $code) {
-            file_put_contents($directory . '/' . str_replace(['.', '('], '_', $name) . '.js', "// fine\n{$code}\n");
+            $file = 'sample-' . count($names) . '.js';
+            $names[$file] = $name;
+            file_put_contents($directory . '/' . $file, "// fine\n{$code}\n");
         }
-        file_put_contents($directory . '/comment.css', "/* never set innerHTML, even in a comment */\n");
-        file_put_contents($directory . '/clean.js', "node.textContent = reply; // retrieval(x) is not eval\n");
+        file_put_contents($directory . '/comment.css', "/* never set innerHTML, even in a comment */\n.fxw [hidden] { display: none; }\n");
+        file_put_contents($directory . '/clean.js', implode("\n", [
+            'node.textContent = reply; // retrieval(x) is not eval',
+            "node.setAttribute('aria-label', label);",
+            'setTimeout(function () { done(); }, 10);',
+            'function make() { return [1, 2]; }',
+            "var link = document.querySelector('link.fxw-stylesheet');",
+            'var mathematics = 1;',
+            '',
+        ]));
 
         $found = self::scanDirectory($directory);
 
-        foreach (array_keys($samples) as $name) {
-            self::assertSame([$name], $found[str_replace(['.', '('], '_', $name) . '.js'], "the {$name} sample is caught");
+        foreach ($names as $file => $name) {
+            self::assertSame([$name], $found[$file], "the {$name} sample is caught, and only by its own pattern");
         }
-        self::assertSame(['innerHTML'], $found['comment.css'], 'comments are scanned too');
+        self::assertSame(['innerHTML'], $found['comment.css'], 'comments are scanned; brackets in CSS are fine');
         self::assertSame([], $found['clean.js']);
     }
 
-    public function testTheWidgetFollowsTheBotMessageContract(): void
+    /**
+     * The widget's behaviour (owner decision 2026-10-21): the Node harness drives widget.js in a
+     * fake DOM. Skipped when `node` isn't installed, except on CI (GitHub Actions sets `CI`).
+     */
+    public function testTheWidgetBehaviourHarnessPasses(): void
     {
-        $js = self::widgetFile('widget.js');
+        if (!self::nodeIsAvailable()) {
+            $ci = (string) getenv('CI');
+            if ($ci !== '' && $ci !== '0' && strtolower($ci) !== 'false') {
+                self::fail('node is required on CI to run api/tests/js/widget.test.js');
+            }
+            self::markTestSkipped('node is not installed; the widget harness runs on CI');
+        }
 
-        // Opens with an empty text, as JSON (ADR 0021), and keeps the server's session id.
-        self::assertStringContainsString("var body = { text: text };", $js);
-        self::assertStringContainsString("headers: { 'Content-Type': 'application/json' }", $js);
-        self::assertStringContainsString("submit('', byUser);", $js);
-        self::assertStringContainsString('sessionId = data.session_id;', $js);
-        // Text goes in through textContent only, with line breaks kept by CSS.
-        self::assertStringContainsString('node.textContent = text;', $js);
-        self::assertMatchesRegularExpression('~\.fxw-msg \{[^}]*white-space: pre-line;~', self::widgetFile('widget.css'));
-        // The bot is reached next to the script's own URL, so an embed calls the API's origin.
-        self::assertStringContainsString("new URL('message', script.src)", $js);
+        [$exit, $output] = self::runCommand(['node', self::HARNESS, App::WIDGET_DIR . '/widget.js']);
+
+        self::assertSame(0, $exit, $output);
+        self::assertMatchesRegularExpression('/^0 failed of [1-9]\d* *$/m', $output);
+        self::assertStringNotContainsString('FAIL ', $output);
     }
 
     public function testAWidgetSessionOpensWithAnEmptyTextAndAScriptTagIsOnlyText(): void
@@ -314,6 +455,13 @@ final class P1_07_WidgetTest extends TestCase
         self::assertSame(401, $admin("Bearer\tthe-real-admin-token")->status());
     }
 
+    public function testTheTestServerAlwaysKeepsTheGateFlags(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('allow_url_fopen=0');
+        BuiltInServer::start($this->path, ['allow_url_fopen' => '1']);
+    }
+
     public function testNoResponseCarriesXPoweredByEvenWithExposePhpOn(): void
     {
         // Control: with expose_php on, PHP's built-in server adds the header to a bare script.
@@ -329,6 +477,8 @@ final class P1_07_WidgetTest extends TestCase
             'page' => $server->request('GET', WidgetEndpoint::PAGE_PATH),
             'script' => $server->request('GET', WidgetEndpoint::SCRIPT_PATH),
             'style sheet' => $server->request('GET', WidgetEndpoint::STYLE_PATH),
+            'icon' => $server->request('GET', WidgetEndpoint::ICON_PATH),
+            'favicon' => $server->request('GET', WidgetEndpoint::FAVICON_PATH),
             'not found' => $server->request('GET', '/no/such/route'),
             'bot message' => $server->request('POST', '/bot/message', ['Content-Type' => 'application/json'], '{"text": ""}'),
         ];
@@ -344,6 +494,10 @@ final class P1_07_WidgetTest extends TestCase
         self::assertSame(self::widgetFile('widget.html'), $pageBody);
         self::assertSame(['text/javascript; charset=utf-8'], $responses['script'][1]['content-type']);
         self::assertSame(['text/css; charset=utf-8'], $responses['style sheet'][1]['content-type']);
+        self::assertSame(['image/svg+xml'], $responses['icon'][1]['content-type']);
+        self::assertSame(204, $responses['favicon'][0]);
+        self::assertSame('', $responses['favicon'][2]);
+        self::assertArrayNotHasKey('content-type', $responses['favicon'][1], 'PHP adds no default type to the 204');
         self::assertSame(404, $responses['not found'][0]);
 
         // The widget's conversation over the socket, with no upstream configured at all.
@@ -381,7 +535,7 @@ final class P1_07_WidgetTest extends TestCase
      * @param array<string, string> $message
      * @param array<string, string> $headers
      */
-    private function post(\FxInstallments\Http\Kernel $kernel, array $message, array $headers = []): Response
+    private function post(Kernel $kernel, array $message, array $headers = []): Response
     {
         return $kernel->handle(new Request(
             'POST',
@@ -432,26 +586,56 @@ final class P1_07_WidgetTest extends TestCase
     }
 
     /**
-     * Every file under $directory (relative path, sorted) => the forbidden names it contains.
+     * Every file under $directory (relative path, sorted) => the forbidden patterns it contains.
      *
      * @return array<string, list<string>>
      */
     private static function scanDirectory(string $directory): array
     {
         $found = [];
-        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS)) as $file) {
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS)) as $file) {
             if (!$file instanceof SplFileInfo || !$file->isFile()) {
                 continue;
             }
             $text = (string) file_get_contents($file->getPathname());
+            $isJs = $file->getExtension() === 'js';
             $relative = str_replace('\\', '/', substr($file->getPathname(), strlen($directory) + 1));
-            $found[$relative] = array_keys(array_filter(
-                self::FORBIDDEN,
-                static fn (string $pattern): bool => preg_match($pattern, $text) === 1,
-            ));
+            $found[$relative] = [];
+            foreach (self::FORBIDDEN as $name => $pattern) {
+                if (($isJs || !in_array($name, self::JS_ONLY, true)) && preg_match($pattern, $text) === 1) {
+                    $found[$relative][] = $name;
+                }
+            }
         }
         ksort($found);
 
         return $found;
+    }
+
+    private static function nodeIsAvailable(): bool
+    {
+        [$exit, $output] = self::runCommand(['node', '--version']);
+
+        return $exit === 0 && preg_match('/^v\d+\./', $output) === 1;
+    }
+
+    /**
+     * Runs a command without a shell. Returns [exit code, stdout and stderr]; exit -1 when it
+     * couldn't be started.
+     *
+     * @param list<string> $command
+     * @return array{int, string}
+     */
+    private static function runCommand(array $command): array
+    {
+        $output = TestEnvironment::tempDir('node') . '/output.txt';
+        $process = @proc_open($command, [0 => ['pipe', 'r'], 1 => ['file', $output, 'w'], 2 => ['file', $output, 'a']], $pipes);
+        if (!is_resource($process)) {
+            return [-1, ''];
+        }
+        fclose($pipes[0]);
+        $exit = proc_close($process);
+
+        return [$exit, (string) file_get_contents($output)];
     }
 }
