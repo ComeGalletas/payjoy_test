@@ -39,10 +39,28 @@ final class CurrencySynonyms
         'CLP' => ['peso chileno', 'pesos chilenos', 'Chilean peso', 'Chilean pesos', 'CLP$'],
         'ARS' => ['peso argentino', 'pesos argentinos', 'Argentine peso', 'Argentine pesos', 'AR$'],
         'PEN' => ['sol', 'soles', 'sol peruano', 'soles peruanos', 'Peruvian sol', 'Peruvian soles', 'S/'],
+        // `£` alone is sterling; the other pound currencies are written with a prefix (E£, L£,
+        // £S), and `pound` alone stays ambiguous (P1-03 review).
         'GBP' => [
             'pound sterling', 'pounds sterling', 'British pound', 'British pounds', 'libra esterlina',
             'libras esterlinas', '£',
         ],
+        // Added in P1-06 with the currency-country map's new countries (P1-03 review).
+        // `¥` stays ambiguous (JPY and CNY).
+        'CNY' => ['yuan', 'yuanes', 'renminbi', 'RMB', 'Chinese yuan', 'yuan chino', 'yuanes chinos'],
+        'CAD' => ['Canadian dollar', 'Canadian dollars', 'dólar canadiense', 'dólares canadienses', 'CA$', 'CAN$'],
+        'UYU' => ['peso uruguayo', 'pesos uruguayos', 'Uruguayan peso', 'Uruguayan pesos', '$U', 'UY$'],
+        'BOB' => ['boliviano', 'bolivianos', 'Bolivian boliviano', 'Bolivian bolivianos'],
+        'PYG' => ['guaraní', 'guaraníes', 'guaranis', 'Paraguayan guaraní', 'Paraguayan guaranís', '₲'],
+        // Bare `bolívar`, `córdoba` and `colón` are also place names (a Colombian department, an
+        // Argentine city, a Panamanian city), so only plurals and qualified names are listed.
+        'VES' => ['bolívares', 'Venezuelan bolívar', 'Venezuelan bolívares', 'bolívar venezolano', 'bolívares venezolanos'],
+        'GTQ' => ['quetzal', 'quetzales', 'Guatemalan quetzal', 'Guatemalan quetzales'],
+        'HNL' => ['lempira', 'lempiras', 'Honduran lempira', 'Honduran lempiras'],
+        'NIO' => ['córdobas', 'Nicaraguan córdoba', 'Nicaraguan córdobas', 'córdoba nicaragüense', 'córdobas nicaragüenses'],
+        'CRC' => ['colones', 'Costa Rican colón', 'Costa Rican colones', 'colón costarricense', 'colones costarricenses', '₡'],
+        'BZD' => ['Belize dollar', 'Belize dollars', 'dólar beliceño', 'dólares beliceños', 'BZ$'],
+        'DOP' => ['peso dominicano', 'pesos dominicanos', 'Dominican peso', 'Dominican pesos', 'RD$'],
     ];
 
     /** @var list<string> */
@@ -51,6 +69,10 @@ final class CurrencySynonyms
         '¥', 'pound', 'pounds', 'libra', 'libras', 'franc', 'francs', 'franco', 'francos',
         'crown', 'crowns', 'corona', 'coronas', 'krone', 'kronor', 'kr', 'rupee', 'rupees', 'rupia',
         'rupias', 'rial', 'riyal', 'riyales', 'C$', 'Panama', 'Panamá',
+        // Widened in P1-06 (P1-03 review): each names several currencies.
+        'won', 'wones', 'dirham', 'dirhams', 'dirhames', 'shilling', 'shillings', 'chelín', 'chelines',
+        'lira', 'liras', 'lire', 'krona', 'kroner', 'rials', 'riales', 'riyals', 'leu', 'lei', 'manat',
+        'manats', 'som', 'soms',
     ];
 
     /**
@@ -62,10 +84,15 @@ final class CurrencySynonyms
      * Only words people plausibly type as a reply, and only codes the synonym table and the
      * currency-country map don't already serve: `pen` and `cop` stay codes (PEN and COP are
      * core currencies here, and `cop` → COP is P1-03 behaviour). `can` is not a code (CAD is).
-     * A test fails if a mapped currency's code is listed here, so a task that adds, say,
-     * Bolivia → BOB must decide about `bob`.
+     * A test fails if a mapped currency's code is listed here.
+     *
+     * P1-06: Bolivia → BOB is mapped, so `bob` left this list and is the code BOB in any case,
+     * like `pen` and `cop` (a name, not a plausible reply to "which currency or country?").
+     * No Spanish or Portuguese word needs the rule: the codes that are also such words (`sos`,
+     * already here; `ves`, `ron`, `zar`, `gel`) aren't plausible one-word replies, and the
+     * common replies (`si`, `sim`, `no`, `ok`, `ola`, `oi`, `dale`, `listo`) aren't codes.
      *
      * @var list<string>
      */
-    public const CODE_WORDS = ['all', 'bob', 'cup', 'kid', 'mad', 'mop', 'sos', 'top', 'try'];
+    public const CODE_WORDS = ['all', 'cup', 'kid', 'mad', 'mop', 'sos', 'top', 'try'];
 }

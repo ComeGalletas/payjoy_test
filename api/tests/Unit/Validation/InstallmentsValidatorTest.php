@@ -6,6 +6,7 @@ namespace FxInstallments\Tests\Unit\Validation;
 
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Validation\InstallmentsValidator;
+use FxInstallments\Validation\Outcome;
 use FxInstallments\Validation\ValidationFailed;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -85,6 +86,24 @@ final class InstallmentsValidatorTest extends TestCase
             self::assertSame($reason, $error->reason);
             self::assertSame('Please choose a valid number of installments.', $error->messageForUser());
         }
+    }
+
+    #[DataProvider('validTexts')]
+    public function testReadGivesAnOkReading(string $text, int $count): void
+    {
+        $reading = self::validator()->read($text);
+
+        self::assertSame([Outcome::Ok, $count, null], [$reading->outcome, $reading->count, $reading->error]);
+    }
+
+    #[DataProvider('invalidTexts')]
+    public function testReadGivesAnInvalidReadingNeverUnclear(string $text, string $reason): void
+    {
+        $reading = self::validator()->read($text);
+
+        self::assertSame([Outcome::Invalid, null], [$reading->outcome, $reading->count]);
+        self::assertNotNull($reading->error);
+        self::assertSame(['VALIDATION_INSTALLMENTS', $reason], [$reading->error->errorCode, $reading->error->reason]);
     }
 
     /**

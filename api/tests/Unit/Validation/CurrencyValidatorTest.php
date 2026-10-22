@@ -42,7 +42,7 @@ final class CurrencyValidatorTest extends TestCase
             yield 'format ' . var_export($raw, true) => [$raw, $format];
         }
         yield 'well-formed, not on the allow-list' => ['XYZ', ValidationFailed::REASON_NOT_ALLOWED];
-        yield 'real code, not on the allow-list' => ['VES', ValidationFailed::REASON_NOT_ALLOWED];
+        yield 'real code, not on the allow-list' => ['SEK', ValidationFailed::REASON_NOT_ALLOWED];
     }
 
     #[DataProvider('invalidCodes')]

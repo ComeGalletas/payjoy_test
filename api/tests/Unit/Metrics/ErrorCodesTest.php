@@ -11,12 +11,14 @@ use PHPUnit\Framework\TestCase;
 final class ErrorCodesTest extends TestCase
 {
     /**
-     * docs/PLAN.md §5, copied by hand so a change on either side is noticed.
+     * docs/PLAN.md §5, copied by hand so a change on either side is noticed. BAD_REQUEST came
+     * with P1-06 (`POST /bot/message`); §5 gets its row in the lead's docs PR.
      */
     private const SECTION_5 = [
         'VALIDATION_AMOUNT' => 400,
         'VALIDATION_CURRENCY' => 400,
         'VALIDATION_INSTALLMENTS' => 400,
+        'BAD_REQUEST' => 400,
         'UPSTREAM_UNSUPPORTED_CODE' => 400,
         'UPSTREAM_TIMEOUT' => 503,
         'UPSTREAM_QUOTA' => 503,

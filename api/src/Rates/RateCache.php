@@ -49,14 +49,20 @@ final class RateCache
     /** @var Closure(): int */
     private readonly Closure $clock;
 
+    /** @var Closure(): ExchangeRateClient */
+    private readonly Closure $client;
+
     private readonly int $maxStaleSeconds;
 
     /**
+     * @param ExchangeRateClient|(Closure(): ExchangeRateClient) $client the upstream client, or
+     *        a closure that builds it; the closure runs only when a refresh is attempted, so a
+     *        cache hit never builds the client (or needs an HTTP transport: P1-06, ADR 0018)
      * @param (Closure(): int)|null $clock UTC epoch seconds; defaults to time()
      */
     public function __construct(
         private readonly RateStore $store,
-        private readonly ExchangeRateClient $client,
+        ExchangeRateClient|Closure $client,
         private readonly UpstreamBreaker $breaker,
         private readonly Metrics $metrics,
         int $maxStaleHours,
@@ -67,6 +73,7 @@ final class RateCache
         }
         $this->maxStaleSeconds = $maxStaleHours * 3600;
         $this->clock = $clock ?? static fn (): int => time();
+        $this->client = $client instanceof ExchangeRateClient ? static fn (): ExchangeRateClient => $client : $client;
     }
 
     /**
@@ -106,7 +113,7 @@ final class RateCache
         }
 
         try {
-            $latest = $this->client->latest();
+            $latest = ($this->client)()->latest();
         } catch (UpstreamError $error) {
             $meta = ['reason' => $error->reason];
             if ($error->httpStatus !== null) {

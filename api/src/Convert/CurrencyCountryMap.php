@@ -86,6 +86,23 @@ final class CurrencyCountryMap
             'Northern Ireland', 'Reino Unido', 'Gran Bretaña', 'Inglaterra', 'Escocia', 'Gales',
             'Irlanda del Norte',
         ]],
+
+        // P1-06 (P1-03 review): the rest of Latin America, the Dominican Republic, Puerto Rico,
+        // Canada and China. Panama has two currencies and stays ambiguous. Cuba is left out:
+        // mapping it to CUP would make `cup` a code in any case (CurrencyCodeWordsTest).
+        'Uruguay' => ['UYU', ['Uruguay']],
+        'Bolivia' => ['BOB', ['Bolivia']],
+        'Paraguay' => ['PYG', ['Paraguay']],
+        'Venezuela' => ['VES', ['Venezuela']],
+        'Guatemala' => ['GTQ', ['Guatemala']],
+        'Honduras' => ['HNL', ['Honduras']],
+        'Nicaragua' => ['NIO', ['Nicaragua']],
+        'Costa Rica' => ['CRC', ['Costa Rica']],
+        'Belize' => ['BZD', ['Belize', 'Belice']],
+        'Dominican Republic' => ['DOP', ['Dominican Republic', 'República Dominicana']],
+        'Puerto Rico' => ['USD', ['Puerto Rico']],
+        'Canada' => ['CAD', ['Canada']],
+        'China' => ['CNY', ['China', "People's Republic of China", 'República Popular China']],
     ];
 
     /**
