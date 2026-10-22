@@ -56,9 +56,9 @@ GET /convert?amount=200&cy=BRL&installments=3
 }
 ```
 
-The raw numbers are full-precision floats; the exact digits JSON emits may differ in the last
-places (`1045.8200000000002`), and a whole value prints without a fraction (`200`). Tests assert
-on `display` strings or compare raw numbers with a tolerance, never on exact float JSON. `rate_as_of`
+The raw numbers are full-precision floats; the exact digits JSON emits may differ in the last places
+(`1045.8200000000002`), and a whole value prints without a fraction (`200`). Tests assert on
+`display` strings or compare raw numbers with a tolerance, never on exact float JSON. `rate_as_of`
 is ISO 8601 UTC. In `display`, every field is a string except `regular_count` (int) and `even`
 (bool); the money strings are grouped, including `amount_usd` (`1,000,000.00`), and exact for the
 stored rate (ADR 0011 amendment). A stale answer has the same shape with `stale: true`.
@@ -75,7 +75,7 @@ Reasons and consequences are in the ADR named in each row.
 |---|---|---|
 | Language | PHP 8.3, no framework. Composer: `guzzlehttp/guzzle` (`^8.3`), `vlucas/phpdotenv`, `symfony/yaml` (`^7.4`); `phpunit/phpunit` as require-dev. | 0001 |
 | Database | SQLite via PDO behind a `Database` factory, portable SQL, UTC epoch integers, JSON as TEXT. Postgres support (`Dialect`, second schema) deferred to L-03. | 0010 |
-| Chatbot MVP | Static flow in YAML, run by a PHP state machine. **No LLM in the MVP.** Deterministic parsing only. | 0003 |
+| Chatbot MVP | Static flow in YAML, run by a PHP state machine. **No LLM in the MVP.** Deterministic parsing only. Contract, sessions and retries in ADR 0021. | 0003, 0021 |
 | LLM | Phase 2, feature-flagged normalizer in front of the deterministic validators. Never replaces validation. | 0003 |
 | Typebot | Phase 3, optional front-end calling the same endpoints. Static flow stays as fallback. | 0004 |
 | Deployment | Local install without Docker is primary through Phase 2 (PHP 8.3, Composer, `php -S`). Docker compose arrives in Phase 3. | 0005 |
@@ -418,7 +418,8 @@ steps:
 ```
 
 > **Refined in P1-06: ADR 0021 is authoritative.** It adds the flow keys `max_retries_reply`,
-> `reasons` (per-reason texts, which may use `{{message_for_user}}`) and `upstream_error`, and the
+> `reasons` (per-reason texts; the conversion reasons may use `{{message_for_user}}`) and
+> `upstream_error`, and the
 > rules for the first message, per-step retries, conversion retries, double-submits, the sweeper
 > and the loader. `not_in_table` re-asks the currency instead of ending the session (owner
 > decision).
@@ -432,13 +433,14 @@ Engine rules:
   synonym/country table (`Brazil`, `reais`, `R$` → `BRL`; English and Spanish names). Empty input
   or "Just one payment" on the optional step → `installments.default`.
 - If `convert` returns `VALIDATION_INSTALLMENTS`, the engine re-asks the installments step with the
-  API's `message_for_user`; this counts as a retry. Upstream errors end the session with the API's
-  `message_for_user` and `bot.session_abandoned` carrying the error code, except `not_in_table`,
-  which re-asks the currency (ADR 0021).
-- Sessions: ids are issued by the server (`bin2hex(random_bytes(16))`); an unknown or expired id
-  starts a new session. On every `/bot/message` and before every report, open sessions past
-  `expires_at` are closed as `bot.session_abandoned` with `BOT_SESSION_EXPIRED` and their last
-  step. Max retries → `bot.session_abandoned` with `BOT_MAX_RETRIES`. All events carry `channel`.
+  API's `message_for_user` through `reasons.below_minor_unit` (ADR 0021); this counts as a retry.
+  Upstream errors end the session with the API's `message_for_user` and `bot.session_abandoned`
+  carrying the error code, except `not_in_table`, which re-asks the currency (ADR 0021).
+- Sessions: ids are issued by the server (`bin2hex(random_bytes(16))`); an unknown, expired or
+  finished id starts a new session (ADR 0021). On every `/bot/message` and before every report, open
+  sessions past `expires_at` are closed as `bot.session_abandoned` with `BOT_SESSION_EXPIRED` and
+  their last step. Max retries → `bot.session_abandoned` with `BOT_MAX_RETRIES`. All events carry
+  `channel`.
 
 ## 10. Phases and tasks
 
@@ -622,8 +624,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   its own limit without updating the rate-limited-minute count (ADR 0016 second amendment).
   Also (from P1-05): the bot shows `display` verbatim, including the grouped `amount_usd`; its
   wording for `too_large` and `below_minor_unit` comes from the flow YAML.
-  *DONE 2026-10-21 (PR #18, two rounds). Decisions in ADR 0021 (owner: double-submits answer the
-  current question, `not_in_table` re-asks the currency, `BAD_REQUEST` accepted; ratified: per-step
+  *DONE 2026-10-21 (PR #18, two rounds). Decisions in ADR 0021 (owner: a double-submit is read
+  again only on the same step, otherwise it gets the current question, or `done: true` if the
+  session closed; `not_in_table` re-asks the currency; `BAD_REQUEST` accepted; ratified: per-step
   retries, the first message is never an answer, the `below_minor_unit` wording, `bob` = BOB,
   `won` ambiguous) and the ADR 0001 second amendment (`symfony/yaml` 7.4). Round 2 added
   `Flow/SessionSweeper`, a lazily built upstream client, loader hardening and
@@ -642,8 +645,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from P1-06): open the session with `{"text": ""}` and `Content-Type: application/json`;
   render `reply` with `textContent` (line breaks via `white-space: pre-line`); skip an empty
   `reply`; show buttons only when present; lock input while a request is in flight; show the
-  `BAD_REQUEST` text verbatim. The widget checks of INV-01 aren't built yet: the acceptance test
-  should also reject `Math.round`.
+  `BAD_REQUEST` and 429 texts verbatim (CORS runs before the rate limiter, so the 429 is readable);
+  on `done: true`, end the conversation and offer a restart. The widget checks of INV-01 aren't
+  built yet: the acceptance test should also reject `Math.round`.
 - **P1-08** `Metrics/ReportQuery`, `ReportFormatter`, `CsvWriter` → `GET /reports` (json/csv) and
   `bin/report.php` (table/csv/json); `GET /health` (public and admin views).
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
@@ -693,6 +697,7 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   calls.
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
   written without network access), and look for Guzzle 8.3.x patch releases (ADR 0001 amendment).
+  Also (from P1-06): look for `symfony/yaml` 7.4.x patch releases (ADR 0001 second amendment).
   Also (from P1-05): check `MinorUnits` against the live codes too (every quoted code should have
   an exponent; unknown codes fall back to 2), and close the cold-start allow-list limit (ADR 0012
   amendment, known limits).
@@ -761,7 +766,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   another process wrote in between (ADR 0012 amendment). On Postgres a failed INSERT aborts the
   transaction, so the UPDATE fallback in `UpstreamBreaker::write()` needs a savepoint or an upsert
   (P1-05). The session sweep is one transaction; on Postgres a failed event INSERT aborts it, so it
-  needs a savepoint per event (P1-06).
+  needs a savepoint per event, and its busy check reads SQLite codes 5/6 only, so on Postgres a
+  lock error would fail the message instead of skipping the sweep (P1-06).
 - **L-04** Tooling backlog from the P0-06 review:
   - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
   - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
@@ -802,9 +808,10 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     compute the exact total (harmless, well under a microsecond per call).
   - (P1-05) The `ConvertService` and `Conversion` docblocks call the raw numbers "the nearest
     double"; they are products of the nearest doubles of the amount and rate. Fix the wording.
-  - (P1-06) `RoundingRuleTest`: add `floor(`, `ceil(` and `fdiv(`, and scan `api/bin/` too
-    (`bin/report.php` arrives in P1-08). It can't see dynamic calls (`array_map('round', …)`,
-    `$f = 'round'; $f()`, `sprintf($fmt, …)`); the behaviour tests are the backstop.
+  - (P1-06) `RoundingRuleTest`: add `floor(`, `ceil(` and `fdiv(`, and scan `api/bin/` and
+    `api/public/` too (`bin/report.php` arrives in P1-08). It can't see dynamic calls
+    (`array_map('round', …)`, `$f = 'round'; $f()`, `sprintf($fmt, …)`); the behaviour tests are
+    the backstop.
   - (P1-06) A message in flight when expiry closes its session gets `done: true` with an empty
     reply; answer it like an expired id instead (a new session and the greeting).
   - (P1-06) Document the busy wait before a skipped sweep; the loader's `!!` error could name the
@@ -817,6 +824,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 ## 11. Working agreements for the agent
 
 - Follow `CLAUDE.md` for all development rules; this plan defines *what* to build.
+- Every agent brief carries "one plain shell command per tool call": no chains, loops, pipes into
+  scripts or heredocs; Write/Edit for file changes, Grep/Glob for searches (owner, 2026-10-21).
 - Work phase by phase, in the listed order; don't start Phase 2 code before Phase 1 is delivered
   and green.
 - Keep `docs/CAPABILITIES.md` generated, never hand-edited (Phase 3).

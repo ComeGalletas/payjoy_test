@@ -17,7 +17,8 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   bomb was expanded before the schema check, and a race loser could be stranded. Mutations M6b and
   M9a survived. Judge round 1: APPROVE WITH NITS, with should-fixes on race replay, a sweep that
   needed the YAML and ran without a transaction, and the CLI test's network guard.
-- Owner decisions: double-submits answer the current question (or `done: true`); `not_in_table`
+- Owner decisions: a double-submit is read again only on the same step, otherwise it gets the
+  current question, or `done: true` if the session closed; `not_in_table`
   re-asks the currency; `BAD_REQUEST` accepted, counting toward blocking; per-step retries, the
   first-message rule, `symfony/yaml` 7.4, the `below_minor_unit` wording, `bob` = BOB and `won`
   ambiguous ratified. Every agent brief now carries "one plain shell command per tool call".
@@ -26,24 +27,28 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   `RoundingRuleTest`, `bot.max_retries` tests; 1688 tests. Tester: PASS, all 12 mutations caught.
   Judge: APPROVE WITH NITS.
 - Co-leads: both approved. **Merge order:** GitHub shows PR #18 merged at the reviewed head as
-  `d5c75fd` by ComeGalletas at 03:25:34 UTC (2026-10-22), 23 seconds before the lead's approval
-  comment was posted (03:25:57 UTC); the lead's merge command then reported it already merged. As
-  with PRs #8 and #10, the code is the reviewed code, but the order differs from the ADR 0015
-  amendment (the lead posts the comment, then merges).
+  `d5c75fd` by ComeGalletas at 03:25:34 UTC (22:25 Bogota, 2026-10-21), 23 seconds before the
+  lead's approval comment was posted (03:25:57 UTC); the lead's merge command then reported it
+  already merged (its own output). As with PRs #8 and #10, the code is the reviewed code, but the
+  order differs from the ADR 0015 amendment (the lead posts the comment, then merges). Raised with
+  the owner in chat; no process change decided.
 - **Process.** The builder hit two worktree-guard refusals in round 1 and none in round 2 (PR #18
-  body); the tester hit three in round 1 and one in round 2 (its reports to the lead); the judge
-  none. Each was handled by the block message's own remedy once, or with the Write, Edit or Grep
-  tool; no guarded target was touched.
-- Upstream: 0 real calls.
+  body); the tester hit three in round 1 and one in round 2, and the judge none (their reports to
+  the lead). Each was handled by the block message's own remedy once, or with the Write, Edit or
+  Grep tool; no guarded target was touched.
+- Upstream: 0 real calls (every test uses the mocked handler; no reviewer reported a real call).
 - **GUARDRAILS gap (owner request: note it, leave `docs/GUARDRAILS.md` unchanged for now).**
   `docs/GUARDRAILS.md` lists two checks that weren't built:
   - INV-01's "`make check` grep" for `round(` / `number_format(`, and for `toFixed`,
     `Intl.NumberFormat` and `Math.round` in the widget. Since P1-06, `RoundingRuleTest` (in the
     unit suite, so in `make check`) covers PHP in `api/src/`: `round(`, `number_format(`,
     `floatval(`, `(float)` and printf-family float formats, token-based, outside
-    `InstallmentCalculator` and `ReportFormatter`. It doesn't cover `floor(`, `ceil(`, `fdiv(`,
-    dynamic calls or `api/bin/` (L-04). The widget checks don't exist yet (P1-07).
-  - GR-002's backstop, "secret scan in `make check`": not built (P0-07, deferred).
+    `InstallmentCalculator` and `ReportFormatter`, with five listed `(float)` exceptions
+    (`ConfigRepository` 1, `ScaledRate` 1, `ExchangeRateClient` 3). It doesn't cover `floor(`,
+    `ceil(`, `fdiv(`, dynamic calls, `api/bin/` or `api/public/` (L-04). The widget checks don't
+    exist yet (P1-07).
+  - The "secret scan" named as GR-002's backstop and as INV-03's check: not built (task P0-07,
+    proposed as deferred in PR #19).
 - Lead docs: ADR 0021 (flow engine and bot message contract); ADR 0001 second amendment
   (`symfony/yaml` 7.4); ADR 0004 amendment (Typebot session id and channel); PLAN §2, §3c, §5
   (`BAD_REQUEST`), §6, §9 pointer and the `not_in_table` exception, P1-06 done note, follow-ups in

@@ -19,7 +19,7 @@ accept both `.` and `,`, and ask for clarification when a number isn't clear.
   thousands with groups of 3). Its output is the canonical string, which then goes through the
   same strict validator.
 - Anything it can't read unambiguously gets a clarifying question, counted as a retry; after
-  `bot.max_retries` the session is abandoned.
+  `bot.max_retries` the session is abandoned (counted per step, ADR 0021).
 
 ## Consequences
 

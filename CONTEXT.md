@@ -78,11 +78,11 @@ name, add it here in the same commit that introduces it.
 | **session sweeper** | `Flow/SessionSweeper`: closes expired open sessions as `BOT_SESSION_EXPIRED`, in one transaction, without needing the flow file. |
 | **clarification** | A retry asking the user to retype an amount `AmountParser` couldn't read unambiguously, or a currency answer that was ambiguous. |
 | **ok / unclear / invalid** | The three outcomes of reading bot input (`Validation\Outcome`): read; couldn't be read unambiguously (ask again); rejected — out of range, not allowed, unknown or malformed. |
-| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`, `too_large` (the total reaches 2^53 minor units). Currency: `format`, `not_allowed`, `unknown`, `ambiguous`, and `not_in_table` from the conversion. Installments: `format`, `out_of_range`, `below_minor_unit` (fewer minor units than installments). |
+| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`, `too_large` (the total reaches 2^53 minor units). Currency: `format`, `not_allowed`, `unknown`, `ambiguous`, and `not_in_table` (code `UPSTREAM_UNSUPPORTED_CODE`, from the conversion). Installments: `format`, `out_of_range`, `below_minor_unit` (fewer minor units than installments). |
 | **folding** | `TextNormalizer`: case-insensitive comparison of user text that also removes precomposed Latin accents (`México` = `mexico`), independent of locale. |
 | **completed session** | Reached the `result` step and showed a result. |
 | **abandoned session** | Ended by max retries (`BOT_MAX_RETRIES`), expiry (`BOT_SESSION_EXPIRED`) or an upstream error; the event records the step. |
-| **channel** | Where a session runs: `static` (built-in widget), `cli`, `typebot`. |
+| **channel** | Where a session runs: `static` (every `/bot/message` session, including the built-in widget, until P3-05 adds `typebot`), `cli`, `typebot`. |
 | **front-end** | Anything that shows the bot to a person: widget, CLI, Typebot. |
 | **normalizer** | Phase 2 LLM step that extracts fields from free text before the deterministic parser and validators. Never replaces them. |
 
