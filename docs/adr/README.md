@@ -11,10 +11,10 @@ amendment.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended 2026-10-21) |
+| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended twice 2026-10-21) |
 | [0002](0002-sqlite-pdo-postgres-ready.md) | SQLite via PDO, Postgres-ready through `Database` + `Dialect` | Superseded by 0010 |
 | [0003](0003-static-flow-deterministic-mvp.md) | Static YAML flow and deterministic parsing for the MVP; LLM deferred | Accepted |
-| [0004](0004-typebot-optional-frontend.md) | Typebot as optional Phase 3 front-end; static flow as fallback | Accepted |
+| [0004](0004-typebot-optional-frontend.md) | Typebot as optional Phase 3 front-end; static flow as fallback | Accepted (amended 2026-10-21) |
 | [0005](0005-docker-primary-local-required.md) | Local install primary through Phase 2; Docker compose from Phase 3 | Accepted (amended) |
 | [0006](0006-amount-is-total.md) | `amount` is the total USD price | Accepted |
 | [0007](0007-full-precision-display-rounding.md) | Full precision end to end; display-only rounding | Superseded by 0011 |
@@ -31,6 +31,7 @@ amendment.
 | [0018](0018-test-network-isolation.md) | Keeping tests off the network | Accepted |
 | [0019](0019-schema-apply-policy.md) | Migrate explicitly; the app fails closed on an old schema | Accepted |
 | [0020](0020-migration-versioning.md) | Append-only migration list; `schema.sql` is generated | Accepted |
+| [0021](0021-flow-engine-bot-contract.md) | Flow engine and bot message contract | Accepted |
 
 ## Template
 
