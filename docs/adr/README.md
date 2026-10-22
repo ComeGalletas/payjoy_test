@@ -13,7 +13,7 @@ later ADR.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended twice 2026-10-21) |
+| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended twice 2026-10-21; note 2026-10-22) |
 | [0002](0002-sqlite-pdo-postgres-ready.md) | SQLite via PDO, Postgres-ready through `Database` + `Dialect` | Superseded by 0010 |
 | [0003](0003-static-flow-deterministic-mvp.md) | Static YAML flow and deterministic parsing for the MVP; LLM deferred | Accepted |
 | [0004](0004-typebot-optional-frontend.md) | Typebot as optional Phase 3 front-end; static flow as fallback | Accepted (amended 2026-10-21) |
@@ -23,8 +23,8 @@ later ADR.
 | [0008](0008-claude-md-governs-development.md) | `CLAUDE.md` governs development rules and commit format | Accepted |
 | [0009](0009-doc-layout-with-log.md) | Doc layout per `CLAUDE.md`, plus `docs/LOG.md` | Accepted |
 | [0010](0010-portable-pdo-postgres-deferred.md) | Portable PDO now, Postgres support deferred | Accepted |
-| [0011](0011-minor-units-floor-split.md) | Minor units, floor split and English display | Accepted (storage clause superseded by 0017; amended 2026-10-21, again 2026-10-22) |
-| [0012](0012-upstream-latest-local-math.md) | Upstream: one `/latest/USD` call per refresh, local math, stale fallback | Accepted (amended 2026-10-21, again 2026-10-22) |
+| [0011](0011-minor-units-floor-split.md) | Minor units, floor split and English display | Accepted (storage clause superseded by 0017; amended 2026-10-21, twice 2026-10-22) |
+| [0012](0012-upstream-latest-local-math.md) | Upstream: one `/latest/USD` call per refresh, local math, stale fallback | Accepted (amended 2026-10-21, twice 2026-10-22) |
 | [0013](0013-amount-input-parsing.md) | Amount input: strict API, lenient bot | Accepted (amended 2026-10-21) |
 | [0014](0014-phase1-scope-cut.md) | Phase 1 scope cut | Accepted |
 | [0015](0015-co-lead-dual-approval.md) | Co-lead dual approval; builder, tester and judge per task | Accepted (amended 2026-10-21) |

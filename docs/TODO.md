@@ -4,8 +4,8 @@ Checklist of the work IDs in `docs/PLAN.md` §10, which holds each task's spec a
 The first unchecked item not marked DEFERRED is the current work; the owner removes the mark to
 schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and adds its end status.
 
-**Current phase:** Phase 1 — Deterministic MVP
-**Next item:** P1-10
+**Current phase:** Phase 2 — LLM normalizer (Phase 1, the deterministic MVP, delivered 2026-10-22)
+**Next item:** P2-01 (its acceptance path is set first, in a lead docs PR; PLAN §10)
 
 ## Phase 0 — Pre-work
 
@@ -29,7 +29,7 @@ schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and a
 - [x] P1-07 Widget — DONE (2026-10-22; PR #21, three rounds)
 - [x] P1-08 Reports and health — DONE (2026-10-22; PR #23, three rounds)
 - [x] P1-09 Seed data and docs — DONE (2026-10-22; PR #26, three rounds; `REPORTS.md` through PR #25)
-- [ ] P1-10 End-to-end run — deliver MVP
+- [x] P1-10 End-to-end run — deliver MVP — DONE (2026-10-22; lead's real-key run, PR #28)
 
 ## Phase 2 — LLM normalizer
 
