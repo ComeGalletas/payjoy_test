@@ -16,11 +16,11 @@ use FxInstallments\Metrics\ErrorCodes;
  */
 final class Router
 {
-    /** @var array<string, array<string, array{Closure(Request): JsonResponse, list<Middleware>}>> path => method => route */
+    /** @var array<string, array<string, array{Closure(Request): Response, list<Middleware>}>> path => method => route */
     private array $routes = [];
 
     /**
-     * @param callable(Request): JsonResponse $handler
+     * @param callable(Request): Response $handler
      * @param list<Middleware> $middleware run in order, outermost first
      */
     public function add(string $method, string $path, callable $handler, array $middleware = []): void
@@ -33,7 +33,7 @@ final class Router
     }
 
     /**
-     * @param callable(Request): JsonResponse $handler
+     * @param callable(Request): Response $handler
      * @param list<Middleware> $middleware
      */
     public function get(string $path, callable $handler, array $middleware = []): void
@@ -42,7 +42,7 @@ final class Router
     }
 
     /**
-     * @param callable(Request): JsonResponse $handler
+     * @param callable(Request): Response $handler
      * @param list<Middleware> $middleware
      */
     public function post(string $path, callable $handler, array $middleware = []): void
@@ -50,7 +50,25 @@ final class Router
         $this->add('POST', $path, $handler, $middleware);
     }
 
-    public function dispatch(Request $request): JsonResponse
+    /**
+     * Every registered route as [method, path], grouped by path in the order each path was first
+     * registered (for the INV-04 check).
+     *
+     * @return list<array{string, string}>
+     */
+    public function routes(): array
+    {
+        $routes = [];
+        foreach ($this->routes as $path => $byMethod) {
+            foreach (array_keys($byMethod) as $method) {
+                $routes[] = [$method, (string) $path];
+            }
+        }
+
+        return $routes;
+    }
+
+    public function dispatch(Request $request): Response
     {
         $byMethod = $this->routes[$request->path()] ?? [];
 
@@ -67,16 +85,16 @@ final class Router
         $next = $handler;
         foreach (array_reverse($middleware) as $step) {
             $inner = $next;
-            $next = static fn (Request $r): JsonResponse => $step->process($r, $inner);
+            $next = static fn (Request $r): Response => $step->process($r, $inner);
         }
 
         return $next($request);
     }
 
     /**
-     * @param array<string, array{Closure(Request): JsonResponse, list<Middleware>}> $byMethod
+     * @param array<string, array{Closure(Request): Response, list<Middleware>}> $byMethod
      */
-    private function preflight(Request $request, array $byMethod): JsonResponse
+    private function preflight(Request $request, array $byMethod): Response
     {
         $cors = null;
         $methods = [];

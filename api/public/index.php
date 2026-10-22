@@ -11,8 +11,14 @@ declare(strict_types=1);
  * Errors are never displayed: a failure anywhere, even before the app is wired, answers with
  * the INTERNAL envelope and no detail. That includes a database that can't be opened or whose
  * schema is behind the code (Migrator::assertCurrent).
+ *
+ * No response carries `X-Powered-By` (P1-07). PHP adds `X-Powered-By: PHP/<version>` before
+ * this script runs when `expose_php` is on; that setting can only be changed in php.ini, so the
+ * header is removed here, first, for every response including the fallback below. The app
+ * itself never sets one. Setting `expose_php = Off` in php.ini as well is recommended.
  */
 
+header_remove('X-Powered-By');
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 

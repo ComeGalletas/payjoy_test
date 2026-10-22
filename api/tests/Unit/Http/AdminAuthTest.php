@@ -7,6 +7,7 @@ namespace FxInstallments\Tests\Unit\Http;
 use FxInstallments\Http\AdminAuth;
 use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\Request;
+use FxInstallments\Http\Response;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -27,7 +28,41 @@ final class AdminAuthTest extends TestCase
     {
         yield 'canonical' => ['Bearer ' . self::TOKEN];
         yield 'lowercase scheme' => ['bearer ' . self::TOKEN];
-        yield 'extra spaces' => ['Bearer   ' . self::TOKEN . ' '];
+        yield 'uppercase scheme' => ['BEARER ' . self::TOKEN];
+        yield 'several spaces after the scheme' => ['Bearer   ' . self::TOKEN];
+    }
+
+    /**
+     * P1-07: the parse is strict. The right token with anything around it is refused.
+     */
+    #[DataProvider('looseHeaders')]
+    public function testTheRightTokenWithExtraCharactersIsRefused(string $header): void
+    {
+        $response = $this->authenticate(self::TOKEN, ['Authorization' => $header]);
+
+        self::assertSame(401, $response->status());
+        self::assertSame('ADMIN_UNAUTHORIZED', $response->errorCode());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function looseHeaders(): iterable
+    {
+        yield 'trailing newline' => ['Bearer ' . self::TOKEN . "\n"];
+        yield 'trailing CRLF' => ['Bearer ' . self::TOKEN . "\r\n"];
+        yield 'trailing CR' => ['Bearer ' . self::TOKEN . "\r"];
+        yield 'trailing space' => ['Bearer ' . self::TOKEN . ' '];
+        yield 'trailing tab' => ['Bearer ' . self::TOKEN . "\t"];
+        yield 'trailing vertical tab' => ['Bearer ' . self::TOKEN . "\x0B"];
+        yield 'trailing form feed' => ['Bearer ' . self::TOKEN . "\f"];
+        yield 'trailing NUL' => ['Bearer ' . self::TOKEN . "\0"];
+        yield 'trailing non-breaking space' => ['Bearer ' . self::TOKEN . "\u{00A0}"];
+        yield 'leading space' => [' Bearer ' . self::TOKEN];
+        yield 'leading newline' => ["\nBearer " . self::TOKEN];
+        yield 'tab after the scheme' => ["Bearer\t" . self::TOKEN];
+        yield 'newline after the scheme' => ["Bearer\n" . self::TOKEN];
+        yield 'no space after the scheme' => ['Bearer' . self::TOKEN];
     }
 
     /**
@@ -71,7 +106,7 @@ final class AdminAuthTest extends TestCase
      * @param array<string, string> $headers
      * @param array<string, string> $query
      */
-    private function authenticate(?string $configured, array $headers, array $query = []): JsonResponse
+    private function authenticate(?string $configured, array $headers, array $query = []): Response
     {
         return (new AdminAuth($configured))->process(
             new Request('GET', '/admin', $query, $headers),

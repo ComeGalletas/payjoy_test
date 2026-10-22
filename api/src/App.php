@@ -15,6 +15,7 @@ use FxInstallments\Flow\FlowEngine;
 use FxInstallments\Flow\SessionStore;
 use FxInstallments\Flow\SessionSweeper;
 use FxInstallments\Http\AdminAuth;
+use FxInstallments\Http\AllowedOrigins;
 use FxInstallments\Http\BotMessageEndpoint;
 use FxInstallments\Http\ConvertEndpoint;
 use FxInstallments\Http\Cors;
@@ -23,6 +24,7 @@ use FxInstallments\Http\IpBlocks;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\RateLimiter;
 use FxInstallments\Http\Router;
+use FxInstallments\Http\WidgetEndpoint;
 use FxInstallments\Metrics\Metrics;
 use FxInstallments\Metrics\RequestLog;
 use FxInstallments\Rates\ExchangeRateClient;
@@ -36,6 +38,7 @@ use FxInstallments\Validation\CurrencyResolver;
 use FxInstallments\Validation\CurrencyValidator;
 use FxInstallments\Validation\InstallmentsValidator;
 use PDO;
+use Throwable;
 
 /**
  * Wires the shared services (config, database, metrics, middleware) and the production route
@@ -47,12 +50,17 @@ final class App
     /** The flow file (docs/PLAN.md §4, §9). */
     public const DEFAULT_FLOW = __DIR__ . '/../flows/default.yaml';
 
+    /** The built-in widget's files (docs/PLAN.md §4, §7; P1-07). */
+    public const WIDGET_DIR = __DIR__ . '/../resources/widget';
+
     public readonly Metrics $metrics;
 
     /** @var Closure(): int */
     private readonly Closure $clock;
 
     private ?RateCache $rates = null;
+
+    private ?AllowedOrigins $allowedOrigins = null;
 
     /**
      * @param (Closure(): int)|null $clock UTC epoch seconds; defaults to time()
@@ -98,18 +106,62 @@ final class App
     }
 
     /**
-     * The production route table: `GET /convert` (P1-05) behind the rate limiter, and
+     * The production route table: `GET /convert` (P1-05) behind the rate limiter,
      * `POST /bot/message` (P1-06) behind Cors and the same global rate limiter (ADR 0016 second
-     * amendment: one `ratelimit.per_minute`). Every other path is NOT_FOUND. Building it touches
-     * neither the database, the flow file nor the upstream client.
+     * amendment: one `ratelimit.per_minute`), and the widget's page, script and style sheet
+     * (P1-07) without middleware. Every other path is NOT_FOUND. Building it touches neither the
+     * database, the flow file, the widget files nor the upstream client.
      */
     public function router(): Router
     {
         $router = new Router();
         $router->get(ConvertEndpoint::PATH, $this->convertEndpoint(), [$this->rateLimiter()]);
         $router->post(BotMessageEndpoint::PATH, $this->botMessageEndpoint(), [$this->cors(), $this->rateLimiter()]);
+        $this->widget()->register($router);
 
         return $router;
+    }
+
+    /**
+     * The built-in widget; its page may be framed by the allowed origins.
+     */
+    public function widget(): WidgetEndpoint
+    {
+        return new WidgetEndpoint(self::WIDGET_DIR, $this->allowedOrigins());
+    }
+
+    /**
+     * `cors.allowed_origins`, checked once per app (AllowedOrigins). When entries are dropped,
+     * one error-log line gives their number; the values themselves aren't logged (they are
+     * config text of any length and content, and the operator has the config file).
+     *
+     * @return list<string>
+     */
+    public function allowedOrigins(): array
+    {
+        if ($this->allowedOrigins === null) {
+            $this->allowedOrigins = AllowedOrigins::fromConfig($this->config->stringList('cors.allowed_origins'));
+            if ($this->allowedOrigins->dropped > 0) {
+                $this->note(sprintf(
+                    'fx-installments config: cors.allowed_origins dropped %d invalid %s (each must be a lowercase http(s)://host[:port] with no path)',
+                    $this->allowedOrigins->dropped,
+                    $this->allowedOrigins->dropped === 1 ? 'entry' : 'entries',
+                ));
+            }
+        }
+
+        return $this->allowedOrigins->origins;
+    }
+
+    private function note(string $message): void
+    {
+        try {
+            ($this->errorLog ?? static function (string $line): void {
+                error_log($line);
+            })($message);
+        } catch (Throwable) {
+            // A failed note must not fail the request.
+        }
     }
 
     public function botMessageEndpoint(): BotMessageEndpoint
@@ -240,7 +292,7 @@ final class App
 
     public function cors(): Cors
     {
-        return new Cors($this->config->stringList('cors.allowed_origins'));
+        return new Cors($this->allowedOrigins());
     }
 
     public function upstreamBreaker(): UpstreamBreaker

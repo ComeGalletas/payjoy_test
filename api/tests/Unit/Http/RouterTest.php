@@ -25,6 +25,18 @@ final class RouterTest extends TestCase
         self::assertSame('{"ok":true,"data":{"route":"post a"}}', $router->dispatch(new Request('POST', '/a'))->body());
     }
 
+    public function testRoutesListsEveryMethodAndPathGroupedByPath(): void
+    {
+        $router = new Router();
+        self::assertSame([], $router->routes());
+
+        $router->get('/a', static fn (): JsonResponse => JsonResponse::ok());
+        $router->post('/b', static fn (): JsonResponse => JsonResponse::ok());
+        $router->post('/a', static fn (): JsonResponse => JsonResponse::ok());
+
+        self::assertSame([['GET', '/a'], ['POST', '/a'], ['POST', '/b']], $router->routes());
+    }
+
     public function testUnknownPathWrongMethodAndTrailingSlashAreNotFound(): void
     {
         $router = new Router();

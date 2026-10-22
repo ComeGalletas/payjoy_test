@@ -32,7 +32,7 @@ final class Cors implements Middleware
         ));
     }
 
-    public function process(Request $request, callable $next): JsonResponse
+    public function process(Request $request, callable $next): Response
     {
         $response = $next($request)->withHeader('Vary', 'Origin');
         $origin = $request->header('origin');
