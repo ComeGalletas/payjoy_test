@@ -138,11 +138,11 @@ decisions 2 and 3; the skip while the database can't be written came from the co
 brief (named `not_writable` in round 3); the rest is the builder's design.
 
 - `Rates/QuotaCache` calls `/quota` only for the admin `/health` view, at most once per
-  `health.quota_cache_minutes`, and caches failures too. It doesn't call during an auth block
-  (event reason `auth`), or, once the cached answer has expired, while the database can't be
-  written (event reason `not_writable`: a read-only database, or a write lock held past the busy
-  timeout); either way the view shows the last stored answer with `source: "blocked"`. A `/quota`
-  failure never trips the breaker.
+  `health.quota_cache_minutes`, and caches failures too. A fresh cached answer is always served
+  as a hit. Once it has expired, it doesn't call during an auth block (event reason `auth`) or
+  while the database can't be written (event reason `not_writable`: a read-only database, or a
+  write lock held past the busy timeout); either way the view shows the last stored answer with
+  `source: "blocked"`. A `/quota` failure never trips the breaker.
 - Each lookup writes an `upstream.call` event with `meta.endpoint=quota` and result `hit`, `miss`
   or `blocked`, so reports count real calls per endpoint (ADR 0023). `/codes` has no caller in
   Phase 1.

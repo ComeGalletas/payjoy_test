@@ -50,7 +50,8 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - Review of this docs PR (#24): tester PASS WITH NITS, judge REQUEST CHANGES (ADR 0019's "500 on
   every request" sentence had no pointer to the amendment; round-2 and amendment attributions;
   the placement and "answer" wording; "allow-list" used in two senses; no P3-01 item for the
-  unthrottled routes; the `/quota` cost untracked). All findings applied in round 2.
+  unthrottled routes; the `/quota` cost untracked). All findings applied in round 2 (`587bc30`);
+  the judge's re-check confirmed them (APPROVE WITH NITS, four wording nits applied).
 
 ## 2026-10-22 — P1-07 Widget (PR #21, head 37fb584)
 

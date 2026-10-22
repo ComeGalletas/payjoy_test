@@ -141,5 +141,5 @@ from the co-leads' round-2 brief and the placement rules from their round-3 brie
 - Reports sweep with `App::sessionSweeper()` before counting, repeating while a pass closes a full
   batch of 500, at most 20 passes. The sweep on `/bot/message` (item 7) still runs one batch.
 - Reports place a session that was closed without its end event by its `sessions` row, and a
-  session that ended at a step outside the flow's order at the step after its furthest accepted
-  answer, at most `installments` (ADR 0023 item 7).
+  session that ended, or still waits, at a step outside the flow's order at the step after its
+  furthest accepted answer, at most `installments` (ADR 0023 item 7).

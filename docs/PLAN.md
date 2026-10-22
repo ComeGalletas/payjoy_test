@@ -931,7 +931,7 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     `AppState` helper for the three `app_state` upserts (`Migrator`, `UpstreamBreaker`,
     `QuotaCache`) before L-03. `CsvWriter` doesn't guard a segment that starts with `"` or with a
     non-ASCII space before `=`; reports can't produce either. Drop `Metrics/ReportFormatter.php`
-    from `RoundingRuleTest`'s allowed files, since it no longer rounds (the owner may then narrow
+    from `RoundingRuleTest`'s allowed files, since it doesn't round (the owner may then narrow
     INV-01). Fix two stale code comments: `QuotaStatus` says `blocked` happens only during an
     auth block, and `App.php` says every request fails closed on an old schema.
 
