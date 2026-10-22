@@ -56,9 +56,9 @@ GET /convert?amount=200&cy=BRL&installments=3
 }
 ```
 
-The raw numbers are full-precision floats; the exact digits JSON emits may differ in the last places
-(`1045.8200000000002`), and a whole value prints without a fraction (`200`). Tests assert on
-`display` strings or compare raw numbers with a tolerance, never on exact float JSON. `rate_as_of`
+The raw numbers are full-precision floats; the exact digits JSON emits may differ in the last
+places (`1045.8200000000002`), and a whole value prints without a fraction (`200`). Tests assert
+on `display` strings or compare raw numbers with a tolerance, never on exact float JSON. `rate_as_of`
 is ISO 8601 UTC. In `display`, every field is a string except `regular_count` (int) and `even`
 (bool); the money strings are grouped, including `amount_usd` (`1,000,000.00`), and exact for the
 stored rate (ADR 0011 amendment). A stale answer has the same shape with `stale: true`.
@@ -419,10 +419,9 @@ steps:
 
 > **Refined in P1-06: ADR 0021 is authoritative.** It adds the flow keys `max_retries_reply`,
 > `reasons` (per-reason texts; the conversion reasons may use `{{message_for_user}}`) and
-> `upstream_error`, and the
-> rules for the first message, per-step retries, conversion retries, double-submits, the sweeper
-> and the loader. `not_in_table` re-asks the currency instead of ending the session (owner
-> decision).
+> `upstream_error`, and the rules for the first message, per-step retries, conversion retries,
+> double-submits, the sweeper and the loader. `not_in_table` re-asks the currency instead of
+> ending the session (owner decision).
 
 Engine rules:
 
@@ -824,8 +823,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 ## 11. Working agreements for the agent
 
 - Follow `CLAUDE.md` for all development rules; this plan defines *what* to build.
-- Every agent brief carries "one plain shell command per tool call": no chains, loops, pipes into
-  scripts or heredocs; Write/Edit for file changes, Grep/Glob for searches (owner, 2026-10-21).
+- Every agent brief carries "one plain shell command per tool call" (owner, 2026-10-21): no
+  chains, loops, pipes into scripts or heredocs. Use Write/Edit for file changes and Grep/Glob for
+  searches where possible.
 - Work phase by phase, in the listed order; don't start Phase 2 code before Phase 1 is delivered
   and green.
 - Keep `docs/CAPABILITIES.md` generated, never hand-edited (Phase 3).

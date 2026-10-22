@@ -24,13 +24,13 @@ which the tester and judge accepted.
 
 1. **Request.** `POST /bot/message` takes a JSON object of at most 4 KiB, sent with
    `Content-Type: application/json` (parameters such as `charset` are ignored), with a string
-   `text` and an optional string or null `session_id`. Anything else answers 400 `BAD_REQUEST` ("Sorry, that
-   message could not be read. Please try again."). Requiring JSON means a page on another origin
-   must pass a CORS preflight. **Owner-accepted as built:** `BAD_REQUEST` is a new stable error code
-   and counts toward `block.error_responses` like any other 4xx (ADR 0016).
+   `text` and an optional string or null `session_id`. Anything else answers 400 `BAD_REQUEST`
+   ("Sorry, that message could not be read. Please try again."). Requiring JSON means a page on
+   another origin must pass a CORS preflight. **Owner-accepted as built:** `BAD_REQUEST` is a new
+   stable error code and counts toward `block.error_responses` like any other 4xx (ADR 0016).
 2. **Response.** `{session_id, reply, buttons?, step, done}`. Every flow outcome, abandonment
-   included, is a 200 envelope; only `BAD_REQUEST`, the rate limiter, IP blocks and `INTERNAL`
-   answer otherwise.
+   included, is a 200 envelope; for a `POST`, only `BAD_REQUEST`, the rate limiter, IP blocks and
+   `INTERNAL` answer otherwise (other methods get the router's 404 or the CORS preflight answer).
    - `buttons` is present only while the session is open and the waiting step has buttons.
    - `done` is true once the session is completed or abandoned. `step` is the waiting step,
      `result` when completed, or the step where the session was abandoned.
@@ -82,7 +82,8 @@ which the tester and judge accepted.
    `VALIDATION_*` or `UPSTREAM_UNSUPPORTED_CODE` code with `reason`, `retry` and `via: convert`
    when a conversion re-asked the step); `bot.session_completed` (meta `template`, `stale`);
    `bot.session_abandoned`. Columns come from `collected`. No event, `sessions` row or error-log
-   line holds the typed text, an IP or a key; the IP is only in the request log (ADR 0016).
+   line holds the typed text, an IP or a key. The IP is stored only by the HTTP layer
+   (`requests`, `rate_limits`, `ip_blocks`; ADR 0016), never by the flow.
 9. **Flow file.** Top-level keys are exactly `name`, `max_retries` (1–20), `max_retries_reply` and
    `steps`; steps may carry `reasons` (per field; the conversion reasons may use
    `{{message_for_user}}`), and the result step requires `upstream_error`.
