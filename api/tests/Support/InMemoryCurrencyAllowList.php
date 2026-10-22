@@ -12,7 +12,10 @@ use FxInstallments\Validation\CurrencyAllowList;
 final class InMemoryCurrencyAllowList implements CurrencyAllowList
 {
     /** Every code the synonym table and the currency-country map point to. */
-    public const COMMON = ['ARS', 'BRL', 'CLF', 'CLP', 'COP', 'EUR', 'GBP', 'JPY', 'KWD', 'MXN', 'PEN', 'USD'];
+    public const COMMON = [
+        'ARS', 'BOB', 'BRL', 'BZD', 'CAD', 'CLF', 'CLP', 'CNY', 'COP', 'CRC', 'DOP', 'EUR', 'GBP', 'GTQ',
+        'HNL', 'JPY', 'KWD', 'MXN', 'NIO', 'PEN', 'PYG', 'USD', 'UYU', 'VES',
+    ];
 
     /** @var array<string, true> */
     private readonly array $codes;

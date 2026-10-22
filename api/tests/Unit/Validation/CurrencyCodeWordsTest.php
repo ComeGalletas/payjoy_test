@@ -89,6 +89,33 @@ final class CurrencyCodeWordsTest extends TestCase
         yield 'cad' => ['cad', 'CAD'];
         yield 'rub' => ['rub', 'RUB'];
         yield 'gel' => ['gel', 'GEL'];
+        // P1-06: Bolivia → BOB is mapped, so `bob` is no longer a code word (CurrencySynonyms).
+        yield 'bob (Bolivia, mapped in P1-06)' => ['bob', 'BOB'];
+        yield 'Bob' => ['Bob', 'BOB'];
+        // Spanish words that are also codes stay codes (P1-06 decision, CurrencySynonyms).
+        yield 'ves (Venezuela, mapped in P1-06)' => ['ves', 'VES'];
+        yield 'ron' => ['ron', 'RON'];
+        yield 'zar' => ['zar', 'ZAR'];
+    }
+
+    public function testWonIsAmbiguousNotACode(): void
+    {
+        // P1-06 (P1-03 review): `won` names KRW and KPW, so it moved to the ambiguous list.
+        $resolution = self::fallbackResolver()->resolve('won');
+
+        self::assertSame(Outcome::Unclear, $resolution->outcome);
+        self::assertNotNull($resolution->error);
+        self::assertSame(ValidationFailed::REASON_AMBIGUOUS, $resolution->error->reason);
+    }
+
+    public function testNoAmbiguousEntryIsACodeOnTheRealList(): void
+    {
+        // Ambiguous text is checked before codes, so an ambiguous entry equal to a code would
+        // hide that code in every case.
+        foreach (CurrencySynonyms::AMBIGUOUS as $name) {
+            $folded = (string) TextNormalizer::fold($name);
+            self::assertFalse(FallbackCurrencies::contains(strtoupper($folded)), $name);
+        }
     }
 
     #[DataProvider('lowercaseCodes')]
@@ -102,7 +129,6 @@ final class CurrencyCodeWordsTest extends TestCase
      */
     public static function notCodes(): iterable
     {
-        yield 'won (the code is KRW)' => ['won'];
         yield 'can (the code is CAD)' => ['can'];
         yield 'yes' => ['yes'];
         yield 'XAU (a metal, not on the fallback list)' => ['XAU'];

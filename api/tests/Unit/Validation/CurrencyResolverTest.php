@@ -77,6 +77,32 @@ final class CurrencyResolverTest extends TestCase
         yield 'Perú' => ['Perú', 'PEN', 'Peru'];
         yield 'Reino Unido' => ['reino unido', 'GBP', 'United Kingdom'];
         yield 'no-break spaces' => ["\u{00A0}Reino\u{00A0}Unido\u{00A0}", 'GBP', 'United Kingdom'];
+
+        // P1-06 (P1-03 review): more countries and names.
+        yield 'pound sign is sterling' => ['£', 'GBP', null];
+        yield 'yuan' => ['yuan', 'CNY', null];
+        yield 'renminbi' => ['Renminbi', 'CNY', null];
+        yield 'China' => ['china', 'CNY', 'China'];
+        yield 'Uruguay' => ['Uruguay', 'UYU', 'Uruguay'];
+        yield 'peso uruguayo' => ['peso uruguayo', 'UYU', null];
+        yield 'Bolivia' => ['bolivia', 'BOB', 'Bolivia'];
+        yield 'bolivianos' => ['Bolivianos', 'BOB', null];
+        yield 'Paraguay' => ['Paraguay', 'PYG', 'Paraguay'];
+        yield 'guaraníes' => ['guaraníes', 'PYG', null];
+        yield 'Venezuela' => ['Venezuela', 'VES', 'Venezuela'];
+        yield 'bolívares' => ['bolivares', 'VES', null];
+        yield 'Guatemala' => ['Guatemala', 'GTQ', 'Guatemala'];
+        yield 'quetzales' => ['quetzales', 'GTQ', null];
+        yield 'Honduras' => ['honduras', 'HNL', 'Honduras'];
+        yield 'Nicaragua' => ['Nicaragua', 'NIO', 'Nicaragua'];
+        yield 'Costa Rica' => ['costa  rica', 'CRC', 'Costa Rica'];
+        yield 'colones' => ['colones', 'CRC', null];
+        yield 'Belice' => ['Belice', 'BZD', 'Belize'];
+        yield 'República Dominicana' => ['republica dominicana', 'DOP', 'Dominican Republic'];
+        yield 'RD$' => ['RD$', 'DOP', null];
+        yield 'Puerto Rico' => ['Puerto Rico', 'USD', 'Puerto Rico'];
+        yield 'Canadá' => ['Canadá', 'CAD', 'Canada'];
+        yield 'Canadian dollars' => ['canadian dollars', 'CAD', null];
     }
 
     #[DataProvider('resolvedTexts')]
@@ -96,7 +122,10 @@ final class CurrencyResolverTest extends TestCase
     public static function ambiguousTexts(): iterable
     {
         foreach (['$', 'peso', 'Pesos', 'dollar', 'dollars', 'dólar', 'DÓLAR', 'dolar', 'dólares', 'dinar', '¥', 'pound',
-            'libra', 'franc', 'corona', 'kr', 'rupee', 'rial', 'C$', 'Panamá', 'panama'] as $text) {
+            'libra', 'franc', 'corona', 'kr', 'rupee', 'rial', 'C$', 'Panamá', 'panama',
+            // P1-06 (P1-03 review): widened list.
+            'won', 'dirham', 'Dírham', 'shilling', 'chelín', 'lira', 'Liras', 'krona', 'rials', 'riyals', 'leu',
+            'lei', 'manat', 'som'] as $text) {
             yield $text => [$text];
         }
     }
@@ -129,6 +158,10 @@ final class CurrencyResolverTest extends TestCase
         yield 'unknown country' => ['Atlantis', ValidationFailed::REASON_UNKNOWN];
         yield 'partial match' => ['I live in Brazil', ValidationFailed::REASON_UNKNOWN];
         yield 'four letters' => ['BRLX', ValidationFailed::REASON_UNKNOWN];
+        // Also place names, so not listed bare (CurrencySynonyms, P1-06).
+        yield 'córdoba' => ['Córdoba', ValidationFailed::REASON_UNKNOWN];
+        yield 'colón' => ['colón', ValidationFailed::REASON_UNKNOWN];
+        yield 'bolívar' => ['Bolívar', ValidationFailed::REASON_UNKNOWN];
     }
 
     #[DataProvider('invalidTexts')]

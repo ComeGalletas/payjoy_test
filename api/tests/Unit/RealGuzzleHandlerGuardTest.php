@@ -67,7 +67,15 @@ final class RealGuzzleHandlerGuardTest extends TestCase
         yield 'new Client() with options' => [static fn (): mixed => new Client(['timeout' => 4])];
         yield 'HandlerStack::create()' => [static fn (): mixed => HandlerStack::create()];
         yield 'ExchangeRateClient::fromEnvironment()' => [static fn (): mixed => ExchangeRateClient::fromEnvironment()];
-        yield 'App::rates() without an injected client' => [static fn (): mixed => TestEnvironment::app()->rates()];
+        // P1-06: App::rates() builds the client lazily, on the first refresh (a cold cache here).
+        yield 'App::rates() refreshing without an injected client' => [static fn (): mixed => TestEnvironment::app()->rates()->rate('BRL')];
+    }
+
+    public function testAppRatesBuildsNoClientUntilARefresh(): void
+    {
+        TestEnvironment::app()->rates();
+
+        self::assertSame([], NetworkGuard::takeAttempts());
     }
 
     /**
