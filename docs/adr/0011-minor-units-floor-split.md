@@ -1,6 +1,7 @@
 # 0011 — Minor units, floor split and English display
 
-- **Status:** Accepted (storage clause superseded by 0017)
+- **Status:** Accepted (storage clause superseded by 0017; amended 2026-10-21: exact display
+  total, see "Amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 - **Supersedes:** 0007
@@ -20,7 +21,8 @@ decimals, the last installment absorbing the remainder with a clear message, and
 - `Convert/MinorUnits` holds a static ISO 4217 exponent table. Unknown codes use 2 and are flagged
   in the event's `meta`.
 - `InstallmentCalculator::display()` works in integer minor units:
-  `total_m = round(round(converted, e) × 10^e)`, `base_m = intdiv(total_m, n)`,
+  `total_m = round(round(converted, e) × 10^e)` (replaced by an exact integer formula, see
+  "Amendment"), `base_m = intdiv(total_m, n)`,
   `last_m = base_m + total_m % n`. If `total_m < n`, the request is rejected with
   `VALIDATION_INSTALLMENTS`.
 - Display strings are built from integers in English format (`,` thousands, `.` decimal, `e`
@@ -35,4 +37,47 @@ decimals, the last installment absorbing the remainder with a clear message, and
 - The last installment can be up to `n − 1` minor units above the others; the bot states it
   explicitly instead of hiding it.
 - The 200 / 3 example becomes 66.66, 66.66, 66.68.
-- If exact decimal arithmetic is ever required, a new ADR adds `bcmath`.
+- If exact decimal arithmetic is ever required, a new ADR adds `bcmath`. (The amendment makes the
+  display total exact without `bcmath`.)
+
+## Amendment (2026-10-21): exact display total, grouped strings, new reasons
+
+**Context.** P1-05 (PR #16, two rounds) built `display()` on the float formula above. The round-1
+tester compared it with an exact bcmath oracle over 2.3M cases. On large totals, `total_m` was off
+by one minor unit in about 3.3% of IRR conversions, 0.5% of LBP, 0.24% of IDR and 0.05% of COP
+(e.g. $999,999.24 at IRR 1,731,936.861971 showed `…698.99`; the exact value is `…698.98`). Most of
+the error came from PHP 8.3's `round()` rounding to 15 significant digits first, which turns a
+correctly placed float into a false tie. The judge showed an exact integer computation is short
+and needs no `bcmath`. The owner then decided items 1–3 below. Items 4–6 are the builder's
+design, which the tester and judge accepted.
+
+**Decision.**
+1. **Exact total (owner decision).** `total_m` is computed with integers only, from the canonical
+   amount's cents and the stored `rate_scaled` (ADR 0017):
+   `total_m = round_half_away_from_zero(cents × rate_scaled × 10^e / 10^12)`. The product doesn't
+   fit 64 bits, so `rate_scaled` is split into 10^9 limbs and the division carries its remainder.
+   No floats and no `bcmath` are used in that path. The inner `round()` above is gone.
+2. **`display.amount_usd` is grouped (owner decision):** `1,000,000.00`, like the other money
+   strings; `200.00` is unchanged. The raw `amount_usd` number is unchanged.
+3. **`display.rate` (ratified as built):** rounded from `rate_scaled` with integer arithmetic, half
+   away from zero at 6 decimals, trailing zeros trimmed, integer part grouped
+   (`1,731,936.861971`). A rate below 0.0000005 would show `0`; no real rate is that small.
+4. **`display()` signature:** `display(cents, rate_scaled, n, currency, rate_as_of)`. The 2^53 limit
+   is checked on the exact `total_m`. `ConvertService` checks it first and answers
+   `VALIDATION_AMOUNT` with reason `too_large`. Inside `display()` a total of 2^53 or more is a
+   programming error (`InvalidArgumentException`, so a removed check shows up as a 500, not a
+   wrong number).
+5. **Reasons:** `too_large` (amount; the total reaches 2^53 minor units; it answers with the
+   `VALIDATION_AMOUNT` text, and no real rate reaches it) and `below_minor_unit` (installments;
+   `total_m < n`).
+6. **`MinorUnits` choices:** XDR uses 2 (ISO lists none); the territory codes FOK, GGP, IMP, JEP,
+   KID and TVD take their parent currency's exponent; the legacy codes ANG, SLL and ZWL are listed.
+
+**Consequences.**
+- The display is exact for the stored rate: the round-2 tester's bcmath oracle found 0 mismatches
+  in 2.5M cases (e = 0, 2, 3, 4, amounts to 1,000,000.00, rates up to the storable maximum), and
+  the judge found 0 in 600,728 more. It can be reproduced from the stored `amount_usd_cents` and
+  `rate_scaled`, which reports can use (P1-08).
+- The raw `converted` and `installment_amount` stay full-precision floats, the nearest doubles, so
+  their last digits can differ from the exact `display` strings. Front-ends show `display` only.
+- The tests carry their own schoolbook decimal-string oracle, so they need no `bcmath`.

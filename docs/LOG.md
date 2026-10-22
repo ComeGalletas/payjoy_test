@@ -4,6 +4,38 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — P1-05 Convert and `GET /convert` (PR #16, head 0eda0ce)
+
+- PR #15 (P1-11 close-out) merged by the owner as `f751c91`. Owner decision: GUARDRAILS INV-08 now
+  reads "every request that reaches the Kernel writes one `requests` row, unless the write fails
+  (INV-07)"; edited in this close-out with the owner's approval (GR-006).
+- **Round 1** (`d896555`). Builder: DONE_WITH_CONCERNS. It built `MinorUnits`,
+  `InstallmentCalculator::display()` per §3a, `ConvertService`, `GET /convert` behind the global
+  rate limiter, one `api.request` event per answered request, and the 503 during an
+  `unsupported-code` backoff (`not_in_table` stays 400). Unit+Acceptance went from 1295 to 1405
+  tests; guards stayed at 80. Concern: float drift on large totals.
+- Tester round 1: PASS with concerns. An independent bcmath oracle over 2.3M cases found
+  `total_m` off by one minor unit on large totals (IRR 3.3%, LBP 0.5%, IDR 0.24%, COP 0.05%),
+  mostly from PHP 8.3's `round()`. It also found a P1-04 bug: `UpstreamBreaker::write()` swallowed
+  a failed INSERT. Judge round 1: APPROVE WITH NITS; it recommended an exact integer total and a
+  narrower status override.
+- Owner decisions: compute the total exactly; group `display.amount_usd`; keep `display.rate`
+  grouped; fix the breaker-write bug in round 2.
+- **Round 2** (`0eda0ce`): exact `total_m` from cents and `rate_scaled` in int64 limbs, the status
+  rule in `ErrorCodes`, the breaker fix, test and comment nits; 1409 tests. Tester: PASS, 0
+  mismatches in 2.5M oracle cases and 3M limb cases, all 13 mutations caught. Judge: APPROVE WITH
+  NITS (0 mismatches in 600,728 cases).
+- Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
+  as `c09edba` (2026-10-22 01:16:31 UTC).
+- **Process.** The builder hit two worktree-guard refusals in round 1 (PR #16 body), and the tester
+  two in round 1 (its report to the lead). One was dropped as unneeded; the others were handled by
+  the stated remedy once, or with the Write or Grep tool. No guarded target was touched.
+- Upstream: 0 real calls.
+- Lead docs: ADR 0011 amendment (exact total, grouped strings, reasons, `MinorUnits` choices);
+  ADR 0017 second amendment (`toRate()`); ADR 0012 item 9 implemented and the breaker-write limit;
+  GUARDRAILS INV-08; PLAN §1, §3a, §6, P1-05 done note, follow-ups in P1-06, P1-08, P1-10, L-03
+  and L-04; CONTEXT terms (unsupported-code backoff, api.request event, the two reasons).
+
 ## 2026-10-21 — P1-11 Request log and IP blocking (PR #14, head 6ce7df5)
 
 - PR #13 (P1-04 close-out) merged by the owner as `b963187`.

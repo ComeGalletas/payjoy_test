@@ -1,6 +1,7 @@
 # 0017 — Store money and rates as integers in fixed units
 
-- **Status:** Accepted (amended 2026-10-21: rate scaling, see "Amendment")
+- **Status:** Accepted (amended 2026-10-21: rate scaling, see "Amendment"; amended again
+  2026-10-21: `toRate()`, see "Second amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 - **Supersedes:** the storage half of 0011's first decision bullet ("The API and storage keep full
@@ -59,9 +60,21 @@ limit, so the first version would have rejected a real currency.
 - Accepted rates: finite, > 0, scaling to at least 1, and below 900,000,000, so the scaled value
   fits a signed 64-bit integer (Postgres `BIGINT`) with margin. The earlier 2^53 limit is dropped.
 - `toRate()` (scaled → float) stays approximate by design: calculations are floats (ADR 0011).
+  (Changed by the second amendment: it now gives the nearest double.)
 
 **Consequences.** Storage equals upstream's decimal rounded half away from zero at ten decimals
 when upstream's text is passed to `fromDecimalString`, or when the float came from a number with
 15 or fewer significant digits (the live table has at most 13). A randomized test sweep across
 the whole range checks the arithmetic against a string-based reference. The companion helper
 `Convert/UsdCents` converts canonical USD strings to cents and back with integer arithmetic only.
+
+## Second amendment (2026-10-21): `toRate()` gives the nearest double
+
+Decided while building P1-05 (PR #16); the builder's choice, accepted by the tester and judge.
+
+- `ScaledRate::toDecimalString()` builds the rate's exact decimal text from `rate_scaled` with
+  integer arithmetic, and `toRate()` parses that text. The result is the nearest double for every
+  storable rate. The old `scaled / 10^10` was only approximate above 2^53 scaled (IRR).
+- `RateResult::rate()` uses the same path, so there is one way from the stored integer to a float.
+- The display no longer depends on this float: ADR 0011's amendment computes it from
+  `rate_scaled` directly. The float feeds only the raw `rate`, `converted` and `installment_amount`.

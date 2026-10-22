@@ -94,6 +94,12 @@ in round 2.
    exists. A currency missing from a usable table (`not_in_table`,
    raised by `RateCache`) stays a 400 `UPSTREAM_UNSUPPORTED_CODE`. P1-05 applies this; its
    acceptance test covers it.
+   **Implemented in P1-05 (PR #16):** `RateCache` marks the `UpstreamError` when such a backoff is
+   in force, on the blocked path and on the refresh that opens it. `ErrorCodes::httpStatus($code,
+   $duringUnsupportedCodeBackoff)` and `messageForUser()` give 503 and "Exchange rates are
+   temporarily unavailable. Please try again later." for that case only; the flag is refused for
+   every other code. A failed breaker write, or a race that leaves another kind of trip in force,
+   stays 400 (the lead's reading). No new error code.
 
 **Consequences.**
 - Quota use stays bounded by time. A persistent fault that is neither quota nor auth costs at most
@@ -104,13 +110,13 @@ in round 2.
   one, gives users errors for the backoff window: 1 minute at first, longer if failures repeat.
 - **Known limits:**
   - If writing the breaker row itself fails (`meta.breaker_write_failed`), no backoff is recorded,
-    and lookups can call upstream again until the database accepts writes.
+    and lookups can call upstream again until the database accepts writes. Until P1-05, a failed
+    INSERT went unnoticed and `trip()` returned a backoff that was never stored; P1-05 fixed it
+    (`UpstreamBreaker::write()` now rethrows when its fallback UPDATE changes no row). On Postgres
+    a failed INSERT aborts the transaction, so that fallback needs rework (L-03).
   - `succeeded()` reads and then deletes outside a transaction. A trip that another process writes
     in between can be erased (L-03, with the Postgres-safe breaker write).
   - Processes don't lock each other. Two lookups that miss at the same moment can both refresh:
     one extra call, same data.
   - The quota block ends on the 1st (UTC). Upstream actually refreshes the quota on
     `refresh_day_of_month` from `/quota` (P1-08).
-  - Until P1-05 applies item 9, a lookup during an `unsupported-code` backoff without a usable
-    stale table fails with a 400 `UPSTREAM_UNSUPPORTED_CODE` ("That currency is not supported
-    right now") for every currency.
