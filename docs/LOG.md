@@ -60,7 +60,8 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   embed, lazy open, widget harness); the ADR index's `note` status form.
 - Review of this docs PR (#22): tester PASS WITH NITS, judge REQUEST CHANGES (PLAN §3 had two
   disagreeing "only non-envelope" lists; Trusted Types was labelled an INV-01 control); all
-  findings applied in round 2.
+  findings applied in round 2 (`f5f3b0c`); the judge's re-check confirmed them (APPROVE WITH
+  NITS, two wording nits applied).
 - For the owner: `CLAUDE.md` lists the lead's paths as `docs/`, `memory/`, `CHANGELOG.md` and
   `.task`, without the root `CONTEXT.md`, which the lead edits in every close-out (judge's note).
 

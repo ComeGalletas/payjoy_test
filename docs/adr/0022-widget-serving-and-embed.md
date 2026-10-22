@@ -88,8 +88,9 @@ accepted.
     names, string timers, any `Math`, `Intl`, `toFixed`, `toLocaleString`, `\u` escapes, computed
     keys and member access, `Object.assign`, `defineProperty`, `.call(`, `.apply(`, and others).
     The scan is case-sensitive (except the `javascript:` and `setAttribute` name patterns),
-    includes comments, and its list is frozen: obfuscation is answered by strengthening Trusted
-    Types or the harness, not by new patterns. Each pattern has a self-test sample.
+    includes comments, and its list is frozen: obfuscation is answered by strengthening the widget
+    harness (and, for HTML sinks, Trusted Types), not by new patterns. Each pattern has a self-test
+    sample.
 11. **Widget harness in the suite (owner decision).** `api/tests/js/widget.test.js` runs in Node,
     uses no packages, only Node's `fs` and `vm`, with its own fake DOM and `fetch`. A proxy reports
     every HTML-sink or `on*` write, and any other write outside an allow-list and the fake node's
