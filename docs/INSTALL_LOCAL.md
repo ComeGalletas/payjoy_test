@@ -120,7 +120,9 @@ To make an admin token:
 php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
 ```
 
-A variable already set in the environment wins over `.env` (the file never overrides one).
+For the command-line tools (`php api/bin/…`, `php api/db/…`), a variable already set in the
+environment wins over `.env` (the file never overrides one). PHP's built-in server is different:
+it sees such a variable only when started with `-d variables_order=EGPCS` (section 7).
 
 ## 4. Install the dependencies
 
@@ -293,10 +295,11 @@ never into the one real traffic will use. Demo rows stay in `/reports` for good 
 never pruned), and the demo's completed sessions on both channels would pass a real end-to-end
 check, such as P1-10's "one completed session per channel", on their own.
 
-The simplest way is a separate `DB_DSN` set in the shell. A variable already set in the
-environment wins over `.env`, so every command in that shell, the server included, uses the demo
-file while `.env` keeps pointing at the real one. A relative SQLite path is read from the
-repository root.
+The simplest way is a separate `DB_DSN` set in the shell, while `.env` keeps pointing at the real
+database. For the command-line tools a variable set in the environment wins over `.env`, so every
+`php api/…` command in that shell uses the demo file; the server does too, but only when started
+with the demo command of section 7 (`-d variables_order=EGPCS`). A relative SQLite path is read
+from the repository root.
 
 PowerShell:
 
@@ -364,9 +367,19 @@ php -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php
 ```
 
 `api/public/index.php` is the single entry point; every request goes through it. Keep the
-terminal open: PHP's development server writes the app's error log lines there. To tour the demo
-data, start it in the shell where `DB_DSN` points at the demo file (section 6); for real use,
-start it in a shell without that variable.
+terminal open: PHP's development server writes the app's error log lines there. That command is
+for real use: it opens the database `.env` names (`api/var/app.db` when `DB_DSN` is empty).
+
+**To tour the demo data**, start the server in the shell where `DB_DSN` points at the demo file
+(section 6), with one more option:
+
+```
+php -d variables_order=EGPCS -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php
+```
+
+The built-in server doesn't pass the shell environment to phpdotenv unless `E` is in
+`variables_order` (the usual `php.ini` value is `GPCS`), so without that option `.env`'s
+`DB_DSN` wins and the server opens the real database instead of the demo file.
 
 **Bind it to `127.0.0.1`**, as above, also when a reverse proxy on the same machine forwards to
 it (section 9): the proxy reaches it there, and nothing else can. Bind another address only when
@@ -376,9 +389,21 @@ and Phase 3 puts nginx and php-fpm in front instead (P3-01).
 
 ## 8. Try it
 
-In a second terminal (for the demo tour, one where `DB_DSN` points at the demo file too, so the
-report below reads the same database). The HTTP examples come in two forms: in Windows
-PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`, so type `curl.exe` there.
+In a second terminal. For the demo tour, point it at the demo file too, so the bot and the report
+below use the same database as the server. PowerShell:
+
+```
+$env:DB_DSN = "sqlite:api/var/demo.db"
+```
+
+Linux and macOS:
+
+```
+export DB_DSN=sqlite:api/var/demo.db
+```
+
+The HTTP examples come in two forms: in Windows PowerShell 5.1, `curl` is an alias for
+`Invoke-WebRequest`, so type `curl.exe` there.
 
 The health check, PowerShell:
 
@@ -428,10 +453,18 @@ in [README.md](README.md)).
 php api/bin/report.php
 ```
 
-On the demo data plus your one conversion it shows 14 sessions, 12 conversions (6 via
-`/convert`, 6 via the bot), 8 `/convert` requests and 1 upstream call, yours: the demo's
-lookups are all cache hits, so the `latest` row's 1 call is your real one. These lines of the
-table:
+Without options it covers the last 7 days, today included. To cover exactly the demo's days, pass
+the two dates `seed_demo.php` printed, with `--to` moved to today if a day has passed since you
+seeded, so your conversion is inside too:
+
+```
+php api/bin/report.php --from=2026-10-16 --to=2026-10-22
+```
+
+On the demo data plus your one conversion, over that period (or with no options, on the day you
+seed and convert), it shows 14 sessions, 12 conversions (6 via `/convert`, 6 via the bot), 8
+`/convert` requests and 1 upstream call, yours: the demo's lookups are all cache hits, so the
+`latest` row's 1 call is your real one. These lines of the table:
 
 <!-- output: report after the conversion -->
 ```

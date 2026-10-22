@@ -5,12 +5,16 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Acceptance;
 
 use ArrayObject;
+use DateTimeImmutable;
+use DateTimeZone;
 use FxInstallments\App;
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Convert\InstallmentCalculator;
 use FxInstallments\Db\Connection;
+use FxInstallments\Db\Database;
 use FxInstallments\Db\Retention;
 use FxInstallments\Http\Request;
+use FxInstallments\Tests\Support\BuiltInServer;
 use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\TestEnvironment;
 use PDO;
@@ -127,6 +131,9 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $undated = static fn (string $text): string => (string) preg_replace('/\d{4}-\d{2}-\d{2}/', 'YYYY-MM-DD', $text);
         self::assertSame($undated(self::installBlock('output: seed_demo') . "\n"), $undated($out), 'INSTALL_LOCAL.md seed_demo output');
         self::assertMatchesRegularExpression('~^seed_demo: wrote \d+ sessions, \d+ events and \d+ request-log rows, \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2} \(America/Bogota\)\n$~D', $out);
+        // Round 3: every report below covers the dates the seed printed, as the doc shows, so a
+        // midnight in reports.timezone between two subprocesses can't move the period.
+        [$from, $to] = self::seedPeriod($out);
 
         // The ids INSTALL_LOCAL.md gives for the two open sessions, whose later expiry events
         // carry no demo marker.
@@ -135,7 +142,7 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $install = (string) file_get_contents(self::repoRoot() . '/docs/INSTALL_LOCAL.md');
         self::assertStringContainsString("`{$open[0]}` (static) and\n`{$open[1]}` (cli)", $install);
 
-        [$exit, $table, $err] = self::runDocCommand('php api/bin/report.php', $path);
+        [$exit, $table, $err] = self::runDocCommand(self::datedReportCommand($from, $to), $path);
         self::assertSame([0, ''], [$exit, $err]);
         self::assertMatchesRegularExpression('/^  Sessions started +14$/m', $table);
         self::assertMatchesRegularExpression('/^  Conversions +11$/m', $table);
@@ -148,7 +155,7 @@ final class P1_09_SeedAndDocsTest extends TestCase
             self::assertStringNotContainsString($range, $table, 'a report never shows an IP');
         }
 
-        $report = self::jsonReport($path);
+        $report = self::jsonReport($path, $from, $to);
         self::assertSame(self::FIXED_NOTES, $report['notes'], 'demo data adds no note');
         self::assertSame([
             'sessions_started' => 14, 'sessions_completed' => 6, 'sessions_abandoned' => 6, 'conversions' => 11,
@@ -201,13 +208,17 @@ final class P1_09_SeedAndDocsTest extends TestCase
         self::assertSame([], $log->getArrayCopy());
         unset($app, $pdo);
 
-        [$exit, $table, $err] = self::runDocCommand('php api/bin/report.php', $path);
+        // As the doc says: the seed's first date, and `--to` moved to today if a day has passed,
+        // so the conversion is inside too.
+        $today = (new DateTimeImmutable('now', new DateTimeZone((new ConfigRepository())->string('reports.timezone'))))->format('Y-m-d');
+        $to = max($to, $today);
+        [$exit, $table, $err] = self::runDocCommand(self::datedReportCommand($from, $to), $path);
         self::assertSame([0, ''], [$exit, $err]);
         foreach (explode("\n", self::installBlock('output: report after the conversion')) as $line) {
             self::assertStringContainsString("\n{$line}\n", $table, 'INSTALL_LOCAL.md report lines after the conversion');
         }
 
-        $after = self::jsonReport($path);
+        $after = self::jsonReport($path, $from, $to);
         self::assertSame([14, 12, 6, 8], [$after['summary']['sessions_started'], $after['summary']['conversions'], $after['summary']['conversions_api'], $after['summary']['api_requests']]);
         self::assertSame(1, array_column($after['upstream']['endpoints'], null, 'endpoint')['latest']['calls'], 'the real call is the latest row\'s only call');
     }
@@ -220,10 +231,13 @@ final class P1_09_SeedAndDocsTest extends TestCase
 
         $path = TestEnvironment::tempDir('example') . '/app.db';
         self::assertSame(0, self::runScript('bin/migrate.php', [], $path)[0]);
-        self::assertSame(0, self::runScript('db/seed_demo.php', [], $path)[0]);
+        [$exit, $seeded] = self::runScript('db/seed_demo.php', [], $path);
+        self::assertSame(0, $exit);
+        [$from, $to] = self::seedPeriod($seeded);
+        $period = ["--from={$from}", "--to={$to}"];
         $outputs = [
-            'table' => self::runScript('bin/report.php', [], $path)[1],
-            'csv' => str_replace("\r\n", "\n", self::runScript('bin/report.php', ['--format=csv'], $path)[1]),
+            'table' => self::runScript('bin/report.php', $period, $path)[1],
+            'csv' => str_replace("\r\n", "\n", self::runScript('bin/report.php', [...$period, '--format=csv'], $path)[1]),
         ];
         foreach ($blocks as [, $format, $block]) {
             foreach (preg_split('/\n\n+/', $block) ?: [] as $part) {
@@ -452,6 +466,111 @@ final class P1_09_SeedAndDocsTest extends TestCase
     }
 
     /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function variablesOrders(): iterable
+    {
+        yield 'EGPCS: the shell value wins' => ['EGPCS', 'sqlite:from-the-shell.db'];
+        yield 'GPCS: the dotenv file wins' => ['GPCS', 'sqlite:from-the-file.db'];
+    }
+
+    /**
+     * Round 3 (R2-1): under `php -S`, a shell DB_DSN reaches phpdotenv's immutable check and
+     * Env::get() only when `E` is in variables_order; with the usual GPCS the dotenv file wins.
+     * This pins the reason behind the demo server command in INSTALL_LOCAL.md section 7. A
+     * fixture file in a temp folder stands in for `.env`, which tests never touch; the router
+     * loads it the way Bootstrap loads `.env` (Dotenv::createImmutable()->safeLoad()).
+     */
+    #[DataProvider('variablesOrders')]
+    public function testTheBuiltInServerSeesAShellDbDsnOnlyWithEInVariablesOrder(string $order, string $expected): void
+    {
+        $dir = TestEnvironment::tempDir('server-env');
+        file_put_contents($dir . '/fixture.env', "DB_DSN=sqlite:from-the-file.db\n");
+        file_put_contents($dir . '/router.php', "<?php\nrequire " . var_export(dirname(__DIR__, 2) . '/vendor/autoload.php', true) . ";\n"
+            . 'Dotenv\Dotenv::createImmutable(' . var_export($dir, true) . ", 'fixture.env')->safeLoad();\n"
+            . "echo FxInstallments\\Env::get('DB_DSN');\n");
+
+        $server = BuiltInServer::start($dir . '/unused.db', ['variables_order' => $order], $dir . '/router.php', ['DB_DSN' => 'sqlite:from-the-shell.db']);
+        try {
+            [$status, , $body] = $server->request('GET', '/');
+        } finally {
+            $server->stop();
+        }
+
+        self::assertSame([200, $expected], [$status, $body], "php -S -d variables_order={$order}\n" . $server->log());
+    }
+
+    /**
+     * Round 3 (tester E): every demo command of sections 6 to 8 runs in a shell whose DB_DSN
+     * points at the throwaway file, in both shell forms, and no demo block names the real
+     * database; the demo server command carries `-d variables_order=EGPCS`.
+     */
+    public function testEveryDemoCommandTargetsTheThrowawayDatabase(): void
+    {
+        $doc = (string) file_get_contents(self::repoRoot() . '/docs/INSTALL_LOCAL.md');
+        self::assertSame(1, preg_match('/^## 6\. .*?(?=^## 9\. )/ms', $doc, $section), 'sections 6 to 8');
+        preg_match_all('/^ *```[a-z]*\n(.*?)^ *```$/ms', $section[0], $blocks);
+        $lines = array_values(array_filter(array_map('trim', explode("\n", implode("\n", $blocks[1]))), static fn (string $line): bool => $line !== ''));
+
+        $dsns = [];
+        foreach ($lines as $line) {
+            self::assertStringNotContainsString('api/var/app.db', $line, 'no demo command names the real database');
+            if (preg_match('/^\$env:DB_DSN = "([^"]*)"$/D', $line, $match) === 1) {
+                $dsns['powershell'][] = $match[1];
+            } elseif (preg_match('/^export DB_DSN=(\S*)$/D', $line, $match) === 1) {
+                $dsns['posix'][] = $match[1];
+            } else {
+                self::assertStringNotContainsString('DB_DSN', $line, "an unexpected DB_DSN form: {$line}");
+            }
+        }
+        // Section 6 (migrate and seed) and section 8's second terminal (bot and report), each
+        // in both shell forms.
+        self::assertCount(2, $dsns['powershell'] ?? [], 'PowerShell sets DB_DSN in both demo shells');
+        self::assertCount(2, $dsns['posix'] ?? [], 'Linux and macOS set DB_DSN in both demo shells');
+        $all = array_unique([...$dsns['powershell'], ...$dsns['posix']]);
+        self::assertCount(1, $all, 'every demo shell points at the same file');
+        $dsn = $all[0];
+        self::assertMatchesRegularExpression('~^sqlite:api/var/[a-z0-9_-]+\.db$~D', $dsn, 'a relative SQLite file under api/var');
+        self::assertNotSame(Database::defaultDsn('api'), $dsn);
+        self::assertNotSame('sqlite:api/var/app.db', $dsn, 'not the real database');
+
+        // The demo shell's commands: migrate and seed (section 6), the demo server (section 7),
+        // the bot and the report (section 8).
+        foreach (['php api/bin/migrate.php', 'php api/db/seed_demo.php', 'php api/bin/report.php'] as $command) {
+            self::assertContains($command, $lines, "sections 6 to 8 show `{$command}`");
+        }
+        self::assertStringContainsString('`php api/bin/bot.php`', $section[0]);
+        $servers = array_values(array_filter($lines, static fn (string $line): bool => str_contains($line, ' -S ')));
+        self::assertSame([
+            'php -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php',
+            'php -d variables_order=EGPCS -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php',
+        ], $servers, 'the real server, then the demo server with E in variables_order');
+    }
+
+    /**
+     * The `php api/bin/report.php --from=… --to=…` line of INSTALL_LOCAL.md, with these dates.
+     */
+    private static function datedReportCommand(string $from, string $to): string
+    {
+        $matches = preg_grep('/^php api\/bin\/report\.php --from=\d{4}-\d{2}-\d{2} --to=\d{4}-\d{2}-\d{2}$/D', self::installCommands());
+        self::assertCount(1, $matches ?: [], 'INSTALL_LOCAL.md shows one dated report command');
+
+        return (string) preg_replace(['/--from=\S+/', '/--to=\S+/'], ["--from={$from}", "--to={$to}"], (string) reset($matches));
+    }
+
+    /**
+     * The period seed_demo printed: its first and last date.
+     *
+     * @return array{string, string}
+     */
+    private static function seedPeriod(string $output): array
+    {
+        self::assertSame(1, preg_match('/, (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2}) \(/', $output, $match), $output);
+
+        return [$match[1], $match[2]];
+    }
+
+    /**
      * The fenced block right after `<!-- $marker -->` in INSTALL_LOCAL.md, without its last
      * line break.
      */
@@ -573,9 +692,9 @@ final class P1_09_SeedAndDocsTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private static function jsonReport(string $path): array
+    private static function jsonReport(string $path, string $from, string $to): array
     {
-        [$exit, $json, $err] = self::runScript('bin/report.php', ['--format=json'], $path);
+        [$exit, $json, $err] = self::runScript('bin/report.php', ["--from={$from}", "--to={$to}", '--format=json'], $path);
         self::assertSame([0, ''], [$exit, $err]);
 
         return json_decode($json, true, 32, JSON_THROW_ON_ERROR);
