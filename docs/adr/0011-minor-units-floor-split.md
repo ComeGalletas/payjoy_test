@@ -66,18 +66,27 @@ design, which the tester and judge accepted.
    is checked on the exact `total_m`. `ConvertService` checks it first and answers
    `VALIDATION_AMOUNT` with reason `too_large`. Inside `display()` a total of 2^53 or more is a
    programming error (`InvalidArgumentException`, so a removed check shows up as a 500, not a
-   wrong number).
+   wrong number). The total is now exact in int64 well past 2^53; the limit is kept as PLAN §3a's
+   bound because the raw `converted` and `installment_amount` are doubles and JSON numbers, which
+   above 2^53 can't hold every whole unit, also for JavaScript clients such as the widget (lead's
+   rationale).
 5. **Reasons:** `too_large` (amount; the total reaches 2^53 minor units; it answers with the
    `VALIDATION_AMOUNT` text, and no real rate reaches it) and `below_minor_unit` (installments;
-   `total_m < n`).
+   `total_m < n`). `too_large` is a 400, so it counts toward `block.error_responses` (ADR 0016).
+   That is acceptable while it can't be reached: at `amount.max` (1,000,000) the largest real
+   total, IRR, is about 1.7 × 10^14, about 50× below 2^53. Revisit it if a rate comes within
+   reach.
 6. **`MinorUnits` choices:** XDR uses 2 (ISO lists none); the territory codes FOK, GGP, IMP, JEP,
    KID and TVD take their parent currency's exponent; the legacy codes ANG, SLL and ZWL are listed.
 
 **Consequences.**
 - The display is exact for the stored rate: the round-2 tester's bcmath oracle found 0 mismatches
   in 2.5M cases (e = 0, 2, 3, 4, amounts to 1,000,000.00, rates up to the storable maximum), and
-  the judge found 0 in 600,728 more. It can be reproduced from the stored `amount_usd_cents` and
-  `rate_scaled`, which reports can use (P1-08).
-- The raw `converted` and `installment_amount` stay full-precision floats, the nearest doubles, so
+  the round-2 judge found 0 in 600,728 cases of its own. It can be reproduced from the amount's
+  cents and the `rate_scaled` used. Nothing stores the rate per conversion today (`api.request`
+  keeps `amount_usd_cents` only, and `rate_cache` is replaced on every refresh), so P1-08 must add
+  it before reports can recompute amounts.
+- The raw `converted` and `installment_amount` stay full-precision floats, computed from the
+  nearest doubles of the amount and the rate (not the nearest double of the exact product), so
   their last digits can differ from the exact `display` strings. Front-ends show `display` only.
 - The tests carry their own schoolbook decimal-string oracle, so they need no `bcmath`.

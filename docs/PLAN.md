@@ -119,8 +119,9 @@ Reasons and consequences are in the ADR named in each row.
 - **Abuse limits.** Per-IP limit on `/convert` and `/bot/message` (`ratelimit.per_minute`, stored in
   SQLite) → `RATE_LIMITED` (429). `X-Forwarded-For` is trusted only when `TRUSTED_PROXY` is set and
   matches the peer. CORS on `/bot/message` only for `cors.allowed_origins`.
-- **Request log and blocking (ADR 0016 and its amendments).** Every request, including blocked
-  ones, writes a `requests` row with the raw client IP; the query string is never stored, and path
+- **Request log and blocking (ADR 0016 and its amendments).** Every request that reaches the
+  Kernel, including blocked ones, writes a `requests` row with the raw client IP unless the write
+  fails (INV-07, INV-08); the query string is never stored, and path
   and method are stored percent-encoded. An IP over a `block.*` threshold is blocked: the Kernel
   answers 403 `IP_BLOCKED` with `Connection: close` before routing. `block.rate_limit_hits` counts
   rate-limited minutes, `block.error_responses` counts 4xx other than 429; 5xx and blocked
@@ -334,7 +335,7 @@ Error codes (stable strings) and HTTP status:
 
 | Endpoint | Phase | Purpose |
 |---|---|---|
-| `GET /convert?amount&cy&installments?` | 1 | Conversion, installment amount (unrounded), `display` block, `rate_as_of`, `stale`. `amount` and `cy` required; `installments` defaults to `installments.default`; a missing, empty or array value answers `format`; checked in the order amount, currency, installments; extra parameters ignored, and a repeated one keeps its last value (PHP) |
+| `GET /convert?amount&cy&installments?` | 1 | Conversion, installment amount (unrounded), `display` block, `rate_as_of`, `stale`. `amount` and `cy` required; `installments` defaults to `installments.default`; a missing `amount` or `cy`, an empty value, or an array answers `format`; checked in the order amount, currency, installments; extra parameters ignored, and a repeated one keeps its last value (PHP) |
 | `POST /bot/message {session_id?, text}` → `{session_id, reply, buttons?, step, done}` | 1 | Static flow engine; the contract every channel uses |
 | `GET /bot/widget` | 1 | Built-in chat page |
 | `GET /reports?from&to&format=json\|csv` (admin) | 1 | Summary, currencies/countries, funnel by step and channel, errors by code, upstream usage (calls, hits, stale, blocked) |
@@ -582,10 +583,13 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *DONE 2026-10-21 (PR #16, two rounds). Owner decisions in the ADR 0011 amendment: the display
   total is exact (integers from cents and `rate_scaled`), and `display.amount_usd` and
   `display.rate` are grouped. The 503 mechanism is in ADR 0012 item 9; `toRate()` in the ADR 0017
-  second amendment. Round 2 also fixed the P1-04 breaker-write bug. Every answered request writes
-  one `api.request` event: columns `amount_usd_cents`, `currency`, `installments` as far as
-  validated, status, `error_code`, `latency_ms`; meta `endpoint=convert`, `http_status`, `stale`
-  on success, `reason` on failure, `minor_units_default` when set.*
+  second amendment. Round 2 also fixed the P1-04 breaker-write bug the tester found (owner
+  decision). The response shape (§1), the parameter rules (§6) and the `api.request` event are
+  the builder's design, accepted by the tester and judge and recorded as spec here, with no ADR.
+  Every request the handler answers writes one `api.request` event: columns `amount_usd_cents`,
+  `currency`, `installments` as far as validated, status, `error_code`, `latency_ms`; meta
+  `endpoint=convert`, `http_status`, `stale` on success, `reason` on failure,
+  `minor_units_default` when set.*
 - **P1-06** `Flow/`: YAML loader, `FlowEngine` (§9 rules), `SessionStore` (server ids, TTL, expiry
   sweep), `POST /bot/message`, `bin/bot.php`.
   *Acceptance:* `tests/Acceptance/P1_06_FlowTest.php` — a scripted CLI session (`200` → `brazil` →
@@ -639,9 +643,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
     calls `progress`); say so in its docblock.
   Also (from P1-11): reports may count `ip.block` and `ip.unblock` events (by `block_source` and
   `reason`) and blocked requests (`requests.blocked`); neither ever shows an IP.
-  Also (from P1-05): a `/convert` error writes both an `api.request` and an `error` event, so
-  don't count it twice; rate-limited requests have only the `error` event. Report amounts can be
-  recomputed exactly from `amount_usd_cents` and `rate_scaled` (ADR 0011 amendment).
+  Also (from P1-05): a `/convert` 4xx or 503 answered by the handler writes both an `api.request`
+  and an `error` event, so don't count it twice; rate-limited and INTERNAL 500 responses have only
+  the `error` event, and IP-blocked requests have neither. To recompute report amounts exactly,
+  store the `rate_scaled` (and `rate_as_of`) used by each conversion first, e.g. in the
+  `api.request` meta; nothing stores it today (ADR 0011 amendment).
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
   IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
   the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
@@ -664,7 +670,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
   written without network access), and look for Guzzle 8.3.x patch releases (ADR 0001 amendment).
   Also (from P1-05): check `MinorUnits` against the live codes too (every quoted code should have
-  an exponent; unknown codes fall back to 2).
+  an exponent; unknown codes fall back to 2), and close the cold-start allow-list limit (ADR 0012
+  amendment, known limits).
 
 ### Phase 2 — LLM normalizer (feature-flagged)
 
@@ -764,7 +771,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     in L-03's `PostgresTest`, where concurrent inserts can clash.
   - (P1-05) `InstallmentCalculator::exactTotal()` is public and accepts exponents 0..12, though
     only 0..4 are used; make it private or narrow the range. `ConvertService` and `display()` both
-    compute the exact total (harmless, about 0.15 µs).
+    compute the exact total (harmless, well under a microsecond per call).
+  - (P1-05) The `ConvertService` and `Conversion` docblocks call the raw numbers "the nearest
+    double"; they are products of the nearest doubles of the amount and rate. Fix the wording.
 
 ## 11. Working agreements for the agent
 

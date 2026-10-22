@@ -17,7 +17,7 @@ name, add it here in the same commit that introduces it.
 | **converted** | `amount_usd × rate`, computed locally. Full precision. | `display.converted`; upstream `conversion_result`, which is not used. |
 | **installments** / `n` | Number of monthly payments, integer 1..`installments.max`, default `installments.default`, at least one minor unit each. | |
 | **installment amount** / `installment_amount` | `converted / n`. Full precision. | `display.installment`. |
-| **display block** / `display` | English-formatted strings `/convert` returns for presentation: `amount_usd`, `rate`, `converted`, `installment`, `last_installment`, `regular_count`, `even`, `rate_as_of`. Produced only by `InstallmentCalculator::display()`, exactly from the stored cents and `rate_scaled`; money strings are grouped, `amount_usd` included (ADR 0011 amendment). | Any rounding a front-end does itself — forbidden. The raw float numbers, whose last digits can differ. |
+| **display block** / `display` | English-formatted strings `/convert` returns for presentation: `amount_usd`, `rate`, `converted`, `installment`, `last_installment`, `regular_count`, `even`, `rate_as_of`. Produced only by `InstallmentCalculator::display()`, exactly from the amount's cents and the stored `rate_scaled`; money strings are grouped, `amount_usd` included (ADR 0011 amendment). | Any rounding a front-end does itself — forbidden. The raw float numbers, whose last digits can differ. |
 | **regular payment** | Each of the first `display.regular_count` installments, all equal to `display.installment`. | |
 | **final payment** / **last installment** | `display.last_installment`: the last payment, which absorbs the remainder. | |
 | **remainder** | Minor units left after flooring `total_m / n`; always added to the final payment. | |
@@ -85,7 +85,7 @@ name, add it here in the same commit that introduces it.
 | Term | Meaning |
 |---|---|
 | **event** | One append-only row in `events`, written only through `Metrics`. |
-| **api.request event** | The event `/convert` writes for every answered request: the validated fields, status, error code, latency; meta `endpoint`, `http_status`, `stale` or `reason`, `minor_units_default`. Never upstream text, keys or IPs. |
+| **api.request event** | The event `/convert` writes for every request its handler answers (rate-limited, blocked and INTERNAL 500 requests have none): the validated fields, status, error code, latency; meta `endpoint`, `http_status`, `stale` or `reason`, `minor_units_default`. Never upstream text, keys or IPs. |
 | **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query (percent-encoded, as in the request log), exception class. |
 | **request log** | The `requests` table: one row per incoming request with the raw client IP, kept `requests.retention_days` (ADR 0016). |
 | **migration** / **migration list** | One numbered schema change in the append-only list in `Db/Migrations`; run with `bin/migrate.php` (ADR 0020). |

@@ -13,7 +13,8 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   `InstallmentCalculator::display()` per §3a, `ConvertService`, `GET /convert` behind the global
   rate limiter, one `api.request` event per answered request, and the 503 during an
   `unsupported-code` backoff (`not_in_table` stays 400). Unit+Acceptance went from 1295 to 1405
-  tests; guards stayed at 80. Concern: float drift on large totals.
+  tests; guards stayed at 80. Concerns: float drift on large totals, and new upstream codes
+  rejected on a cold start.
 - Tester round 1: PASS with concerns. An independent bcmath oracle over 2.3M cases found
   `total_m` off by one minor unit on large totals (IRR 3.3%, LBP 0.5%, IDR 0.24%, COP 0.05%),
   mostly from PHP 8.3's `round()`. It also found a P1-04 bug: `UpstreamBreaker::write()` swallowed
@@ -28,9 +29,10 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - Co-leads: both approved. The lead posted the approval comment, then merged at the reviewed head
   as `c09edba` (2026-10-22 01:16:31 UTC).
 - **Process.** The builder hit two worktree-guard refusals in round 1 (PR #16 body), and the tester
-  two in round 1 (its report to the lead). One was dropped as unneeded; the others were handled by
-  the stated remedy once, or with the Write or Grep tool. No guarded target was touched.
-- Upstream: 0 real calls.
+  two in round 1 (its report to the lead). In each pair one command was dropped as unneeded; the
+  other was handled by the block message's own remedy ("split it into plain, separate commands")
+  once, plus the Write or Grep tool. No guarded target was touched.
+- Upstream: 0 real calls (every test uses the mocked handler; no reviewer reported a real call).
 - Lead docs: ADR 0011 amendment (exact total, grouped strings, reasons, `MinorUnits` choices);
   ADR 0017 second amendment (`toRate()`); ADR 0012 item 9 implemented and the breaker-write limit;
   GUARDRAILS INV-08; PLAN §1, §3a, §6, P1-05 done note, follow-ups in P1-06, P1-08, P1-10, L-03
