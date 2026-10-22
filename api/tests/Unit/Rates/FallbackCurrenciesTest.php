@@ -46,8 +46,23 @@ final class FallbackCurrenciesTest extends TestCase
 
     public function testItLeavesOutNonCurrencyCodes(): void
     {
-        foreach (['XAU', 'XAG', 'XPD', 'XPT', 'XTS', 'XXX', 'XBA', 'XSU', 'XUA', 'BOV', 'USN', 'HRK', 'ZWL', 'usd', 'US', ''] as $code) {
+        // ZWD and DEM: legacy codes upstream doesn't quote (HRK and ZWL moved in with P1-10).
+        foreach (['XAU', 'XAG', 'XPD', 'XPT', 'XTS', 'XXX', 'XBA', 'XSU', 'XUA', 'BOV', 'USN', 'ZWD', 'DEM', 'usd', 'cnh', 'US', ''] as $code) {
             self::assertFalse(FallbackCurrencies::contains($code), $code);
+        }
+    }
+
+    public function testTheCodesUpstreamQuotesOutsideIso4217AreUpstreamOnly(): void
+    {
+        // P1-10: the offshore yuan and the legacy codes upstream still quoted on 2026-10-22
+        // (BGN moved from the ISO list by owner decision, round 2).
+        foreach (['CNH', 'ANG', 'BGN', 'HRK', 'SLL', 'ZWL'] as $code) {
+            self::assertContains($code, FallbackCurrencies::UPSTREAM_ONLY, $code);
+            self::assertNotContains($code, FallbackCurrencies::ISO_4217, $code);
+        }
+        // Their replacements stay in the ISO list.
+        foreach (['CNY', 'XCG', 'EUR', 'SLE', 'ZWG'] as $code) {
+            self::assertContains($code, FallbackCurrencies::ISO_4217, $code);
         }
     }
 
