@@ -122,6 +122,7 @@ final class ConvertService
             $result->rateAsOf,
             $result->stale,
             $display,
+            $result->rateScaled,
         );
     }
 }

@@ -29,6 +29,8 @@ final class ErrorCodes
     public const IP_BLOCKED = 'IP_BLOCKED';
     public const NOT_FOUND = 'NOT_FOUND';
     public const RATE_LIMITED = 'RATE_LIMITED';
+    /** `GET /health` when the database can't be opened, is behind the code or can't be written (P1-08). */
+    public const UNHEALTHY = 'UNHEALTHY';
     public const BOT_MAX_RETRIES = 'BOT_MAX_RETRIES';
     public const BOT_SESSION_EXPIRED = 'BOT_SESSION_EXPIRED';
     public const LLM_UNAVAILABLE = 'LLM_UNAVAILABLE';
@@ -59,6 +61,8 @@ final class ErrorCodes
         self::IP_BLOCKED => [403, 'Too many unusual requests came from your network. Please try again later.'],
         self::NOT_FOUND => [404, 'Not found.'],
         self::RATE_LIMITED => [429, 'Too many requests. Please wait a minute and try again.'],
+        // A 5xx, so it never counts toward automatic blocking (ADR 0016).
+        self::UNHEALTHY => [503, 'The service is temporarily unavailable. Please try again later.'],
         // Bot wording lives only in the flow file (docs/PLAN.md §9), so bot codes carry no text.
         self::BOT_MAX_RETRIES => [null, null],
         self::BOT_SESSION_EXPIRED => [null, null],

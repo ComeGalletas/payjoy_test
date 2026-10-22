@@ -8,10 +8,11 @@ namespace FxInstallments\Http;
  * What a route handler, a middleware and the Kernel return.
  *
  * - JsonResponse: every JSON endpoint, always the envelope (INV-04).
- * - TextResponse: the widget's page, script, style sheet and icon (P1-07).
+ * - TextResponse: the widget's page, script, style sheet and icon (P1-07), and the CSV of
+ *   `GET /reports?format=csv` (P1-08).
  * - NoContentResponse: the 204 for `/favicon.ico` (P1-07).
- * The last two are the only non-envelope responses in Phase 1 besides the CSV reports of P1-08;
- * P1_07_WidgetTest checks that over the production route table.
+ * The last two are the only non-envelope responses in Phase 1; P1_07_WidgetTest checks that
+ * over the production route table.
  *
  * Every response sends `X-Content-Type-Options: nosniff`, and every one with a body sends its
  * `Content-Type`. They are immutable: withHeader() returns a copy.

@@ -12,7 +12,8 @@ final class ErrorCodesTest extends TestCase
 {
     /**
      * docs/PLAN.md §5, copied by hand so a change on either side is noticed. BAD_REQUEST came
-     * with P1-06 (`POST /bot/message`); §5 gets its row in the lead's docs PR.
+     * with P1-06 (`POST /bot/message`), UNHEALTHY with P1-08 (`GET /health`); §5 gets their
+     * rows in the lead's docs PR.
      */
     private const SECTION_5 = [
         'VALIDATION_AMOUNT' => 400,
@@ -28,6 +29,7 @@ final class ErrorCodesTest extends TestCase
         'IP_BLOCKED' => 403,
         'NOT_FOUND' => 404,
         'RATE_LIMITED' => 429,
+        'UNHEALTHY' => 503,
         'BOT_MAX_RETRIES' => null,
         'BOT_SESSION_EXPIRED' => null,
         'LLM_UNAVAILABLE' => null,

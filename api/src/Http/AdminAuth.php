@@ -22,16 +22,29 @@ final class AdminAuth implements Middleware
 
     public function process(Request $request, callable $next): Response
     {
+        return $this->allows($request) ? $next($request) : self::unauthorized();
+    }
+
+    /**
+     * Whether the request carries the admin token. Always false while ADMIN_TOKEN is unset or
+     * empty. `/health` uses it to pick its admin view (P1-08).
+     */
+    public function allows(Request $request): bool
+    {
         if ($this->adminToken === null || $this->adminToken === '') {
-            return self::unauthorized();
+            return false;
         }
-
         $presented = self::bearerToken($request->header('authorization'));
-        if ($presented === null || !hash_equals($this->adminToken, $presented)) {
-            return self::unauthorized();
-        }
 
-        return $next($request);
+        return $presented !== null && hash_equals($this->adminToken, $presented);
+    }
+
+    /**
+     * 401 ADMIN_UNAUTHORIZED with `WWW-Authenticate: Bearer`.
+     */
+    public static function unauthorized(): JsonResponse
+    {
+        return JsonResponse::error(ErrorCodes::ADMIN_UNAUTHORIZED)->withHeader('WWW-Authenticate', 'Bearer');
     }
 
     /**
@@ -50,10 +63,5 @@ final class AdminAuth implements Middleware
         }
 
         return $match[1];
-    }
-
-    private static function unauthorized(): JsonResponse
-    {
-        return JsonResponse::error(ErrorCodes::ADMIN_UNAUTHORIZED)->withHeader('WWW-Authenticate', 'Bearer');
     }
 }

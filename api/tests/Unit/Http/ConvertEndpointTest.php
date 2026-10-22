@@ -133,7 +133,7 @@ final class ConvertEndpointTest extends TestCase
         $data = self::data($this->get($app, ['amount' => '200', 'cy' => 'ZWD', 'installments' => '3']));
 
         self::assertSame(['72,380.00', '24,126.66', '24,126.68'], [$data['display']['converted'], $data['display']['installment'], $data['display']['last_installment']]);
-        self::assertSame(['endpoint' => 'convert', 'minor_units_default' => true, 'stale' => false, 'http_status' => 200], $this->events()[2]['meta']);
+        self::assertSame(['endpoint' => 'convert', 'minor_units_default' => true, 'stale' => false, 'rate_scaled' => 3_619_000_000_000, 'rate_as_of' => MockUpstream::LAST_UPDATE, 'http_status' => 200], $this->events()[2]['meta']);
         self::assertArrayNotHasKey('minor_units_default', $this->events()[1]['meta']);
     }
 

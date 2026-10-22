@@ -10,6 +10,10 @@ use FxInstallments\Validation\UsdAmount;
  * One conversion (docs/PLAN.md §1): the full-precision numbers computed locally, `rate_as_of`,
  * `stale`, and the display block. Nothing here is rounded except the display strings, which
  * are exact for the stored rate; the raw numbers are the nearest doubles (ADR 0011).
+ *
+ * `rateScaled` is the stored rate the display was computed from (ADR 0017). It isn't in the
+ * response; the `api.request` and `bot.session_completed` events store it with `rate_as_of`
+ * (P1-08), so a later report can recompute the display exactly from the cents.
  */
 final readonly class Conversion
 {
@@ -23,6 +27,7 @@ final readonly class Conversion
         public int $rateAsOf,
         public bool $stale,
         public Display $display,
+        public int $rateScaled,
     ) {
     }
 

@@ -19,15 +19,19 @@ use FxInstallments\Http\AllowedOrigins;
 use FxInstallments\Http\BotMessageEndpoint;
 use FxInstallments\Http\ConvertEndpoint;
 use FxInstallments\Http\Cors;
+use FxInstallments\Http\HealthEndpoint;
 use FxInstallments\Http\IpBlocking;
 use FxInstallments\Http\IpBlocks;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\RateLimiter;
+use FxInstallments\Http\ReportsEndpoint;
 use FxInstallments\Http\Router;
 use FxInstallments\Http\WidgetEndpoint;
 use FxInstallments\Metrics\Metrics;
+use FxInstallments\Metrics\ReportQuery;
 use FxInstallments\Metrics\RequestLog;
 use FxInstallments\Rates\ExchangeRateClient;
+use FxInstallments\Rates\QuotaCache;
 use FxInstallments\Rates\RateCache;
 use FxInstallments\Rates\RateStore;
 use FxInstallments\Rates\RateTableAllowList;
@@ -108,9 +112,11 @@ final class App
     /**
      * The production route table: `GET /convert` (P1-05) behind the rate limiter,
      * `POST /bot/message` (P1-06) behind Cors and the same global rate limiter (ADR 0016 second
-     * amendment: one `ratelimit.per_minute`), and the widget's page, script and style sheet
-     * (P1-07) without middleware. Every other path is NOT_FOUND. Building it touches neither the
-     * database, the flow file, the widget files nor the upstream client.
+     * amendment: one `ratelimit.per_minute`), the widget's page, script and style sheet
+     * (P1-07) without middleware, `GET /reports` (P1-08) behind AdminAuth only, and
+     * `GET /health` (P1-08) without middleware: it picks its admin view itself and must answer
+     * whatever state the database is in. Every other path is NOT_FOUND. Building it touches
+     * neither the database, the flow file, the widget files nor the upstream client.
      */
     public function router(): Router
     {
@@ -118,8 +124,58 @@ final class App
         $router->get(ConvertEndpoint::PATH, $this->convertEndpoint(), [$this->rateLimiter()]);
         $router->post(BotMessageEndpoint::PATH, $this->botMessageEndpoint(), [$this->cors(), $this->rateLimiter()]);
         $this->widget()->register($router);
+        $router->get(ReportsEndpoint::PATH, $this->reportsEndpoint(), [$this->adminAuth()]);
+        $router->get(HealthEndpoint::PATH, $this->healthEndpoint());
 
         return $router;
+    }
+
+    /**
+     * The report over `events` and `requests` (P1-08); it sweeps expired sessions first.
+     */
+    public function reportQuery(): ReportQuery
+    {
+        return new ReportQuery(
+            $this->db,
+            $this->clock,
+            fn (): int => $this->sessionSweeper()->sweep(),
+            $this->config->int('requests.retention_days'),
+        );
+    }
+
+    public function reportsEndpoint(): ReportsEndpoint
+    {
+        return new ReportsEndpoint(fn (): ReportQuery => $this->reportQuery(), $this->config->string('reports.timezone'), $this->clock);
+    }
+
+    public function healthEndpoint(): HealthEndpoint
+    {
+        return new HealthEndpoint(
+            $this->db,
+            $this->adminAuth(),
+            new RateStore($this->db),
+            $this->upstreamBreaker(),
+            $this->quotaCache(),
+            $this->config->int('rates.max_stale_hours'),
+            $this->clock,
+            $this->errorLog,
+        );
+    }
+
+    /**
+     * Upstream's `/quota` for the admin health view, cached `health.quota_cache_minutes`; the
+     * upstream client is built only when upstream is asked.
+     */
+    public function quotaCache(): QuotaCache
+    {
+        return new QuotaCache(
+            $this->db,
+            fn (): ExchangeRateClient => $this->rateClient(),
+            $this->upstreamBreaker(),
+            $this->metrics,
+            $this->config->int('health.quota_cache_minutes'),
+            $this->clock,
+        );
     }
 
     /**
@@ -309,12 +365,20 @@ final class App
         // without an HTTP transport when the stored table is fresh.
         return $this->rates ??= new RateCache(
             new RateStore($this->db),
-            fn (): ExchangeRateClient => $this->rateClient ??= ExchangeRateClient::fromEnvironment(),
+            fn (): ExchangeRateClient => $this->rateClient(),
             $this->upstreamBreaker(),
             $this->metrics,
             $this->config->int('rates.max_stale_hours'),
             $this->clock,
         );
+    }
+
+    /**
+     * The upstream client, built once, on first use (never on a cache hit).
+     */
+    private function rateClient(): ExchangeRateClient
+    {
+        return $this->rateClient ??= ExchangeRateClient::fromEnvironment();
     }
 
     /**
