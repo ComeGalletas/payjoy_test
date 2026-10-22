@@ -4,6 +4,62 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — P1-10 End-to-end run and live codes (MVP delivered; PR #28, head fbe4d59)
+
+- PR #27 (P1-09 close-out) merged by the owner as `e761e7e`, the release build of this run.
+- **Owner decisions.** The lead runs the real-key steps, a one-time exception to "agents never
+  call the real upstream": in the main checkout, the app reads `.env` and the lead never does,
+  with a budget of one `/latest/USD` call and two `/quota` calls. The owner registers the prune
+  task from a lead runbook. The code follow-ups become their own builder task (PR #28).
+- **The run** (main checkout, `api/var/app.db` new: 0 events, 0 demo rows, 0 sessions, 0 rates;
+  the server by INSTALL section 7's real-use command in a shell without `DB_DSN`; `curl.cainfo`
+  and `openssl.cafile` set): `GET /health` 200 with no `X-Powered-By`. The CLI bot completed
+  (200 USD, BRL, 3: "about 1,004.92 BRL today (rate 5.0246, as of 2026-10-22 00:00 UTC)"), the
+  run's one `/latest/USD` call at 18:43:21Z. In the built-in browser the widget opened lazily; a
+  typed `<script>` and `<img onerror>` showed as text, created no element and ran nothing; then
+  the session completed from the stored rates. The report showed one completed session per
+  channel (static 1, cli 1) and the `latest` row 1 call. **Acceptance met.**
+- **Quota.** Two reads through the app's `QuotaCache` in-process (the admin view's path, no
+  token): 1,500 remaining at 18:44:21Z and 1,498 at 19:46:45Z, no refresh in between. Upstream
+  counts `/quota` calls and shows calls late. Quota used by the run: 3 calls (1 `/latest/USD`,
+  2 `/quota`).
+- **Embeds** (owner-authorized temporary edit): `cors.allowed_origins` set to
+  `http://127.0.0.1:8081` in `defaults.php`, uncommitted, then reverted with `git checkout --`
+  (status clean, `frame-ancestors 'self'` again). From a host page served on :8081: the iframe
+  loaded `/bot/widget` and its own script and style sheet with no console errors; the `<script>`
+  embed loaded its style sheet from the API origin and completed a session over CORS (50 USD to
+  158,677.24 COP, from the stored rates, no extra call).
+- **By-hand INSTALL pass.** The backup line on the real database wrote
+  `api/var/app.db.bak-20261022-184457`; a restore into a scratch copy passed `integrity_check`
+  with matching counts and a current schema. The owner registered, ran and removed the prune task
+  in PowerShell (`LastTaskResult` 0, run from `C:\WINDOWS\System32`). The `git clone` URL
+  matches. Untried: the S4U form, `schtasks --%`, cron, and the `sqlite3` lines (not installed).
+- **Live codes** (from `rate_cache`, 166): ANG, CNH, HRK, SLL and ZWL were missing from
+  `FallbackCurrencies`; KPW, SVC and VED were not quoted; CNH and HRK had no `MinorUnits` exponent.
+  `composer outdated`, transitive dependencies included: everything up to date.
+- **PR #28** (P1-10b). Round 1 (`220db29`): builder DONE; 1935 to 1945 tests. Tester: PASS WITH
+  NITS, 11 of 13 mutations caught; judge: APPROVE WITH NITS (the docblock got the KPW/SVC/VED
+  sequence wrong; nothing pinned the kept codes; BGN classified unlike HRK). Owner: the builder's
+  four decisions accepted, a short round 2, BGN to the legacy group. Round 2 (`fbe4d59`): 1956
+  tests, guards 80. Tester: PASS, 8 of 8; judge: APPROVE WITH NITS. Both approved; the lead
+  posted the approval comment (19:49:33 UTC) and merged as `38ceb76` (19:49:36 UTC).
+- **Process.** The round-2 builder hit a harness block on a `php -r` with `$` expansion ("…
+  evaluates … inside a construct too complex to verify … Split it into plain, separate
+  commands"). It did not retry; it took the hash from its own acceptance test's failure output,
+  and the lead recomputed it independently. The judge ruled it fair use, and the owner ratified it
+  as a precedent: after a harness block on a command's form (not its target), an agent may
+  observe the same value through the project's own test or gate commands, never through another
+  shell, script or alias, never reaching a guarded target, and the block is still reported. GR-030
+  in `CLAUDE.md` is owner-owned; if this should be written there, a proposed addition is: "A block
+  on a command's form may be met by the project's own test or gate commands; no other route." No
+  other block in P1-10.
+- **Upstream: 3 real calls** (1 `/latest/USD`, 2 `/quota`), all by the lead under the owner's
+  authorization; no agent read `.env`, and no key or token was printed.
+- Lead docs: ADR 0012 third amendment (the live code list, the cost of `/quota`); ADR 0011 third
+  amendment (CNH, BGN, HRK); ADR 0001 note (the patch check); CONTEXT (quota, fallback currency
+  list); INSTALL and REPORTS (`/quota` counts); PLAN P1-10 done note and L-04; TODO (P1-10 ticked,
+  next P2-01).
+
 ## 2026-10-22 — P1-09 Seed data and docs (PR #26, head b3ae82d)
 
 - PR #24 (P1-08 close-out) merged by the owner as `fdb851d`.

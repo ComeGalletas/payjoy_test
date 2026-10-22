@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (storage clause superseded by 0017; amended 2026-10-21: exact display
   total, see "Amendment"; amended again 2026-10-22: the rate per conversion, see "Second
+  amendment"; amended a third time 2026-10-22: codes from the live table, see "Third
   amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
@@ -78,7 +79,8 @@ design, which the tester and judge accepted.
    total, IRR, is about 1.7 × 10^14, about 50× below 2^53. Revisit it if a rate comes within
    reach.
 6. **`MinorUnits` choices:** XDR uses 2 (ISO lists none); the territory codes FOK, GGP, IMP, JEP,
-   KID and TVD take their parent currency's exponent; the legacy codes ANG, SLL and ZWL are listed.
+   KID and TVD take their parent currency's exponent; the legacy codes ANG, SLL and ZWL are listed
+   (since P1-10 also CNH, BGN and HRK, see "Third amendment").
 
 **Consequences.**
 - The display is exact for the stored rate: the round-2 tester's bcmath oracle found 0 mismatches
@@ -102,3 +104,14 @@ Recorded from P1-08 (PR #23, ADR 0023); owner decision 4.
   with a note. Phase 1 reports don't recompute converted amounts.
 - A `rate_scaled` above 2^53 (a rate above about 900,000 per USD, which IRR already is) can't be
   read exactly as a JavaScript Number, so a JavaScript consumer must read it as text.
+
+## Third amendment (2026-10-22): codes from the live table
+
+Recorded from P1-10 (PR #28, ADR 0012 third amendment); the builder's choices, accepted by the
+owner.
+
+- CNH, the offshore yuan, takes CNY's exponent 2 (the parent-currency rule of item 6).
+- The legacy codes BGN and HRK take their last ISO exponent, 2, like ANG, SLL and ZWL.
+- Both CNH and HRK already fell back to 2, so no displayed number changes; their conversions no
+  longer set `meta.minor_units_default`. `MinorUnits` now has an explicit exponent for every code
+  on the fallback list, and a test checks that the two lists match.

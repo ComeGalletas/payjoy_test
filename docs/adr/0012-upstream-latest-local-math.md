@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (amended 2026-10-21: breaker kinds and backoff, refresh floor, stale age,
   503 during an `unsupported-code` backoff; see "Amendment"; amended again 2026-10-22: the
-  `/quota` cache, see "Second amendment")
+  `/quota` cache, see "Second amendment"; amended a third time 2026-10-22: the live code list and
+  the cost of `/quota`, see "Third amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -129,7 +130,7 @@ in round 2.
   - On a cold start (no stored table), a code upstream quotes but `FallbackCurrencies` lacks
     answers 400 `VALIDATION_CURRENCY` (`not_allowed`) until a refresh stores the table, and that
     400 counts toward `block.error_responses` (ADR 0016). `/convert` exposes this from P1-05;
-    P1-10's comparison of `FallbackCurrencies` with the live codes closes it.
+    P1-10 closed it for the 2026-10-22 table (see "Third amendment").
 
 ## Second amendment (2026-10-22): the `/quota` cache for the admin health view
 
@@ -150,7 +151,39 @@ brief (named `not_writable` in round 3); the rest is the builder's design.
   today (UTC), as `upstream_refresh_date`, and, while a quota block is open, the breaker's end on
   the 1st (UTC) as `breaker_quota_block_until`. The breaker still ends quota blocks on the 1st.
 - **Known limits:** the cache isn't locked, so two admin views at the same moment can each call
-  `/quota`. Whether upstream counts `/quota` calls against the quota is unverified. If it does, a
+  `/quota`. Upstream counts `/quota` calls against the quota (P1-10, see "Third amendment"), so a
   monitor polling the admin view adds up to one call per `health.quota_cache_minutes` (about 744
-  a month at 60) to a 1,500 budget. P1-10 checks this, and reads quota used from the report's
-  `latest` row.
+  a month at 60) to a 1,500 budget.
+
+## Third amendment (2026-10-22): the live code list and the cost of `/quota`
+
+Recorded from P1-10: the lead's run against the real key (owner-authorized) and PR #28. Items 1 to
+3 are the builder's decisions, accepted by the owner (2026-10-22); item 4 is an owner decision;
+item 5 is the run's measurement.
+
+1. `FallbackCurrencies` now covers every code upstream quoted on 2026-10-22: 166 codes in one
+   `/latest/USD` answer, pinned with a sha256 in `api/tests/Fixtures/upstream_latest_usd_codes.txt`
+   by `P1_10_LiveCodesTest`. `ISO_4217` holds active ISO 4217 codes; `UPSTREAM_ONLY` holds the
+   codes upstream quotes that aren't, in three groups: the territory codes (FOK, GGP, IMP, JEP,
+   KID, TVD), the offshore yuan CNH, and legacy codes (ANG, BGN, HRK, SLL, ZWL).
+2. KPW, SVC and VED stay, although upstream didn't quote them. On a cold start they pass
+   validation; the request whose refresh stores a table without them answers 400
+   `UPSTREAM_UNSUPPORTED_CODE` (`not_in_table`), and after that they are refused as 400
+   `VALIDATION_CURRENCY` (`not_allowed`), like any code the stored table lacks.
+3. The test checks that every captured code is on the list (not that the lists are equal), and
+   pins the extras as exactly KPW, SVC and VED.
+4. BGN, replaced by EUR on 2026-01-01, moved from `ISO_4217` to the legacy group (owner decision).
+5. Upstream counts `/quota` calls against the monthly quota, and its counter shows calls late. In
+   the run, the remaining quota read 1,500 at 18:44:21Z (one `/latest/USD` call had been made at
+   18:43:21Z) and 1,498 at 19:46:45Z, with no refresh in between: the two calls counted were that
+   `/latest/USD` call and the first read's own `/quota` call.
+
+**Known limits.**
+- A code upstream starts quoting later is refused on a cold start again until someone recaptures
+  the list; nothing detects the drift, and the evidence is one answer on one day. Recapture it at
+  each release, with the dependency check (L-04).
+- The admin `/health` view's `/quota` calls cost quota: a monitor polling it every
+  `health.quota_cache_minutes` (60) would use about 744 calls a month of 1,500, so monitors use
+  the public view (`INSTALL_LOCAL.md` section 10).
+- After any refresh the app converts into the withdrawn currencies upstream still quotes (ANG,
+  BGN, HRK, SLL, ZWL). Whether to offer them is a product question for the owner (L-04).

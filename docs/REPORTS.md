@@ -169,12 +169,12 @@ session that ended on an upstream error counts its code under `bot`.
   `refresh_error` (stale).
 - `failures`: failed calls per endpoint and error code.
 
-**Quota used:** read the **`latest` row's `calls`**. Those are the `/latest/USD` refreshes, about
-30 a month. `/quota` calls, made by the admin view of `/health` at most once per
-`health.quota_cache_minutes`, are counted apart in the `quota` row, and whether upstream counts
-them against the monthly quota is not yet known (ADR 0012 second amendment), so don't read quota
-use from `summary.upstream_calls` or `upstream.calls`, which add them in. `/codes` is never
-called in Phase 1.
+**Quota used:** upstream counts both kinds of call against the monthly quota (ADR 0012 third
+amendment): the `latest` row's `calls` (the `/latest/USD` refreshes, about 30 a month) and the
+`quota` row's `calls` (the admin view of `/health`, at most once per
+`health.quota_cache_minutes`). `summary.upstream_calls` and `upstream.calls` add them up, which is
+the quota used. Upstream shows calls late, so its own remaining count can lag a few calls behind.
+`/codes` is never called in Phase 1.
 
 ### `requests` (the request log)
 

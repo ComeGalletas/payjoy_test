@@ -802,6 +802,13 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from P1-05): check `MinorUnits` against the live codes too (every quoted code should have
   an exponent; unknown codes fall back to 2), and close the cold-start allow-list limit (ADR 0012
   amendment, known limits).
+  *DONE 2026-10-22: MVP delivered. The lead ran the real-key steps (owner-authorized, one-time) on a
+  new `api/var/app.db`: one completed session per channel (CLI and widget), and quota used 3 calls
+  (one `/latest/USD`, two `/quota`, which upstream counts). The by-hand widget check, both embeds
+  from a second origin, and the backup and restore passed; the owner registered, ran and removed
+  the prune task. The live-code follow-ups were PR #28 (two rounds): `FallbackCurrencies` and
+  `MinorUnits` cover the 166 live codes, and no dependency had a newer release. Decisions in the
+  ADR 0012 and 0011 third amendments and the ADR 0001 note.*
 
 ### Phase 2 — LLM normalizer (feature-flagged)
 
@@ -968,6 +975,12 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     known limit (ADR 0024), not fixed: the seed's raw session INSERT and its template choice [16].
     Owner's call: make `Env::get` prefer the process environment, so the demo server needs no
     `variables_order` option (ADR 0024).
+  - (P1-10) At each release, recapture the live codes (update the fixture, its count, date and
+    sha256) with the dependency check, since nothing detects a code upstream adds; give the
+    sha256 assertion in `P1_10_LiveCodesTest` a failure message that says to recapture. Owner's
+    call: whether to offer the withdrawn currencies upstream still quotes (ANG, BGN, HRK, SLL,
+    ZWL). Still untried by hand: the S4U form of the prune task, `schtasks --%`, cron, and the
+    `sqlite3` lines (not installed on the dev host).
 
 ## 11. Working agreements for the agent
 

@@ -569,8 +569,8 @@ the IP's automatic block (`block.error_responses`); on a broken one it is a 500.
 says nothing else. With `Authorization: Bearer <ADMIN_TOKEN>`, `/health` adds the database, rate
 table, breaker and quota details; a wrong token gets 401, which counts toward a block like any
 4xx. Point monitors at the public view: the admin view may ask upstream's `/quota` once per
-`health.quota_cache_minutes` (60), and whether upstream counts those calls against the monthly
-quota is not yet known (ADR 0012 second amendment).
+`health.quota_cache_minutes` (60), and upstream counts those calls against the monthly quota:
+polling it hourly would use about 744 of the 1,500 calls a month (ADR 0012 third amendment).
 
 ## 11. Configuration
 
