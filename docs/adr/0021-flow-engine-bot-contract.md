@@ -75,10 +75,10 @@ which the tester and judge accepted.
 7. **Expiry sweep.** `Flow/SessionSweeper` closes open sessions past `expires_at` as
    `bot.session_abandoned` with `BOT_SESSION_EXPIRED` and their last step. It needs only the
    session store and `Metrics`, not the flow file, so reports can sweep even if the YAML is
-   broken (`App::sessionSweeper()`). One sweep (up to 500 sessions) is one transaction and rolls
-   back on any exception; a failed event write is swallowed by `Metrics`, so the session still
-   closes. If another connection holds the write lock, the sweep is skipped after the
-   busy timeout and the message is still answered.
+   broken (`App::sessionSweeper()`). One sweep (up to 500 sessions; reports repeat it, see
+   "Amendment") is one transaction and rolls back on any exception; a failed event write is
+   swallowed by `Metrics`, so the session still closes. If another connection holds the write
+   lock, the sweep is skipped after the busy timeout and the message is still answered.
 8. **Events.** `bot.session_start` (step `greet`, meta `flow`); `bot.step` (ok, or the
    `VALIDATION_*` or `UPSTREAM_UNSUPPORTED_CODE` code with `reason`, `retry` and `via: convert`
    when a conversion re-asked the step); `bot.session_completed` (meta `template`, `stale`;
@@ -133,12 +133,13 @@ which the tester and judge accepted.
 
 ## Amendment (2026-10-22): completion meta and report sweeps
 
-Recorded from P1-08 (PR #23, ADR 0023); owner decision 4.
+Recorded from P1-08 (PR #23, ADR 0023). The first item is owner decision 4; the sweep loop came
+from the co-leads' round-2 brief and the placement rules from their round-3 brief.
 
 - `bot.session_completed` meta adds `rate_scaled` and `rate_as_of`, the stored rate the result
   step's conversion used (ADR 0011 second amendment).
 - Reports sweep with `App::sessionSweeper()` before counting, repeating while a pass closes a full
   batch of 500, at most 20 passes. The sweep on `/bot/message` (item 7) still runs one batch.
 - Reports place a session that was closed without its end event by its `sessions` row, and a
-  session that ended at a step outside the flow's order at the known step after its furthest
-  answer (ADR 0023 item 7).
+  session that ended at a step outside the flow's order at the step after its furthest accepted
+  answer, at most `installments` (ADR 0023 item 7).

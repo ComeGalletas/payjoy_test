@@ -136,6 +136,7 @@ accepted.
 Recorded from P1-08 (PR #23, ADR 0023).
 
 - `GET /reports?format=csv` answers a `TextResponse` (`text/csv; charset=utf-8`, attachment,
-  `nosniff`, `no-store`), the third non-envelope response. The INV-04 route-table test now covers
-  `/reports` and `/health` and allows the CSV report as the only non-envelope answer besides the
-  widget routes. Errors on `/reports`, a bad `format` included, are envelopes.
+  `nosniff`, `no-store`), the third kind of non-envelope response, after the widget files and the
+  204 `/favicon.ico`. The INV-04 route-table test now covers `/reports` and `/health` and allows
+  the CSV report as the only non-envelope answer besides the widget files and `/favicon.ico`.
+  Errors on `/reports`, a bad `format` included, are envelopes.

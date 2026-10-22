@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-22
 - **Deciders:** owner
-- **Relates to:** 0011, 0012, 0016, 0019, 0021, 0022
+- **Relates to:** 0011, 0012, 0016, 0017, 0019, 0021, 0022
 
 ## Context
 
@@ -16,23 +16,25 @@ ADR 0019 amendment, the quota ones in the ADR 0012 second amendment and the stor
 ADR 0011 second amendment; this ADR covers the reports.
 
 The round-1 tester found that the report sweeps at most 500 expired sessions, that `9999-12-31`
-crashes into a 500, that labels copied from events can show a seeded IP or key, and that a `;`
-opens a formula in a semicolon-locale spreadsheet. The round-1 judge found that the funnel's step
-rows don't add up. The owner chose the full round 2, whose brief required the year cap (item 1),
-the cents range check (item 4), the bounded sweep (item 5), funnel rows that add up (item 6), the
-allow-lists (item 8), the semicolon-safe CSV (item 9) and the `/health` rules (ADR 0019
-amendment). After round 2 the owner asked for a short round 3 and renamed the funnel field
-`answered` to `passed`; the co-leads' round-3 brief covered the step pattern and the `other` count
-(item 8) and the placement rules (item 7). How each
-is built, and everything else below, is the builder's design, which the tester and judge
-accepted.
+crashes into a 500, that labels copied from events can show a seeded IP or key, that a `;` opens
+a formula in a semicolon-locale spreadsheet, that a digit-only step crashes the table and that
+cents sums can overflow to a float. The round-1 judge found that the funnel's step rows don't add
+up. The owner chose the full round 2; the co-leads' round-2 brief, from the tester's and judge's
+findings, required the year cap (item 1), the cents range check (item 4), the bounded sweep
+(item 5), funnel rows that add up (item 6), the label allow-lists and string step labels
+(item 8), the semicolon-safe CSV (item 9) and the `/health` rules (ADR 0019 amendment). After
+round 2 the owner asked for a short round 3 and renamed the funnel field `answered` to `passed`;
+the co-leads' round-3 brief covered the step pattern and the `other` count (item 8) and the
+placement rules (item 7). How each is built, and everything else below, is the builder's design,
+which the tester and judge accepted.
 
 ## Decision
 
 1. **Period (owner decision).** `from` and `to` are `YYYY-MM-DD` dates in `reports.timezone`,
    both days included, in years 1970 to 9998 (the period ends at the start of the day after `to`,
-   which must still have a four-digit year). Missing values default to the last 7 days, today
-   included; a period is at most 366 days. Days are counted on calendar dates and each day's start
+   which must still have a four-digit year). A missing `to` is today in the zone and a missing
+   `from` is six days before `to`, so the default is the last 7 days; a period is at most 366
+   days. Days are counted on calendar dates and each day's start
    is taken in the zone, so a day can be 23 or 25 hours. A bad query answers 400 `BAD_REQUEST`
    with a fixed operator text, which widens that code beyond `/bot/message` (PLAN §5).
 2. **Sections.** `summary`, `days`, `currencies`, `countries`, `funnel` (per channel and step),
@@ -55,13 +57,14 @@ accepted.
 5. **Sweep first.** The report sweeps expired sessions before counting (ADR 0021 item 7),
    repeating while a pass closes a full batch of 500, at most 20 passes. At the bound, or when the
    sweep fails, the report still runs and carries a note.
-6. **Funnel (owner decision; `passed` named by the owner in round 3).** The funnel follows the
+6. **Funnel (owner decision; `passed` by owner decision in round 3).** The funnel follows the
    cohort of sessions that started in the period, per channel, to one final position: completed at
    `result`, abandoned at a step, open at its `sessions.step`, or `never_answered` (at `amount`)
-   for a session that never sent an answer. Per step:
+   for an ended session with no answer at all, valid or not (no `bot.step` event). Per step:
    - `reached`: final position at this step or a later one;
    - `passed`: final position past this step, which is the next row's `reached` (a session a
-     conversion retry sent back counts at the earlier step); on `result`, `completed` replaces it;
+     conversion retry sent back counts at the earlier step); on `result`, `completed` replaces it,
+     and that row has no `retries`;
    - `abandoned`, `never_answered` and `open`: final position at this step;
    - `retries`: failed answers at this step, conversion retries included.
 
@@ -69,17 +72,21 @@ accepted.
    `started = completed + abandoned + never_answered + open` per channel. Never-answered sessions
    are still `bot.session_abandoned` events in `summary` and `days`.
 7. **Placement rules (round 3).**
-   - A session that ended at a step outside the flow's order (a renamed step, `other` or a null
-     step) is placed at the known step after the furthest one it answered, never at `result`, so
-     `amount.reached` equals `started`. That step keeps its own row, for its retries.
+   - A session that ended, or still waits, at a step outside the flow's order (a renamed step,
+     `other` or a null step) is placed at the step after the furthest known step it answered
+     correctly (`amount` if none), but never past `installments`, so `amount.reached` equals
+     `started`. The out-of-flow step still gets its own row, which shows only its retries
+     (`reached` 0). An open session with no `sessions` row is placed the same way.
    - A session whose `sessions` row is closed but whose end event was never written (INV-07) is
      counted by the row's status: completed, or abandoned at the row's step with code `other`
-     (`never_answered` if it never answered).
+     (`never_answered` if it has no `bot.step` event). That `other` isn't in the label note's
+     count.
 
    Each rule adds a note when it applies.
-8. **Labels.** Every label taken from an event is checked against an allow-list, and anything
-   else is counted as `other`, with a note giving the count (values only the funnel folds and
-   error events with no code included):
+8. **Labels.** Every label taken from an event is checked against its label allow-list, and
+   anything else is counted as `other`, with a note giving the count (values only the funnel
+   folds and error events with no code included). For currency this is a pattern, not the rate
+   table's allow-list:
    - endpoint: the keys of `ExchangeRateClient::ENDPOINTS`;
    - error codes and `refresh_error`: `ErrorCodes`;
    - `block_source`: `auto` or `manual` (`none` when null); block `reason`: `rate_limit_hits`,
@@ -100,8 +107,9 @@ accepted.
 10. **Access.** `/reports` sits behind `AdminAuth` only (an unset token refuses everything) and
     has no rate limit until P3-01 (owner decision; ADR 0016 fourth amendment).
 11. **CLI (owner decision).** `bin/report.php [--from] [--to] [--format=table|csv|json]`, default
-    `table`. Exit 0 when done (`--help` too), 1 on failure with only the exception class on
-    stderr, 2 for usage errors. A missing SQLite file is refused and never created.
+    `table`. Exit 0 when done (`--help` and `-h` too), 1 on failure with only the exception class,
+    or a fixed text for a missing database file, on stderr, and 2 for usage errors. A missing
+    SQLite file is refused and never created.
 
 ## Consequences
 
@@ -117,11 +125,14 @@ accepted.
   - The "outside the flow" note also counts open sessions waiting on an unknown step, although
     its text says "ended" (L-04).
   - Renaming or removing a map country or an error code later relabels older events as `other`.
+  - Lowering `amount.max` later (it becomes editable in P3-02) counts older conversions above it
+    as unreadable.
   - A report that runs between a session's row save and its end-event write (ADR 0021 item 6)
     shows a spurious "closed without an end event" note. A session whose end event is missing and
     whose row was pruned counts as open.
   - Report cost grows with the period's events; no index was added.
-  - A `rate_scaled` above 2^53 (a rate above about 900,000 per USD) can't be read exactly as a
-    JavaScript Number, so a JavaScript consumer (the P3 dashboard) must read it as text.
+  - A `rate_scaled` above 2^53 (a rate above about 900,000 per USD, which IRR already is) can't
+    be read exactly as a JavaScript Number, so a JavaScript consumer (the P3 dashboard) must read
+    it as text.
   - `ReportQuery` is about 900 lines; split it into per-section parts before the P3 rollups
     (L-04).

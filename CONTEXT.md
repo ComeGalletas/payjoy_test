@@ -31,7 +31,7 @@ name, add it here in the same commit that introduces it.
 | **message_for_user** | Generic, safe text front-ends show verbatim. Never contains upstream bodies or secrets. |
 | **error code** | A stable string from `Metrics/ErrorCodes` (`VALIDATION_AMOUNT`, `UPSTREAM_QUOTA`…). |
 | **upstream** | ExchangeRate-API. Only `Rates/ExchangeRateClient` talks to it. |
-| **upstream call** | One HTTP request to upstream. Every rate lookup writes an `upstream.call` event with result `hit`, `miss`, `stale` or `blocked`; only `miss` and `stale` lookups called upstream, except those with `reason=no_key`. Each event carries `meta.endpoint` (`latest` or, since P1-08, `quota`); reports count calls per endpoint. A `/quota` lookup skipped because the database can't be written is `blocked` with reason `not_writable`. |
+| **upstream call** | One HTTP request to upstream. Every rate or quota lookup writes an `upstream.call` event with result `hit`, `miss`, `stale` or `blocked`; only `miss` and `stale` lookups called upstream, except those with `reason=no_key`. Each event carries `meta.endpoint` (`latest` or, since P1-08, `quota`); reports count calls per endpoint. A `/quota` lookup skipped because the database can't be written is `blocked` with reason `not_writable`. |
 | **refresh** | One `/latest/USD` call that rewrites every row of `rate_cache`; happens only when `now ≥ next_update_unix` and the breaker is closed. |
 | **stored table** | The rows the last successful refresh wrote to `rate_cache` (`RateTable`): rates, `rate_as_of`, `next_update_unix`, `fetched_at`. |
 | **dropped currency** | A rate that a refresh skipped because it failed a check; listed in the `miss` event's `meta.dropped`, by code only when the key was a valid code. The rest of the table is still stored. |
@@ -46,7 +46,7 @@ name, add it here in the same commit that introduces it.
 | **code word** | An English word that is also a currency code (`CurrencySynonyms::CODE_WORDS`: `all cup kid mad mop sos top try`; `bob` left it when Bolivia was mapped, so it is the BOB code in any case). Typed in capitals it is the code (`TRY`); in any other case it is ambiguous (`try`, `Try`). |
 | **currency-country map** | PHP array (`CurrencyCountryMap`) linking country names to currencies. A country is recorded only when the user typed one. |
 | **admin token** | `ADMIN_TOKEN` from `.env`, sent only as `Authorization: Bearer`; unset means all admin requests are refused. On `/health`, only the Bearer scheme selects the admin view; other schemes get the public view. |
-| **unhealthy** | `/health`'s public 503 `UNHEALTHY`: the database is behind, corrupt, can't be opened or can't be written (ADR 0019 amendment). |
+| **unhealthy** | `/health`'s public 503 `UNHEALTHY`: the database is behind the code, has a corrupt schema version, can't be opened or can't be written (ADR 0019 amendment). |
 | **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` equals `REMOTE_ADDR`. |
 | **trusted proxy** | `TRUSTED_PROXY`: the one peer whose `X-Forwarded-For` header is believed. |
 | **rate-limit window** | A fixed one-minute UTC window (`window_start`) in which an IP's requests are counted against `ratelimit.per_minute`. |
@@ -103,14 +103,15 @@ name, add it here in the same commit that introduces it.
 | **migration** / **migration list** | One numbered schema change in the append-only list in `Db/Migrations`; run with `bin/migrate.php` (ADR 0020). |
 | **schema version** | `app_state.schema_version`, the last migration applied; the app refuses a database behind the code (ADR 0019). |
 | **prune** / **retention** | `bin/migrate.php --prune` deleting expired rows per the ADR 0016 amendment; `events` are kept. |
-| **funnel** | The report's funnel cohort per channel and step, by funnel position: `reached`, `passed`, `abandoned`, `never_answered`, `open` and `retries` per step, with `reached = passed + abandoned + never_answered + open` (`completed` replaces `passed` on `result`; ADR 0023). |
+| **funnel** | The report's funnel cohort per channel and step: `reached`, `passed`, `abandoned`, `never_answered` and `open` by funnel position, plus `retries` (failed answers at the step; none on `result`), with `reached = passed + abandoned + never_answered + open` (`completed` replaces `passed` on `result`; ADR 0023). |
 | **funnel cohort** | The sessions that started in the report period, followed to their end. |
-| **funnel position** | A cohort session's final step: where it completed (`result`), was abandoned, or still waits (`sessions.step`), or `amount` for a never-answered session. A session that ended at a step outside the flow's order is placed at the known step after its furthest answer (never `result`); one closed without an end event is placed by its `sessions` row. |
+| **funnel position** | A cohort session's final step: where it completed (`result`), was abandoned, or still waits (`sessions.step`), or `amount` for a never-answered session. A session that ended, or waits, at a step outside the flow's order is placed at the step after its furthest accepted answer, at most `installments`; one closed without an end event is placed by its `sessions` row. |
 | **reached** / **passed** | Per funnel step: `reached` = final position at this step or later; `passed` = final position past this step (a session a conversion retry sent back counts at the earlier step). |
-| **never answered** | A session that ended with no `bot.step` at all; a funnel outcome of its own, though still a `bot.session_abandoned` event. |
+| **never answered** | A session that ended with no `bot.step` at all (not even a failed answer); a funnel outcome of its own, though still a `bot.session_abandoned` event. |
 | **report** | Output of `ReportQuery`, via `/reports` (JSON or CSV) or `bin/report.php` (table, CSV or JSON), over a report period (ADR 0023). |
 | **report period** | Whole days in `reports.timezone`, `from` to `to` both included, years 1970 to 9998, at most 366 days; the last 7 days by default. |
-| **other** (label) | A value from an event outside its allow-list; such values are counted together, and a note gives how many. |
+| **other** (label) | A value from an event outside its label allow-list; such values are counted together, and a note gives how many. (The `other` code a report gives a session closed without its end event isn't in that count.) |
+| **label allow-list** | The fixed set a report label must belong to (ADR 0023 item 8), such as `ErrorCodes`, or `^[A-Z]{3}$` for currency; not the rate table's allow-list. |
 | **unreadable amount** | Conversion cents that aren't an integer from 1 to `amount.max` × 100; counted in `summary.unreadable_amounts`, never summed. |
 | **request kind** | The report's split of the request log: `api`, `widget_asset` or `favicon`. |
 | **rollup** | Phase 3: one `daily_rollups` row per day, built by `bin/rollup.php`. |

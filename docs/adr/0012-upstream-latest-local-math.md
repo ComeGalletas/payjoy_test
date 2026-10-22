@@ -32,7 +32,8 @@ the key.
 
 ## Consequences
 
-- Quota use depends on time, not traffic, and can't be burned by a script.
+- Quota use depends on time, not traffic, and can't be burned by a script (but see the `/quota`
+  known limit in "Second amendment").
 - One code path for conversion.
 - Users may see a result based on a rate up to `rates.max_stale_hours` old, clearly marked.
 
@@ -132,13 +133,16 @@ in round 2.
 
 ## Second amendment (2026-10-22): the `/quota` cache for the admin health view
 
-Recorded from P1-08 (PR #23, ADR 0023); owner decisions 2 and 3.
+Recorded from P1-08 (PR #23, ADR 0023). Showing both dates and `meta.endpoint=quota` are owner
+decisions 2 and 3; the skip while the database can't be written came from the co-leads' round-2
+brief (named `not_writable` in round 3); the rest is the builder's design.
 
 - `Rates/QuotaCache` calls `/quota` only for the admin `/health` view, at most once per
-  `health.quota_cache_minutes`, and caches failures too. It doesn't call during an auth block, or
-  while the database can't be written: the view then shows the last stored answer with
-  `source: "blocked"`, and the event reason is `not_writable` (a read-only database, or a write
-  lock held past the busy timeout). A `/quota` failure never trips the breaker.
+  `health.quota_cache_minutes`, and caches failures too. It doesn't call during an auth block
+  (event reason `auth`), or, once the cached answer has expired, while the database can't be
+  written (event reason `not_writable`: a read-only database, or a write lock held past the busy
+  timeout); either way the view shows the last stored answer with `source: "blocked"`. A `/quota`
+  failure never trips the breaker.
 - Each lookup writes an `upstream.call` event with `meta.endpoint=quota` and result `hit`, `miss`
   or `blocked`, so reports count real calls per endpoint (ADR 0023). `/codes` has no caller in
   Phase 1.
@@ -146,5 +150,7 @@ Recorded from P1-08 (PR #23, ADR 0023); owner decisions 2 and 3.
   today (UTC), as `upstream_refresh_date`, and, while a quota block is open, the breaker's end on
   the 1st (UTC) as `breaker_quota_block_until`. The breaker still ends quota blocks on the 1st.
 - **Known limits:** the cache isn't locked, so two admin views at the same moment can each call
-  `/quota`. Whether upstream counts `/quota` calls against the quota is unverified, so P1-10 reads
-  quota used from the report's `latest` row.
+  `/quota`. Whether upstream counts `/quota` calls against the quota is unverified. If it does, a
+  monitor polling the admin view adds up to one call per `health.quota_cache_minutes` (about 744
+  a month at 60) to a 1,500 budget. P1-10 checks this, and reads quota used from the report's
+  `latest` row.

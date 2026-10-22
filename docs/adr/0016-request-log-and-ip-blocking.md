@@ -205,14 +205,15 @@ is a known limit recorded by the co-leads' round-3 brief.
 
 ## Fourth amendment (2026-10-22): `/reports` and `/health`
 
-Recorded from P1-08 (PR #23, ADR 0023). The first item is an owner decision (2026-10-22).
+Recorded from P1-08 (PR #23, ADR 0023). The first item is an owner decision (2026-10-22); the
+other two are consequences and the builder's design.
 
 - Neither `/reports` nor `/health` has a rate limiter, a known limit until P3-01, like the widget
   routes. `RateLimiter` writes to the database and fails closed, so it would break `/health` on a
-  read-only database. A refused `/reports` request is a 401, which counts toward
-  `block.error_responses`.
+  read-only database. A refused `/reports` or admin `/health` request is a 401, which counts
+  toward `block.error_responses`.
 - On a healthy database, `HEAD /health` is a 404 that counts toward `block.error_responses`, so
   monitors use `GET` (P1-09).
 - Reports split the request log by kind (`api`, `widget_asset`, `favicon`), status class and
-  blocked, and count `ip.block` and `ip.unblock` events by source and reason. No report shows an
-  IP or a path.
+  blocked, and count `ip.block` events by source and reason and `ip.unblock` events by source.
+  No report shows an IP or a path.

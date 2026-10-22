@@ -83,7 +83,7 @@ Reasons and consequences are in the ADR named in each row.
 | Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
 | Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
 | Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
-| Reports | `/reports` and `bin/report.php` share one query: a cohort funnel, allow-listed labels (anything else is `other`), integer money, a formula-safe long-format CSV. | 0023 |
+| Reports | `/reports` and `bin/report.php` share one query: a cohort funnel, labels checked against label allow-lists (anything else is `other`), integer money, a formula-safe long-format CSV. | 0023 |
 | Widget | Built-in `static` front-end at `/bot/widget`: lazy open, strict CSP with Trusted Types, embeddable by iframe or `<script>`. | 0022 |
 | Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; from P1-04 also `disable_functions=curl_exec,curl_multi_exec` and Guzzle handler stubs. | 0018 |
 | Upstream | One `/latest/USD` call per upstream refresh; always compute `amount × rate` locally; stale fallback; stop calling after quota or key errors, and back off 1 to 60 minutes after any other failed refresh. See §3b. | 0012 |
@@ -332,7 +332,7 @@ Error codes (stable strings) and HTTP status:
 | `BAD_REQUEST` | 400 (an unreadable `/bot/message` body, ADR 0021; a bad `/reports` query, ADR 0023) |
 | `UPSTREAM_UNSUPPORTED_CODE` | 400; 503 while an `unsupported-code` backoff is open (from P1-05, ADR 0012 amendment item 9) |
 | `UPSTREAM_TIMEOUT`, `UPSTREAM_QUOTA`, `UPSTREAM_AUTH`, `UPSTREAM_MALFORMED` | 503 |
-| `UNHEALTHY` | 503 (public `GET /health` only, when the database is behind, corrupt, can't be opened or can't be written; ADR 0019 amendment) |
+| `UNHEALTHY` | 503 (public `GET /health` only, when the database is behind the code, has a corrupt schema version, can't be opened or can't be written; ADR 0019 amendment) |
 | `ADMIN_UNAUTHORIZED` | 401 |
 | `IP_BLOCKED` | 403 |
 | `NOT_FOUND` | 404 |
@@ -349,7 +349,7 @@ Error codes (stable strings) and HTTP status:
 | `POST /bot/message {session_id?, text}` → `{session_id, reply, buttons?, step, done}` | 1 | Static flow engine; the contract every channel uses. A JSON object of at most 4 KiB with `Content-Type: application/json`, else 400 `BAD_REQUEST`; `buttons` only while the waiting step has them; `done` once completed or abandoned; `reply` empty only with `done` for a double-submit on a closed session (ADR 0021) |
 | `GET /bot/widget` | 1 | Built-in chat page, with `/bot/widget.js`, `.css` and `.svg`; `GET /favicon.ico` answers 204 (ADR 0022) |
 | `GET /reports?from&to&format=json\|csv` (admin) | 1 | Summary, days, currencies/countries, funnel by channel and step, errors by code, upstream calls per endpoint, request log by kind, IP blocks, notes. `from`/`to` are `YYYY-MM-DD` in `reports.timezone`, both included, years 1970–9998, default the last 7 days, at most 366; a bad query answers 400 `BAD_REQUEST`; `no-store`; sweeps expired sessions first (ADR 0023) |
-| `GET /health` | 1 | Public: `status` only, or 503 `UNHEALTHY` when the database is unusable; `GET /health` skips the database open before routing (ADR 0019 amendment). Admin (Bearer scheme only; other schemes get the public view): always 200 with database, rate-table ages, breaker state with `failures`, and quota (cached `health.quota_cache_minutes`, both reset dates, no call while the database can't be written; ADR 0012 second amendment) |
+| `GET /health` | 1 | Public: `status` only, or 503 `UNHEALTHY` when the database is unusable; `GET /health` skips the database open before routing (ADR 0019 amendment). Admin (Bearer scheme only; other schemes get the public view; a wrong or malformed Bearer token gets 401): always 200 with database, rate-table ages, breaker state with `failures`, and quota (cached `health.quota_cache_minutes`, both reset dates, no call while the database can't be written; ADR 0012 second amendment) |
 | `POST /normalize {text, expecting}` | 2 | LLM extraction → validated fields or `ok:false` |
 | `POST /events` (per-channel ingest token) | 3 | External channels push funnel events |
 | `GET /config`, `PUT /config` (admin) | 3 | Runtime settings, validated per key; every change logged |
@@ -763,8 +763,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   Also (from P1-08): `docs/REPORTS.md` covers the sections, the CSV columns, every report note
   (outside the flow, closed without an end event, `other`, unreadable amounts, the sweep bound,
   request-log retention, no stored rate) and how to read the funnel identity and `passed`
-  (ADR 0023); `INSTALL_LOCAL.md` says monitors must use `GET /health` (`HEAD` is a counted 404)
-  and that `/health` is the one route that answers on an old schema (503 `UNHEALTHY`);
+  (ADR 0023); `INSTALL_LOCAL.md` says monitors must use `GET /health` (`HEAD` is a counted 404 on
+  a healthy database) and that `GET /health` is the one request that answers on an old schema
+  (503 `UNHEALTHY`);
   `seed_demo` writes canonical labels and `rate_scaled`/`rate_as_of`, or demo data shows `other`
   and the "no stored rate" note.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
@@ -774,7 +775,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
   origin listed in `cors.allowed_origins` (never tried by hand in P1-07). For quota used, read the
   report's `latest` endpoint row: `/quota` calls are counted apart, and whether upstream counts
-  them is unverified (ADR 0012 second amendment).
+  them is unverified (ADR 0012 second amendment). Check it: read the admin `/health` view twice,
+  more than `health.quota_cache_minutes` apart with no rate refresh in between, compare the quota
+  left, and log the result.
   *Acceptance:* owner sees one completed session per channel in `/reports`, and quota used is ≤ 3
   calls.
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
@@ -821,6 +824,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   `add_header`; rate-limit or cache the widget's static files; answer `HEAD`,
   `/apple-touch-icon*.png` and `/robots.txt` without a counted 404 (ADR 0016 third amendment,
   ADR 0022).
+  Also (from P1-08): rate-limit `/reports` and `/health` (in nginx or the app), or decide they
+  stay open; a limiter must not break `/health` on a read-only database (ADR 0016 fourth
+  amendment).
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,
@@ -924,7 +930,10 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     `bin/report.php`'s timezone from `App`'s config once config is editable (P3); add an
     `AppState` helper for the three `app_state` upserts (`Migrator`, `UpstreamBreaker`,
     `QuotaCache`) before L-03. `CsvWriter` doesn't guard a segment that starts with `"` or with a
-    non-ASCII space before `=`; reports can't produce either.
+    non-ASCII space before `=`; reports can't produce either. Drop `Metrics/ReportFormatter.php`
+    from `RoundingRuleTest`'s allowed files, since it no longer rounds (the owner may then narrow
+    INV-01). Fix two stale code comments: `QuotaStatus` says `blocked` happens only during an
+    auth block, and `App.php` says every request fails closed on an old schema.
 
 ## 11. Working agreements for the agent
 

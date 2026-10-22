@@ -100,5 +100,5 @@ Recorded from P1-08 (PR #23, ADR 0023); owner decision 4.
   unaffected). A conversion's display can now be recomputed from its cents and its rate.
 - Rows written before P1-08 have neither; reports count them in `summary.conversions_missing_rate`
   with a note. Phase 1 reports don't recompute converted amounts.
-- A `rate_scaled` above 2^53 (a rate above about 900,000 per USD) can't be read exactly as a
-  JavaScript Number, so a JavaScript consumer must read it as text.
+- A `rate_scaled` above 2^53 (a rate above about 900,000 per USD, which IRR already is) can't be
+  read exactly as a JavaScript Number, so a JavaScript consumer must read it as text.
