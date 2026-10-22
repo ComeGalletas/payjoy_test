@@ -4,6 +4,57 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — P1-07 Widget (PR #21, head 37fb584)
+
+- PR #20 (P1-06 close-out) merged by the owner as `c99bb15`, and PR #19 (P0-07, deferred) as
+  `8816441`.
+- **Round 1** (`52a1344`). Builder: DONE. It built the widget in `api/resources/widget/` at
+  `GET /bot/widget` with its own JS and CSS routes, a `Response` interface with `TextResponse`, a
+  CSP, the INV-01 widget scan, `X-Powered-By` removed and a strict Bearer parse. Unit+Acceptance
+  went from 1688 to 1754 tests; guards stayed at 80.
+- Tester round 1: FAIL. A browser's `/favicon.ico` request is a 404 that counts toward
+  `block.error_responses`, so about 100 page views from one shared IP blocked it for an hour
+  (reproduced). Removing the in-flight lock or the empty-reply skip passed the gate. Judge round 1:
+  APPROVE WITH NITS: the widget routes have no rate limit, INV-04 had no check for the new response
+  type, and the forbidden list missed `Function(`.
+- Lead by-hand check (PLAN acceptance), in the built-in browser with `APP_ENV=test`, an empty key,
+  a scratch database and the gate flags: a typed `<script>…</script><img src=x onerror=…>` showed
+  as text, with no element created and no CSP error.
+- Owner decisions: favicon → an SVG icon route plus `/favicon.ico` answering 204; the widget routes
+  stay unlimited until P3-01; the tester's Node harness goes into the suite; lazy open.
+- **Round 2** (`5bdcfe2`): the four decisions, the INV-04 route-table test, a wider scan, a CSP with
+  Trusted Types, `AllowedOrigins`, accessibility fixes, `BuiltInServer` flags; 1772 tests. The
+  session restarted during the build; the builder redid round 2 from a clean worktree. Tester:
+  PASS (150 page views, no block; Trusted Types enforced; 23 hostile origins handled). Judge:
+  APPROVE WITH NITS. Lead's browser check passed again: no request on load, one open on first
+  focus, script text shown as text, Trusted Types blocking `innerHTML`.
+- Owner decisions: a short round 3 for test and scan hardening; the start button reads "Start
+  chat", and the rest of the chrome wording is confirmed.
+- **Round 3** (`37fb584`): a 30 s deadline and a 61-check minimum on the harness run, two more
+  harness checks, more scan patterns (frozen list), "Start chat". 17 of 17 widget mutations caught.
+  Tester: PASS; judge: APPROVE.
+- Co-leads: both approved. The lead posted the approval comment (13:11:07 UTC), then merged at the
+  reviewed head as `1b9b0e7` (13:11:23 UTC). The first merge command was refused because it gave a
+  short SHA to `--match-head-commit`; it was rerun with the full SHA.
+- **Process.** No guard or hook blocked any agent. The builder broke the "one plain shell command
+  per tool call" rule twice in round 1 (a `cd … && …` read and a `cmd /c "cd /d … && make …"` gate
+  run), and the tester twice in its first commands; both were read-only or gate runs. Rounds 2 and
+  3 kept the rule.
+- Upstream: 0 real calls (every test uses the mocked handler; the browser checks never reached the
+  result step's upstream lookup).
+- **GUARDRAILS wording (for the owner; `docs/GUARDRAILS.md` unchanged).** INV-01's enforcing layer
+  says "a `make check` grep" for `round(` / `number_format(` and, in the widget, `toFixed`,
+  `Intl.NumberFormat` and `Math.round`. It is now `RoundingRuleTest` (PHP in `api/src/`, since
+  P1-06) and, for the widget, Trusted Types, the Node harness and the scan in `P1_07_WidgetTest`.
+  INV-04's exceptions now include the widget's script, style sheet and icon and the 204
+  `/favicon.ico`, checked by a route-table test. The Node harness runs outside INV-06's network
+  layers (ADR 0018 amendment). The GR-002 secret scan is still not built.
+- Lead docs: ADR 0022 (widget serving, embedding and non-JSON responses); ADR 0016 third
+  amendment (favicon, unthrottled widget routes, other 404 paths); ADR 0018 amendment (test
+  server, Node harness); ADR 0021 note (lazy open); PLAN §3, §4, §6, §7, P1-07 done note,
+  follow-ups in P1-08, P1-09, P1-10, P3-01, P3-06 and L-04; CONTEXT terms (widget, widget chrome,
+  embed, lazy open).
+
 ## 2026-10-21 — P1-06 Flow engine and `POST /bot/message` (PR #18, head 8887acb)
 
 - PR #17 (P1-05 close-out) merged by the owner as `53199b1`.

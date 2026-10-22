@@ -1,7 +1,8 @@
 # 0016 — Request log and IP blocking
 
 - **Status:** Accepted (amended 2026-10-21: retention boundaries and block rows, see "Amendment";
-  amended again 2026-10-21: what counts toward a block, events, see "Second amendment")
+  amended again 2026-10-21: what counts toward a block, events, see "Second amendment"; note
+  2026-10-22: widget routes, see "Third amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -182,8 +183,20 @@ and 3, is the builder's design, which the tester and judge accepted.
   - `ClientIp` doesn't canonicalize addresses, so a manual block typed in another form than the
     proxy's `X-Forwarded-For` hop doesn't match it (P3-01).
   - A blocked cross-origin request gets no CORS headers, so a browser sees a network error, not
-    the 403 text (P1-07).
+    the 403 text; the widget shows its generic failure text for it (ADR 0022).
   - The thresholds are still first guesses, to be tuned against real traffic.
   - Accepted, no task: an IPv6 client can rotate addresses inside its /64; escapes the client sent
     aren't normalized (`%c3%a9` and `%C3%A9` log as different paths); an unblock in the same second
     as the block doesn't forgive the requests of that second.
+
+## Third amendment (2026-10-22): widget routes
+
+Recorded from P1-07 (ADR 0022); owner decisions.
+
+- `GET /favicon.ico` answers 204, so a browser's icon request no longer counts toward
+  `block.error_responses` (a 404 there got a shared IP blocked after about 100 page views).
+- The widget's static routes (`/bot/widget`, `.js`, `.css`, `.svg`) have no rate limiter and a 2xx
+  never counts toward a block, so one IP can request them without limit, each hit writing a
+  `requests` row. This is a known limit until P3-01, when nginx serves or limits static files.
+- Other paths browsers and crawlers ask for, such as `/apple-touch-icon*.png` and `/robots.txt`,
+  still 404 and count toward `block.error_responses` (P3-01, or threshold tuning).
