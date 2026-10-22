@@ -17,6 +17,12 @@ use RuntimeException;
  * Guzzle message (which holds the URL and the key) and no upstream body can reach a log, an
  * event or a response through it. `httpStatus` is upstream's status code, when one was the
  * reason.
+ *
+ * `duringUnsupportedCodeBackoff` is set by RateCache when the error is answered while a breaker
+ * backoff opened by `unsupported-code` on `/latest/USD` is open, including the failed refresh
+ * that opened it (ADR 0012 amendment item 9). Only UPSTREAM_UNSUPPORTED_CODE can carry it; it
+ * turns that code's 400 into ErrorCodes' backoff answer (503, generic upstream text). A
+ * currency missing from a usable table (`not_in_table`) never carries it.
  */
 final class UpstreamError extends RuntimeException
 {
@@ -32,9 +38,13 @@ final class UpstreamError extends RuntimeException
         public readonly string $errorCode,
         public readonly string $reason,
         public readonly ?int $httpStatus = null,
+        public readonly bool $duringUnsupportedCodeBackoff = false,
     ) {
         if (!in_array($errorCode, self::CODES, true)) {
             throw new InvalidArgumentException('Not an upstream error code');
+        }
+        if ($duringUnsupportedCodeBackoff && $errorCode !== ErrorCodes::UPSTREAM_UNSUPPORTED_CODE) {
+            throw new InvalidArgumentException('Only UPSTREAM_UNSUPPORTED_CODE is answered differently during its backoff');
         }
         if (preg_match('/^[a-z][a-z0-9_-]{0,39}$/D', $reason) !== 1) {
             throw new InvalidArgumentException('An upstream error reason is a short fixed word');
@@ -47,11 +57,23 @@ final class UpstreamError extends RuntimeException
      */
     public function messageForUser(): string
     {
-        return (string) ErrorCodes::messageForUser($this->errorCode);
+        return (string) ErrorCodes::messageForUser($this->errorCode, $this->duringUnsupportedCodeBackoff);
     }
 
+    /**
+     * The HTTP status the API answers with: the code's own, or 503 for UPSTREAM_UNSUPPORTED_CODE
+     * during its backoff.
+     */
     public function status(): int
     {
-        return (int) ErrorCodes::httpStatus($this->errorCode);
+        return (int) ErrorCodes::httpStatus($this->errorCode, $this->duringUnsupportedCodeBackoff);
+    }
+
+    /**
+     * A copy marked as answered during an open `unsupported-code` backoff.
+     */
+    public function duringBackoff(): self
+    {
+        return new self($this->errorCode, $this->reason, $this->httpStatus, true);
     }
 }

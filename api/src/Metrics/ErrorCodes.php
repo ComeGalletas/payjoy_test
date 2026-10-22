@@ -65,6 +65,15 @@ final class ErrorCodes
     ];
 
     /**
+     * The one code with a second answer: UPSTREAM_UNSUPPORTED_CODE while a breaker backoff
+     * opened by `unsupported-code` on `/latest/USD` is open (ADR 0012 amendment item 9, owner
+     * decision 2026-10-21) answers 503 with the generic upstream text, because the fault is
+     * upstream's, and a 400 would count toward automatic blocking (ADR 0016). Its entry in
+     * TABLE stays 400: a currency missing from a usable table (`not_in_table`) still gets it.
+     */
+    private const DURING_UNSUPPORTED_CODE_BACKOFF = [503, self::UPSTREAM_UNAVAILABLE_MESSAGE];
+
+    /**
      * @return list<string>
      */
     public static function all(): array
@@ -79,27 +88,43 @@ final class ErrorCodes
 
     /**
      * The HTTP status for an API error, or null for codes that are recorded as events only.
+     *
+     * $duringUnsupportedCodeBackoff selects the backoff answer (503, see
+     * DURING_UNSUPPORTED_CODE_BACKOFF); it is accepted for UPSTREAM_UNSUPPORTED_CODE only, so no
+     * other code can change its status.
+     *
+     * @throws InvalidArgumentException for an unknown code, or the flag on another code
      */
-    public static function httpStatus(string $code): ?int
+    public static function httpStatus(string $code, bool $duringUnsupportedCodeBackoff = false): ?int
     {
-        return self::entry($code)[0];
+        return self::entry($code, $duringUnsupportedCodeBackoff)[0];
     }
 
     /**
-     * The generic text front-ends show verbatim, or null for codes with no API response.
+     * The generic text front-ends show verbatim, or null for codes with no API response. The
+     * flag works as in httpStatus().
+     *
+     * @throws InvalidArgumentException for an unknown code, or the flag on another code
      */
-    public static function messageForUser(string $code): ?string
+    public static function messageForUser(string $code, bool $duringUnsupportedCodeBackoff = false): ?string
     {
-        return self::entry($code)[1];
+        return self::entry($code, $duringUnsupportedCodeBackoff)[1];
     }
 
     /**
      * @return array{int|null, string|null}
      */
-    private static function entry(string $code): array
+    private static function entry(string $code, bool $duringUnsupportedCodeBackoff): array
     {
         if (!self::isKnown($code)) {
             throw new InvalidArgumentException("Unknown error code: {$code}");
+        }
+        if ($duringUnsupportedCodeBackoff) {
+            if ($code !== self::UPSTREAM_UNSUPPORTED_CODE) {
+                throw new InvalidArgumentException("Only UPSTREAM_UNSUPPORTED_CODE has a backoff answer, not {$code}");
+            }
+
+            return self::DURING_UNSUPPORTED_CODE_BACKOFF;
         }
 
         return self::TABLE[$code];

@@ -75,6 +75,32 @@ final class JsonResponseTest extends TestCase
         self::assertStringContainsString('"message_for_user":"Too many installments for this amount."', $response->body());
     }
 
+    public function testOnlyUnsupportedCodeHasABackoffAnswer(): void
+    {
+        $response = JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, null, true);
+
+        self::assertSame(503, $response->status());
+        self::assertSame(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $response->errorCode());
+        self::assertSame(
+            ['ok' => false, 'error' => ['code' => 'UPSTREAM_UNSUPPORTED_CODE', 'message_for_user' => 'Exchange rates are temporarily unavailable. Please try again later.']],
+            json_decode($response->body(), true, flags: JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(400, JsonResponse::error(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE)->status());
+
+        // No other code can change its status.
+        foreach (ErrorCodes::all() as $code) {
+            if ($code === ErrorCodes::UPSTREAM_UNSUPPORTED_CODE) {
+                continue;
+            }
+            try {
+                JsonResponse::error($code, null, true);
+                self::fail("{$code} took the backoff answer");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
     public function testEventOnlyCodesCannotBeSent(): void
     {
         $this->expectException(LogicException::class);

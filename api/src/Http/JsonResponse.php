@@ -56,11 +56,16 @@ final class JsonResponse
     /**
      * An error envelope for a code from ErrorCodes, with that code's HTTP status. The message
      * defaults to the code's generic message_for_user.
+     *
+     * $duringUnsupportedCodeBackoff selects the one documented second answer: 503 and the
+     * generic upstream text for UPSTREAM_UNSUPPORTED_CODE while its backoff is open (ADR 0012
+     * amendment item 9). ErrorCodes accepts it for that code only, so no other code's status can
+     * be changed.
      */
-    public static function error(string $code, ?string $messageForUser = null): self
+    public static function error(string $code, ?string $messageForUser = null, bool $duringUnsupportedCodeBackoff = false): self
     {
-        $status = ErrorCodes::httpStatus($code);
-        $message = $messageForUser ?? ErrorCodes::messageForUser($code);
+        $status = ErrorCodes::httpStatus($code, $duringUnsupportedCodeBackoff);
+        $message = $messageForUser ?? ErrorCodes::messageForUser($code, $duringUnsupportedCodeBackoff);
         if ($status === null || $message === null) {
             throw new LogicException("Error code {$code} is recorded as an event only and has no API response");
         }

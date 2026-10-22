@@ -225,9 +225,14 @@ final class UpstreamBreaker
         try {
             $pdo->prepare('INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)')
                 ->execute([self::STATE_KEY, $value, $now]);
-        } catch (PDOException) {
-            // Another process inserted the row first: overwrite it.
+        } catch (PDOException $e) {
+            // Another process may have inserted the row first: overwrite it. If no row is there
+            // to overwrite, the INSERT failed for another reason and nothing was stored, so
+            // the caller must not report a trip (P1-05 round 2).
             $update->execute([$value, $now, self::STATE_KEY]);
+            if ($update->rowCount() === 0) {
+                throw $e;
+            }
         }
     }
 }

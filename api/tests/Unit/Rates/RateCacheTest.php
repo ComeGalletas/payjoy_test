@@ -457,6 +457,104 @@ final class RateCacheTest extends TestCase
         ], $this->results());
     }
 
+    /**
+     * ADR 0012 amendment item 9: while a backoff opened by `unsupported-code` is open, a lookup
+     * without a usable stale table answers 503, including the refresh that opened it.
+     */
+    public function testAnUnsupportedCodeBackoffAnswers503UntilItEnds(): void
+    {
+        $upstream = new MockUpstream([MockUpstream::error('unsupported-code', 404), MockUpstream::latest()]);
+        $cache = $this->cache($upstream);
+
+        $opening = $this->failure(fn () => $cache->rate('BRL'));
+        $this->clock->advance(30);
+        $blocked = $this->failure(fn () => $cache->rate('EUR'));
+
+        foreach ([[$opening, 'unsupported-code'], [$blocked, 'blocked_backoff']] as [$error, $reason]) {
+            self::assertSame(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $error->errorCode);
+            self::assertSame($reason, $error->reason);
+            self::assertTrue($error->duringUnsupportedCodeBackoff);
+            self::assertSame(503, $error->status());
+            self::assertSame('Exchange rates are temporarily unavailable. Please try again later.', $error->messageForUser());
+        }
+        self::assertSame(1, $upstream->calls());
+
+        // After the backoff, a good refresh: a currency missing from it is a plain 400 again.
+        $this->clock->advance(UpstreamBreaker::BACKOFF_SECONDS);
+        $missing = $this->failure(fn () => $cache->rate('XAF'));
+        self::assertSame('not_in_table', $missing->reason);
+        self::assertFalse($missing->duringUnsupportedCodeBackoff);
+        self::assertSame(400, $missing->status());
+        self::assertSame('That currency is not supported right now.', $missing->messageForUser());
+        self::assertSame(2, $upstream->calls());
+    }
+
+    public function testAnUnsupportedCodeRefreshWithoutARecordedBackoffStays400(): void
+    {
+        // Read-only: the breaker write fails, so no backoff exists (lead's reading of item 9).
+        $readOnly = TestEnvironment::connectReadOnly($this->path);
+        $db = Connection::wrap($readOnly);
+        $clock = Closure::fromCallable($this->clock);
+        $cache = new RateCache(
+            new RateStore($db),
+            (new MockUpstream([MockUpstream::error('unsupported-code', 404)]))->client(),
+            new UpstreamBreaker($db, $clock),
+            new Metrics($db, $clock, static function (): void {
+            }),
+            48,
+            $clock,
+        );
+
+        $error = $this->failure(fn () => $cache->rate('BRL'));
+        unset($cache, $db, $readOnly);
+
+        self::assertSame('unsupported-code', $error->reason);
+        self::assertFalse($error->duringUnsupportedCodeBackoff);
+        self::assertSame(400, $error->status());
+    }
+
+    /**
+     * The round-1 tester's repro: an INSERT into app_state that fails used to be swallowed, so
+     * trip() reported a backoff that was never stored. Now trip() throws, the lookup records
+     * `breaker_write_failed`, and with no backoff the answer is the plain 400.
+     */
+    public function testAFailedBreakerInsertIsNotReportedAsABackoff(): void
+    {
+        $this->pdo->exec("CREATE TRIGGER no_breaker_rows BEFORE INSERT ON app_state BEGIN SELECT RAISE(ABORT, 'no'); END");
+        $upstream = new MockUpstream(array_map(static fn (): mixed => MockUpstream::error('unsupported-code', 404), range(1, 4)));
+        $cache = $this->cache($upstream);
+
+        $statuses = [];
+        for ($i = 0; $i < 4; $i++) {
+            $error = $this->failure(fn () => $cache->rate('BRL'));
+            self::assertFalse($error->duringUnsupportedCodeBackoff);
+            $statuses[] = $error->status();
+        }
+
+        self::assertSame([400, 400, 400, 400], $statuses);
+        // No backoff stored, so every lookup calls upstream (ADR 0012 known limit).
+        self::assertSame(4, $upstream->calls());
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM app_state WHERE key = 'upstream_breaker'")->fetchColumn());
+        foreach ($this->events() as $event) {
+            self::assertTrue($event['meta']['breaker_write_failed']);
+            self::assertArrayNotHasKey('breaker', $event['meta']);
+        }
+    }
+
+    public function testOtherBackoffsKeepTheirOwnStatus(): void
+    {
+        $cache = $this->cache(new MockUpstream([MockUpstream::json(500, '')]));
+
+        $opening = $this->failure(fn () => $cache->rate('BRL'));
+        $blocked = $this->failure(fn () => $cache->rate('BRL'));
+
+        foreach ([$opening, $blocked] as $error) {
+            self::assertSame(ErrorCodes::UPSTREAM_MALFORMED, $error->errorCode);
+            self::assertFalse($error->duringUnsupportedCodeBackoff);
+            self::assertSame(503, $error->status());
+        }
+    }
+
     public function testACurrencyMissingFromAStaleTableGetsTheRefreshError(): void
     {
         $this->seed();

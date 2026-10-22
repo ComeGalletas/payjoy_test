@@ -162,6 +162,32 @@ final class UpstreamBreakerTest extends TestCase
         self::assertSame(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, $this->breaker->blocking()?->errorCode);
     }
 
+    /**
+     * P1-05 round 2: a failed INSERT with no row to overwrite throws, instead of reporting a
+     * trip that was never stored.
+     */
+    public function testAFailedInsertThrowsAndStoresNothing(): void
+    {
+        $this->pdo->exec("CREATE TRIGGER no_breaker_rows BEFORE INSERT ON app_state BEGIN SELECT RAISE(ABORT, 'no'); END");
+
+        try {
+            $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_UNSUPPORTED_CODE, 'unsupported-code'));
+            self::fail('trip() reported a backoff that was not stored');
+        } catch (\PDOException) {
+            $this->addToAssertionCount(1);
+        }
+        self::assertNull($this->breaker->state());
+        self::assertFalse($this->pdo->inTransaction());
+
+        // An existing row is still overwritten by the UPDATE, so the trigger doesn't matter.
+        $this->pdo->exec('DROP TRIGGER no_breaker_rows');
+        $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'));
+        $this->pdo->exec("CREATE TRIGGER no_breaker_rows BEFORE INSERT ON app_state BEGIN SELECT RAISE(ABORT, 'no'); END");
+        $this->clock->advance(UpstreamBreaker::BACKOFF_SECONDS + 1);
+        self::assertSame(2, $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_TIMEOUT, 'timeout'))?->failures);
+        self::assertSame(2, $this->breaker->state()?->failures);
+    }
+
     public function testAWeakerTripNeverReplacesAStrongerOpenOne(): void
     {
         $this->breaker->trip(new UpstreamError(ErrorCodes::UPSTREAM_AUTH, 'invalid-key'));

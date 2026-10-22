@@ -139,6 +139,32 @@ final class ScaledRateTest extends TestCase
         ScaledRate::fromRate($rate);
     }
 
+    public function testToDecimalStringIsTheExactStoredValue(): void
+    {
+        self::assertSame('5.2291', ScaledRate::toDecimalString(52_291_000_000));
+        self::assertSame('89500', ScaledRate::toDecimalString(895_000_000_000_000));
+        self::assertSame('1', ScaledRate::toDecimalString(ScaledRate::SCALE));
+        self::assertSame('0.0000000001', ScaledRate::toDecimalString(1));
+        self::assertSame('1731936.861971', ScaledRate::toDecimalString(17_319_368_619_710_000));
+        self::assertSame('899999999.9999999999', ScaledRate::toDecimalString(ScaledRate::MAX_SCALED - 1));
+
+        // It round-trips through fromDecimalString(), across the range.
+        mt_srand(5);
+        for ($i = 0; $i < 2000; $i++) {
+            $scaled = mt_rand(1, ScaledRate::MAX_SCALED - 1);
+            self::assertSame($scaled, ScaledRate::fromDecimalString(ScaledRate::toDecimalString($scaled)));
+        }
+
+        foreach ([0, -1, ScaledRate::MAX_SCALED] as $scaled) {
+            try {
+                ScaledRate::toDecimalString($scaled);
+                self::fail("accepted {$scaled}");
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
     public function testFromRateIgnoresTheSerializePrecisionSetting(): void
     {
         $previous = ini_set('serialize_precision', '17');
@@ -150,15 +176,16 @@ final class ScaledRateTest extends TestCase
         }
     }
 
-    public function testToRateIsTheFloatQuotient(): void
+    public function testToRateIsTheNearestFloatToTheStoredDecimal(): void
     {
         self::assertSame(5.2291, ScaledRate::toRate(52_291_000_000));
         self::assertSame(0.0001234, ScaledRate::toRate(1_234_000));
         self::assertSame(89_500.0, ScaledRate::toRate(895_000_000_000_000));
         self::assertSame(439_537.6134, ScaledRate::toRate(4_395_376_134_000_000));
         self::assertIsFloat(ScaledRate::toRate(10_000_000_000));
-        // Above 2^53 it is approximate: the nearest float to the scaled int, divided.
-        self::assertEqualsWithDelta(899_999_999.9999999999, ScaledRate::toRate(ScaledRate::MAX_SCALED - 1), 1e-6);
+        // Above 2^53 scaled too (P1-05): IRR's rate is upstream's number exactly.
+        self::assertSame(1_731_936.861971, ScaledRate::toRate(17_319_368_619_710_000));
+        self::assertSame(899_999_999.9999999999, ScaledRate::toRate(ScaledRate::MAX_SCALED - 1));
 
         foreach ([0, -1, ScaledRate::MAX_SCALED] as $scaled) {
             try {
