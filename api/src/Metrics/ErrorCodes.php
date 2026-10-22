@@ -18,6 +18,8 @@ final class ErrorCodes
     public const VALIDATION_AMOUNT = 'VALIDATION_AMOUNT';
     public const VALIDATION_CURRENCY = 'VALIDATION_CURRENCY';
     public const VALIDATION_INSTALLMENTS = 'VALIDATION_INSTALLMENTS';
+    /** A request body an endpoint can't read (P1-06: `POST /bot/message`). */
+    public const BAD_REQUEST = 'BAD_REQUEST';
     public const UPSTREAM_UNSUPPORTED_CODE = 'UPSTREAM_UNSUPPORTED_CODE';
     public const UPSTREAM_TIMEOUT = 'UPSTREAM_TIMEOUT';
     public const UPSTREAM_QUOTA = 'UPSTREAM_QUOTA';
@@ -45,6 +47,7 @@ final class ErrorCodes
         self::VALIDATION_AMOUNT => [400, 'Please enter a valid total in USD, for example 200 or 200.50.'],
         self::VALIDATION_CURRENCY => [400, 'Please use a supported 3-letter currency code, for example BRL.'],
         self::VALIDATION_INSTALLMENTS => [400, 'Please choose a valid number of installments.'],
+        self::BAD_REQUEST => [400, 'Sorry, that message could not be read. Please try again.'],
         self::UPSTREAM_UNSUPPORTED_CODE => [400, 'That currency is not supported right now.'],
         self::UPSTREAM_TIMEOUT => [503, 'The exchange rate service is not responding. Please try again in a moment.'],
         self::UPSTREAM_QUOTA => [503, self::UPSTREAM_UNAVAILABLE_MESSAGE],

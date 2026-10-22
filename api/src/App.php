@@ -10,7 +10,11 @@ use FxInstallments\Convert\ConvertService;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
 use FxInstallments\Db\Migrator;
+use FxInstallments\Flow\FlowDefinition;
+use FxInstallments\Flow\FlowEngine;
+use FxInstallments\Flow\SessionStore;
 use FxInstallments\Http\AdminAuth;
+use FxInstallments\Http\BotMessageEndpoint;
 use FxInstallments\Http\ConvertEndpoint;
 use FxInstallments\Http\Cors;
 use FxInstallments\Http\IpBlocking;
@@ -25,7 +29,9 @@ use FxInstallments\Rates\RateCache;
 use FxInstallments\Rates\RateStore;
 use FxInstallments\Rates\RateTableAllowList;
 use FxInstallments\Rates\UpstreamBreaker;
+use FxInstallments\Validation\AmountParser;
 use FxInstallments\Validation\AmountValidator;
+use FxInstallments\Validation\CurrencyResolver;
 use FxInstallments\Validation\CurrencyValidator;
 use FxInstallments\Validation\InstallmentsValidator;
 use PDO;
@@ -37,6 +43,9 @@ use PDO;
  */
 final class App
 {
+    /** The flow file (docs/PLAN.md §4, §9). */
+    public const DEFAULT_FLOW = __DIR__ . '/../flows/default.yaml';
+
     public readonly Metrics $metrics;
 
     /** @var Closure(): int */
@@ -51,6 +60,7 @@ final class App
      * @param ExchangeRateClient|null $rateClient the upstream client; defaults to
      *        ExchangeRateClient::fromEnvironment(), built on first use of rates(). Tests pass
      *        one with a mocked handler.
+     * @param string|null $flowPath the flow file; defaults to DEFAULT_FLOW (api/flows/default.yaml)
      */
     public function __construct(
         public readonly ConfigRepository $config,
@@ -58,6 +68,7 @@ final class App
         ?Closure $clock = null,
         private readonly ?Closure $errorLog = null,
         private ?ExchangeRateClient $rateClient = null,
+        private readonly ?string $flowPath = null,
     ) {
         $this->clock = $clock ?? static fn (): int => time();
         $this->metrics = new Metrics($db, $this->clock, $errorLog);
@@ -86,15 +97,55 @@ final class App
     }
 
     /**
-     * The production route table: `GET /convert` (P1-05) behind the rate limiter. Every other
-     * path is NOT_FOUND. Building it touches neither the database nor the upstream client.
+     * The production route table: `GET /convert` (P1-05) behind the rate limiter, and
+     * `POST /bot/message` (P1-06) behind Cors and the same global rate limiter (ADR 0016 second
+     * amendment: one `ratelimit.per_minute`). Every other path is NOT_FOUND. Building it touches
+     * neither the database, the flow file nor the upstream client.
      */
     public function router(): Router
     {
         $router = new Router();
         $router->get(ConvertEndpoint::PATH, $this->convertEndpoint(), [$this->rateLimiter()]);
+        $router->post(BotMessageEndpoint::PATH, $this->botMessageEndpoint(), [$this->cors(), $this->rateLimiter()]);
 
         return $router;
+    }
+
+    public function botMessageEndpoint(): BotMessageEndpoint
+    {
+        return new BotMessageEndpoint(fn (): FlowEngine => $this->flowEngine());
+    }
+
+    /**
+     * The flow engine on the flow file, the sessions table and the conversion service.
+     *
+     * @throws \FxInstallments\Flow\FlowDefinitionError when the flow file is invalid
+     */
+    public function flowEngine(): FlowEngine
+    {
+        return new FlowEngine(
+            $this->flow(),
+            $this->sessionStore(),
+            $this->metrics,
+            new AmountParser(new AmountValidator($this->config)),
+            new CurrencyResolver(new CurrencyValidator($this->currencyAllowList())),
+            new InstallmentsValidator($this->config),
+            fn (): ConvertService => $this->convertService(),
+            $this->clock,
+        );
+    }
+
+    /**
+     * The flow file, loaded and checked on every call (it is small; a request builds one engine).
+     */
+    public function flow(): FlowDefinition
+    {
+        return FlowDefinition::fromFile($this->flowPath ?? self::DEFAULT_FLOW, $this->config);
+    }
+
+    public function sessionStore(): SessionStore
+    {
+        return new SessionStore($this->db, $this->config->int('bot.session_ttl_minutes'));
     }
 
     public function convertEndpoint(): ConvertEndpoint

@@ -1,0 +1,53 @@
+# The bot's static flow (docs/PLAN.md §9, ADR 0003). Data, not code, and the only source of bot
+# wording: edit the texts and buttons here, no PHP change needed. Flow\FlowDefinition checks the
+# whole file when it loads, so a typo fails loudly instead of reaching a user.
+#
+# - ${config.<key>} as a whole value, and {{config.<key>}} inside a text, read the read-only
+#   config (installments.default, installments.max, amount.max, bot.max_retries,
+#   bot.session_ttl_minutes).
+# - Other {{placeholders}} are filled by the flow engine, and each text may use only the ones
+#   listed for it in FlowDefinition: the result texts take display.* (the API's display block,
+#   shown verbatim), currency and installments; the conversion-failure texts take
+#   message_for_user (the API's text), currency and installments; nothing else can be shown, and
+#   nothing the user typed ever is.
+# - retry is the answer to an invalid input, clarify to an unclear one (an amount the parser
+#   couldn't read unambiguously, or a currency name several currencies share); reasons give a
+#   specific text for one validation reason instead of retry.
+name: fx_installments
+max_retries: ${config.bot.max_retries}
+max_retries_reply: "Sorry, I couldn't follow that. Send me a new message whenever you'd like to start again."
+steps:
+  - id: greet
+    say: "Hi! Tell me what you paid in USD and I'll show your monthly installment in your local currency."
+  - id: amount
+    ask: "What was the total price in USD?"
+    expecting: amount
+    retry: "Sorry, that doesn't look like an amount. Please type the total in USD, for example 200 or 200.50."
+    clarify: "I couldn't read that amount. Please type it like 200, 200.50 or 1.000,50."
+    reasons:
+      not_positive: "The total must be more than 0. Please type the total in USD, for example 200 or 200.50."
+      over_max: "That's more than I can convert. Please type a smaller total in USD."
+      too_large: "That total is too large to convert to {{currency}}. Please type a smaller total in USD."
+  - id: currency
+    ask: "Which currency or country should I convert to?"
+    expecting: currency
+    buttons: [BRL, COP, MXN, EUR]
+    retry: "I don't know that currency. Try a code like BRL or a country like Brazil."
+    clarify: "Several currencies use that name or symbol. Please type the currency code, like MXN or COP."
+    reasons:
+      not_allowed: "I can't convert to that currency right now. Try a code like BRL or a country like Brazil."
+  - id: installments
+    ask: "How many monthly installments? (default {{config.installments.default}})"
+    expecting: installments
+    optional: true
+    buttons: ["Just one payment"]
+    retry: "Please type a whole number from 1 to {{config.installments.max}}."
+    reasons:
+      below_minor_unit: "{{message_for_user}} {{installments}} payments would each be less than the smallest unit of {{currency}}. Please choose fewer installments."
+  - id: result
+    call: convert
+    say_single: "{{display.amount_usd}} USD is about {{display.converted}} {{currency}} today (rate {{display.rate}}, as of {{display.rate_as_of}}). That's a single payment of {{display.converted}} {{currency}}."
+    say_even: "{{display.amount_usd}} USD is about {{display.converted}} {{currency}} today (rate {{display.rate}}, as of {{display.rate_as_of}}). That's {{installments}} monthly payments of {{display.installment}} {{currency}}."
+    say_uneven: "{{display.amount_usd}} USD is about {{display.converted}} {{currency}} today (rate {{display.rate}}, as of {{display.rate_as_of}}). That's {{display.regular_count}} monthly payments of {{display.installment}} {{currency}} and a final payment of {{display.last_installment}} {{currency}}, so the total is exactly {{display.converted}} {{currency}}."
+    stale_note: "Rates couldn't be refreshed just now, so this uses the last known rate."
+    upstream_error: "{{message_for_user}}"

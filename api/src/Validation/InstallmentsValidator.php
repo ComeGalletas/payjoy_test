@@ -18,8 +18,9 @@ use FxInstallments\Config\ConfigRepository;
  *
  * Not checked here: "at least one minor unit per installment" needs the rate and the
  * currency's minor units (P1-05). Empty input and the "Just one payment" button mean
- * `installments.default`; choosing that is the flow's job (P1-06), so `defaultCount()` only
- * exposes it.
+ * `installments.default`; choosing that is the flow's job (P1-06, `Flow\FlowEngine`), so
+ * `defaultCount()` only exposes it. `read()` gives the bot's reading as an
+ * `InstallmentsReading`.
  */
 final class InstallmentsValidator
 {
@@ -37,6 +38,18 @@ final class InstallmentsValidator
         }
 
         return $count;
+    }
+
+    /**
+     * fromText() as a reading (ok or invalid), for the flow engine (P1-06).
+     */
+    public function read(string $text): InstallmentsReading
+    {
+        try {
+            return InstallmentsReading::ok($this->fromText($text));
+        } catch (ValidationFailed $error) {
+            return InstallmentsReading::invalid($error);
+        }
     }
 
     /**
