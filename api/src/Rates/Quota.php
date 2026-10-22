@@ -21,8 +21,9 @@ final class Quota
 
     /**
      * The next date, on or after $now's UTC date, on which upstream says it refreshes the quota
-     * (`refresh_day_of_month`, cut to the month's last day: 31 means the 30th in April). Upstream
-     * gives no time of day, so this is a date, `YYYY-MM-DD`. The breaker's quota block still ends
+     * (`refresh_day_of_month`, cut to the month's last day: 31 means the 30th in April). "On or
+     * after": on the refresh day itself it returns today. Upstream gives no time of day, so this
+     * is a date, `YYYY-MM-DD`. The breaker's quota block still ends
      * on the 1st (UTC, ADR 0012); the admin view shows both.
      */
     public function nextRefreshDate(int $now): string

@@ -31,6 +31,7 @@ final class ReportFormatter
         'conversions' => 'Conversions',
         'conversions_api' => '  via /convert',
         'conversions_bot' => '  via the bot',
+        'unreadable_amounts' => '  with an unreadable amount',
         'amount_usd_cents' => 'USD converted',
         'api_requests' => '/convert requests',
         'api_errors' => '  answered with an error',
@@ -197,16 +198,18 @@ final class ReportFormatter
 
         foreach ($report['funnel'] as $funnel) {
             $steps = array_map(static fn (array $step): array => [
-                $step['step'],
+                (string) $step['step'],
                 $step['reached'] === null ? '-' : self::integer($step['reached']),
                 isset($step['answered']) ? self::integer($step['answered']) : '-',
                 isset($step['retries']) ? self::integer($step['retries']) : '-',
                 isset($step['completed']) ? self::integer($step['completed']) : '-',
                 self::integer($step['abandoned']),
+                self::integer($step['never_answered'] ?? 0),
+                self::integer($step['open'] ?? 0),
             ], $funnel['steps']);
             $out .= self::section(
                 "Funnel, channel {$funnel['channel']} (sessions started in the period)",
-                ['Step', 'Reached', 'Answered', 'Retries', 'Completed', 'Abandoned'],
+                ['Step', 'Reached', 'Answered', 'Retries', 'Completed', 'Abandoned', 'Never answered', 'Open'],
                 $steps,
             );
             $codes = array_map(static fn (array $row): string => "{$row['code']} {$row['count']}", $funnel['abandoned_by_code']);
@@ -284,11 +287,15 @@ final class ReportFormatter
     }
 
     /**
-     * A count with thousands grouping: 12345 → `12,345`.
+     * A count with thousands grouping: 12345 → `12,345`. Report counts are never negative.
      */
     public static function integer(int $value): string
     {
-        return $value < 0 ? '-' . self::group((string) -$value) : self::group((string) $value);
+        if ($value < 0) {
+            throw new InvalidArgumentException('Report counts are never negative');
+        }
+
+        return self::group((string) $value);
     }
 
     public static function iso(int $unix): string
@@ -348,8 +355,10 @@ final class ReportFormatter
      * @param array<string, mixed> $counts
      * @param list<string> $skip
      */
-    private static function csvCounts(array &$rows, string $section, ?string $key, ?string $subkey, array $counts, array $skip = []): void
+    private static function csvCounts(array &$rows, string $section, string|int|null $key, string|int|null $subkey, array $counts, array $skip = []): void
     {
+        $key = $key === null ? null : (string) $key;
+        $subkey = $subkey === null ? null : (string) $subkey;
         foreach ($counts as $metric => $value) {
             if (in_array($metric, $skip, true)) {
                 continue;
@@ -365,7 +374,8 @@ final class ReportFormatter
      * A titled block of aligned columns: the first left-aligned, the rest right-aligned.
      *
      * @param list<string> $header
-     * @param list<list<string>> $rows
+     * @param list<list<string|int>> $rows cells are cast to strings (a label PHP turned into
+     *        an int array key, like a step named `2024`, stays printable: round 2)
      */
     private static function section(string $title, array $header, array $rows): string
     {
@@ -373,6 +383,7 @@ final class ReportFormatter
         if ($rows === []) {
             return $out . "  (none)\n";
         }
+        $rows = array_map(static fn (array $row): array => array_map('strval', $row), $rows);
         $showHeader = array_filter($header, static fn (string $cell): bool => $cell !== '') !== [];
         $all = $showHeader ? [$header, ...$rows] : $rows;
         $widths = [];

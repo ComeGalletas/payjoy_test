@@ -8,8 +8,10 @@ use FxInstallments\App;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\Request;
 use FxInstallments\Http\Response;
+use FxInstallments\Metrics\CsvWriter;
 use FxInstallments\Metrics\ErrorCodes;
 use FxInstallments\Tests\Support\BuiltInServer;
+use FxInstallments\Tests\Unit\Metrics\ReportQueryTest;
 use FxInstallments\Tests\Support\FakeClock;
 use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\OverridesEnvironment;
@@ -83,6 +85,14 @@ final class P1_08_ReportsTest extends TestCase
         }
         self::assertSame(1, $upstream->calls(), 'one refresh served every conversion');
 
+        // While they are live, the two waiting sessions are open at the step they wait on, and
+        // every step row adds up.
+        $live = self::data($this->report(['from' => '2026-10-21', 'to' => '2026-10-21']))['funnel'];
+        self::assertSame([1, 0, 0, 0], array_column($live[0]['steps'], 'open'));
+        self::assertSame([0, 0, 1, 0], array_column($live[1]['steps'], 'open'));
+        self::assertSame([1, 0, 1], [$live[0]['open'], $live[0]['never_answered'], $live[1]['open']]);
+        ReportQueryTest::assertFunnelAddsUp($live);
+
         // Two hours later both waiting sessions have expired; the report closes them first.
         $this->clock->advance(7200);
         self::assertSame(2, (int) $this->pdo->query("SELECT COUNT(*) FROM sessions WHERE status = 'open'")->fetchColumn());
@@ -93,34 +103,35 @@ final class P1_08_ReportsTest extends TestCase
             [
                 'channel' => 'static', 'started' => 3, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 3, 'answered' => 1, 'retries' => 3, 'abandoned' => 1],
-                    ['step' => 'currency', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0],
+                    ['step' => 'amount', 'reached' => 3, 'answered' => 1, 'retries' => 3, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0],
+                    ['step' => 'currency', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ],
                 'abandoned_by_code' => [['code' => 'BOT_MAX_RETRIES', 'count' => 1]],
             ],
             [
                 'channel' => 'cli', 'started' => 2, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 2, 'answered' => 2, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'currency', 'reached' => 2, 'answered' => 2, 'retries' => 1, 'abandoned' => 0],
-                    ['step' => 'installments', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 1],
-                    ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0],
+                    ['step' => 'amount', 'reached' => 2, 'answered' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'currency', 'reached' => 2, 'answered' => 2, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'installments', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ],
                 'abandoned_by_code' => [['code' => 'BOT_SESSION_EXPIRED', 'count' => 1]],
             ],
             [
                 'channel' => 'typebot', 'started' => 0, 'completed' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0,
                 'steps' => [
-                    ['step' => 'amount', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'currency', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'installments', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0],
-                    ['step' => 'result', 'reached' => 0, 'completed' => 0, 'abandoned' => 0],
+                    ['step' => 'amount', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'currency', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'installments', 'reached' => 0, 'answered' => 0, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                    ['step' => 'result', 'reached' => 0, 'completed' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
                 ],
                 'abandoned_by_code' => [],
             ],
         ], $funnel);
+        ReportQueryTest::assertFunnelAddsUp($funnel);
 
         // The other sections agree with what ran.
         $data = self::data($this->report(['from' => '2026-10-21', 'to' => '2026-10-21']));
@@ -187,18 +198,29 @@ final class P1_08_ReportsTest extends TestCase
         self::assertSame(200, $response->status());
         self::assertSame('text/csv; charset=utf-8', $response->header('Content-Type'));
         $csv = $response->body();
-        self::assertStringContainsString("\r\ncurrency,'=CMD(),,conversions,1\r\n", $csv);
-        self::assertStringContainsString("\r\ncurrency,'-1+1,,conversions,1\r\n", $csv);
-        self::assertStringContainsString("\r\ncountry,'+SUM(A1),,conversions,1\r\n", $csv);
-        self::assertStringNotContainsString(',=CMD()', $csv);
+        // Round 2: a currency that isn't a 3-letter code, a country off the map and a step
+        // outside `^[a-z_]{1,32}$` are counted as `other`, so the formula text never reaches a
+        // cell at all; CsvWriter would still guard it (CsvWriterTest, and the formatter check
+        // below).
+        self::assertStringContainsString("\r\ncurrency,other,,conversions,2\r\n", $csv);
+        self::assertStringContainsString("\r\ncountry,other,,conversions,1\r\n", $csv);
+        foreach (['=CMD()', '-1+1', '+SUM(A1)', '@step'] as $formula) {
+            self::assertStringNotContainsString($formula, $csv);
+        }
         foreach (explode("\r\n", rtrim($csv, "\r\n")) as $line) {
             foreach (str_getcsv($line, ',', '"', '') as $cell) {
-                self::assertDoesNotMatchRegularExpression('/^[=+\-@\t\r]/', (string) $cell, $line);
+                foreach (explode(';', (string) $cell) as $segment) {
+                    self::assertDoesNotMatchRegularExpression('/^\s*[=+\-@]|^[\t\r]/', $segment, $line);
+                }
             }
         }
+        $json = $this->report(['from' => '2026-10-21', 'to' => '2026-10-21'])->body();
+        self::assertStringNotContainsString('=CMD()', $json);
 
-        // JSON isn't a spreadsheet: there the label is the stored text.
-        self::assertSame('=CMD()', self::data($this->report(['from' => '2026-10-21', 'to' => '2026-10-21']))['currencies'][1]['currency']);
+        // Were such a label ever to reach a cell, the CSV writer escapes it (ReportFormatterTest
+        // runs a whole report with a `=CMD()` currency through it).
+        self::assertSame("'=CMD()", CsvWriter::cell('=CMD()'));
+        self::assertSame("\"X;'=CMD()\"", CsvWriter::cell('X;=CMD()'));
     }
 
     public function testPublicHealthShowsOnlyTheStatus(): void
@@ -227,7 +249,12 @@ final class P1_08_ReportsTest extends TestCase
         $behind = BuiltInServer::start(TestEnvironment::tempDir('p1-08-behind') . '/behind.db');
         [$healthStatus, , $healthBody] = $behind->request('GET', '/health');
         [$widgetStatus, , $widgetBody] = $behind->request('GET', '/bot/widget');
+        // Round 2: only GET /health skips the open; another method fails closed (500), instead
+        // of reaching the router's 404, which would count toward blocking.
+        [$postStatus, , $postBody] = $behind->request('POST', '/health', ['Content-Type' => 'application/json'], '{}');
+        [$headStatus] = $behind->request('HEAD', '/health');
         $behind->stop();
+        self::assertSame([500, 'INTERNAL', 500], [$postStatus, json_decode($postBody, true, flags: JSON_THROW_ON_ERROR)['error']['code'], $headStatus]);
         self::assertSame(503, $healthStatus);
         self::assertSame(['ok' => false, 'error' => ['code' => 'UNHEALTHY', 'message_for_user' => ErrorCodes::messageForUser(ErrorCodes::UNHEALTHY)]], json_decode($healthBody, true, flags: JSON_THROW_ON_ERROR));
         self::assertSame(500, $widgetStatus);

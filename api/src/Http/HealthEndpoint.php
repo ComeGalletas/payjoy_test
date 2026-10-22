@@ -26,8 +26,9 @@ use Throwable;
  *   accepts a write: a transaction that updates the `schema_version` row in place and is
  *   rolled back, so nothing changes. Upstream trouble isn't unhealthy: lookups then serve stale
  *   rates or a mapped error, which the admin view shows.
- * - **Public** (no `Authorization` header): 200 `{"status": "ok"}`, or 503 UNHEALTHY. Nothing
- *   else, so the public view tells a caller nothing about the setup.
+ * - **Public** (no `Authorization` header, or one with another scheme than Bearer): 200
+ *   `{"status": "ok"}`, or 503 UNHEALTHY. Nothing else, so the public view tells a caller
+ *   nothing about the setup.
  * - **Admin** (a valid `Authorization: Bearer` admin token): always 200 with `status` (`ok` or
  *   `unhealthy`) and the details: the database (`open`, `schema`, versions, `writable`), the
  *   stored rate table (age, `cache_age_seconds`, freshness), the breaker (state, kind, code,
@@ -35,11 +36,14 @@ use Throwable;
  *   quota from QuotaCache with both reset dates: upstream's `refresh_day_of_month` and the
  *   breaker's quota block, which ends on the 1st (UTC). Monitors poll the public view's HTTP
  *   status; the admin view is for operators.
- * - Any other `Authorization` header (wrong or malformed token, or ADMIN_TOKEN unset) is
- *   401 ADMIN_UNAUTHORIZED, so a wrong token is noticed (and counts toward automatic blocking
- *   like any 4xx).
+ * - A Bearer header with a wrong or malformed token, or any Bearer header while ADMIN_TOKEN is
+ *   unset, is 401 ADMIN_UNAUTHORIZED, so a wrong token is noticed (and counts toward automatic
+ *   blocking like any 4xx).
+ * - While the database can't be written, the admin view doesn't ask upstream for the quota
+ *   (the answer couldn't be cached, so every view would call): it shows the last stored
+ *   answer with `source: blocked`.
  *
- * public/index.php doesn't open the database before routing this path (every other path still
+ * public/index.php doesn't open the database before routing `GET` on this path (every other path still
  * fails closed there, ADR 0019), so this answers even when the database is behind the code or
  * can't be opened. The Kernel's block check then fails open, and its request-log row and
  * `error` event can't be written; that never changes this answer (INV-07, INV-08). A database
@@ -81,7 +85,7 @@ final class HealthEndpoint
 
     public function __invoke(Request $request): JsonResponse
     {
-        $admin = $request->header('authorization') !== null;
+        $admin = self::asksForAdmin($request->header('authorization'));
         if ($admin && !$this->auth->allows($request)) {
             return AdminAuth::unauthorized();
         }
@@ -114,8 +118,20 @@ final class HealthEndpoint
             'database' => $database,
             'rates' => $usable ? $this->guarded(fn (): array => $this->rates($now)) : null,
             'breaker' => $breakerRead ? self::breaker($breaker, $now) : null,
-            'quota' => $usable ? $this->guarded(fn (): array => $this->quota($now, $breaker)) : null,
+            // A database that can't be written can't cache the answer, so upstream isn't asked
+            // (it would be on every view): the last stored answer is shown instead (round 2).
+            'quota' => $usable ? $this->guarded(fn (): array => $this->quota($now, $breaker, $database['writable'] === true)) : null,
         ])->withHeader('Cache-Control', 'no-store');
+    }
+
+    /**
+     * Whether the request asks for the admin view: an `Authorization` header with the Bearer
+     * scheme (any case, possibly malformed after it). Any other scheme, such as a proxy's Basic
+     * credentials, or an empty header, gets the public view (round 2).
+     */
+    private static function asksForAdmin(?string $authorization): bool
+    {
+        return $authorization !== null && preg_match('/^\s*bearer(?:\s|$)/i', $authorization) === 1;
     }
 
     /**
@@ -226,9 +242,9 @@ final class HealthEndpoint
     /**
      * @return array<string, mixed>
      */
-    private function quota(int $now, ?BreakerState $breaker): array
+    private function quota(int $now, ?BreakerState $breaker, bool $mayAsk): array
     {
-        $status = $this->quota->status();
+        $status = $this->quota->status($mayAsk);
         $quota = $status->quota;
 
         return [

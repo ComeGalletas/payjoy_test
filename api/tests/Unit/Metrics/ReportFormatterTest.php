@@ -42,7 +42,30 @@ final class ReportFormatterTest extends TestCase
 
     public function testCountsAreGrouped(): void
     {
-        self::assertSame(['0', '999', '1,000', '12,345', '1,234,567', '-1,000'], array_map(ReportFormatter::integer(...), [0, 999, 1000, 12345, 1234567, -1000]));
+        self::assertSame(['0', '999', '1,000', '12,345', '1,234,567'], array_map(ReportFormatter::integer(...), [0, 999, 1000, 12345, 1234567]));
+    }
+
+    public function testANegativeCountIsAProgrammingError(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        ReportFormatter::integer(-1);
+    }
+
+    /**
+     * Round 2: a label PHP turned into an int (an array key like `2024`) still prints.
+     */
+    public function testIntLabelsPrint(): void
+    {
+        $report = self::report();
+        $report['funnel'][0]['steps'][4]['step'] = 2024;
+        $report['currencies'][0]['currency'] = 123;
+        $report['errors'][0]['code'] = 7;
+
+        self::assertMatchesRegularExpression('/^  2024 +- +0 +1 +- +1 +0 +0$/m', ReportFormatter::table($report));
+        $csv = ReportFormatter::csv($report);
+        self::assertStringContainsString("\r\nfunnel_step,static,2024,abandoned,1\r\n", $csv);
+        self::assertStringContainsString("\r\ncurrency,123,,conversions,1\r\n", $csv);
+        self::assertStringContainsString("\r\nerror,7,,http,1\r\n", $csv);
     }
 
     public function testJsonAddsUsdStringsAndIsoTimes(): void
@@ -100,7 +123,7 @@ final class ReportFormatterTest extends TestCase
             self::assertStringContainsString($text, $table);
         }
         self::assertMatchesRegularExpression('/^  USD converted +1,045\.82$/m', $table);
-        self::assertMatchesRegularExpression('/^  nickname +- +0 +1 +- +1$/m', $table);
+        self::assertMatchesRegularExpression('/^  nickname +- +0 +1 +- +1 +0 +0$/m', $table);
         self::assertStringNotContainsString("\r", $table);
     }
 
@@ -129,7 +152,7 @@ final class ReportFormatterTest extends TestCase
         return [
             'period' => ['from' => '2026-10-21', 'to' => '2026-10-21', 'timezone' => 'UTC', 'days' => 1, 'start_unix' => 1792540800, 'end_unix' => 1792627200],
             'generated_unix' => 1792627200,
-            'summary' => $counts + ['conversions_api' => 1, 'conversions_bot' => 0, 'api_errors' => 0, 'bot_errors' => 1, 'conversions_missing_rate' => 0],
+            'summary' => $counts + ['conversions_api' => 1, 'conversions_bot' => 0, 'unreadable_amounts' => 0, 'api_errors' => 0, 'bot_errors' => 1, 'conversions_missing_rate' => 0],
             'days' => [['date' => '2026-10-21'] + $counts],
             'currencies' => [['currency' => '=CMD()', 'requested' => 1, 'conversions' => 1, 'conversions_api' => 1, 'conversions_bot' => 0, 'amount_usd_cents' => 104_582]],
             'countries' => [['country' => 'Bonaire, Sint Eustatius', 'requested' => 2, 'conversions' => 0, 'conversions_api' => 0, 'conversions_bot' => 0, 'amount_usd_cents' => 0]],

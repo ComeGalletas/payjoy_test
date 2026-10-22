@@ -19,8 +19,9 @@ use Throwable;
  * error, so neither admin traffic nor a failing upstream can turn health checks into calls.
  *
  * - The answer is one `app_state` row, STATE_KEY (JSON: `checked_at`, the three quota numbers
- *   or `error_code`). A row that doesn't read back exactly is ignored. A failed write (a
- *   read-only database) is ignored too: the answer is still shown, and the next view asks again.
+ *   or `error_code`). A row that doesn't read back exactly is ignored. A failed write is
+ *   ignored too: the answer is still shown. The admin view passes `mayAsk: false` while the
+ *   database can't be written, so a read-only database doesn't turn every view into a call.
  * - While the breaker holds an **auth** block, the key is known bad, so upstream is not asked.
  *   Other trips don't stop it: `/quota` isn't a refresh, and it never trips the breaker.
  * - Every status() writes one `upstream.call` event (source `upstream`, `meta.endpoint=quota`)
@@ -61,7 +62,12 @@ final class QuotaCache
         $this->clock = $clock ?? static fn (): int => time();
     }
 
-    public function status(): QuotaStatus
+    /**
+     * @param bool $mayAsk false while the database can't be written: the answer couldn't be
+     *        cached, so upstream isn't asked; the last stored answer comes back as `blocked`
+     *        (event reason `read_only`).
+     */
+    public function status(bool $mayAsk = true): QuotaStatus
     {
         $started = hrtime(true);
         $now = ($this->clock)();
@@ -70,6 +76,12 @@ final class QuotaCache
             $this->record('hit', $started, $cached->errorCode, null);
 
             return $cached;
+        }
+
+        if (!$mayAsk) {
+            $this->record('blocked', $started, $cached?->errorCode, 'read_only');
+
+            return new QuotaStatus(QuotaStatus::BLOCKED, $cached?->checkedAt, $cached?->quota, $cached?->errorCode);
         }
 
         if ($this->breaker->blocking()?->kind === BreakerState::AUTH) {
@@ -131,7 +143,10 @@ final class QuotaCache
     }
 
     /**
-     * Select-then-write (ADR 0010), like the breaker's row.
+     * Update-then-insert, like the breaker's row (UpstreamBreaker::write()): an UPDATE, then an
+     * INSERT when no row was there, and an INSERT that loses a race to another process updates
+     * again. Not wrapped in a transaction: the row is a cache, the last writer wins, and on
+     * Postgres a failed INSERT would abort the transaction (the breaker's L-03 note).
      */
     private function write(QuotaStatus $status, int $now): void
     {

@@ -44,7 +44,9 @@ final class ReportCliTest extends TestCase
         self::assertSame(['', 0], [$err, $exit]);
         self::assertMatchesRegularExpression('/^FX Installments report: \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2} \(America\/Bogota, 7 days\)$/m', $out);
         self::assertMatchesRegularExpression('/^  USD converted +1,045\.82$/m', $out);
-        self::assertStringContainsString('=CMD()', $out);
+        // Round 2: a currency that isn't a code is counted as `other`, never printed.
+        self::assertStringNotContainsString('=CMD()', $out);
+        self::assertMatchesRegularExpression('/^  other +1 +1 +1 +0 +1,045\.82$/m', $out);
         self::assertStringNotContainsString(self::IP, $out);
         self::assertStringNotContainsString(MockUpstream::CANARY_KEY, $out);
 
@@ -54,13 +56,13 @@ final class ReportCliTest extends TestCase
         self::assertSame(['abandoned'], $pdo->query('SELECT status FROM sessions')->fetchAll(PDO::FETCH_COLUMN));
     }
 
-    public function testCsvIsGuardedAndJsonIsTheReportData(): void
+    public function testCsvHasNoFreeTextAndJsonIsTheReportData(): void
     {
         [$exit, $csv] = $this->runCli(['--format=csv']);
         self::assertSame(0, $exit);
         self::assertStringStartsWith("section,key,subkey,metric,value\r\n", $csv);
-        self::assertStringContainsString("\r\ncurrency,'=CMD(),,conversions,1\r\n", $csv);
-        self::assertStringNotContainsString("\ncurrency,=CMD()", $csv);
+        self::assertStringContainsString("\r\ncurrency,other,,conversions,1\r\n", $csv);
+        self::assertStringNotContainsString('=CMD()', $csv);
         self::assertStringNotContainsString(self::IP, $csv);
 
         [$exit, $json] = $this->runCli(['--format=json', '--from=2026-01-01', '--to=2026-01-31']);
@@ -75,7 +77,9 @@ final class ReportCliTest extends TestCase
     {
         foreach ([
             [['--format=xml'], "report: --format must be table, csv or json\n"],
-            [['--from=2026-02-30'], "report: from and to must be calendar dates written YYYY-MM-DD\n"],
+            [['--from=2026-02-30'], "report: from and to must be calendar dates written YYYY-MM-DD, from 1970 to 9998\n"],
+            // Round 2: was exit 1 (the day after it isn't a four-digit year).
+            [['--from=9999-12-31', '--to=9999-12-31'], "report: from and to must be calendar dates written YYYY-MM-DD, from 1970 to 9998\n"],
             [['--from=2026-10-21', '--to=2026-10-20'], "report: from must not be after to\n"],
             [['--from=2025-01-01', '--to=2026-01-02'], "report: a report covers at most 366 days\n"],
             [['--from=2026-10-01', '--from=2026-10-02'], ''],

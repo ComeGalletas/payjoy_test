@@ -6,21 +6,21 @@ namespace FxInstallments\Metrics;
 
 /**
  * CSV text for reports (docs/PLAN.md §3 "Output safety", P1-08): RFC 4180 rows with CRLF line
- * ends, and a guard against formula injection.
+ * ends, and a guard against formula injection that holds on its own, whatever the labels are.
  *
- * - **Formula guard:** a cell starting with `=`, `+`, `-`, `@`, a tab or a CR gets a leading
- *   `'`, so a spreadsheet shows it as text instead of running it (`=CMD()` becomes `'=CMD()`).
- *   It applies to every cell, numbers included (report numbers are never negative).
- * - **Quoting:** a cell holding `"`, `,`, CR or LF is quoted, with each `"` doubled. Other
- *   cells are written as they are.
+ * - **Formula guard:** the cell, and each `;`-separated segment of it, that starts with `=`,
+ *   `+`, `-`, `@`, a tab or a CR, or with whitespace followed by one of `= + - @` (` =CMD()`),
+ *   gets a leading `'`, so a spreadsheet shows it as text instead of running it (`=CMD()`
+ *   becomes `'=CMD()`). Segments matter because a spreadsheet opened in a semicolon locale
+ *   (es-CO Excel) splits `X;=cmd|' /C calc'!A0` at the `;` (round 2). It applies to every
+ *   cell, numbers included (report numbers are never negative).
+ * - **Quoting:** a cell holding `"`, `,`, `;`, CR or LF is quoted, with each `"` doubled, so
+ *   neither separator splits it. Other cells are written as they are.
  * - Cells are strings or ints; null is an empty cell. Nothing here formats numbers.
  */
 final class CsvWriter
 {
     public const LINE_END = "\r\n";
-
-    /** The first characters that make a spreadsheet read a cell as a formula. */
-    private const FORMULA_START = ['=', '+', '-', '@', "\t", "\r"];
 
     /**
      * @param list<list<string|int|null>> $rows
@@ -51,13 +51,22 @@ final class CsvWriter
     public static function cell(string|int|null $value): string
     {
         $text = $value === null ? '' : (string) $value;
-        if ($text !== '' && in_array($text[0], self::FORMULA_START, true)) {
-            $text = "'" . $text;
+        $segments = explode(';', $text);
+        foreach ($segments as $index => $segment) {
+            if (self::looksLikeAFormula($segment)) {
+                $segments[$index] = "'" . $segment;
+            }
         }
-        if (strpbrk($text, "\",\r\n") !== false) {
+        $text = implode(';', $segments);
+        if (strpbrk($text, "\",;\r\n") !== false) {
             $text = '"' . str_replace('"', '""', $text) . '"';
         }
 
         return $text;
+    }
+
+    private static function looksLikeAFormula(string $text): bool
+    {
+        return $text !== '' && ($text[0] === "\t" || $text[0] === "\r" || preg_match('/^\s*[=+\-@]/', $text) === 1);
     }
 }

@@ -12,7 +12,8 @@ use InvalidArgumentException;
  * The days a report covers (P1-08): whole calendar days in `reports.timezone`, `from` and `to`
  * both included.
  *
- * - **Form:** `YYYY-MM-DD`, a real calendar date, in `reports.timezone`.
+ * - **Form:** `YYYY-MM-DD`, a real calendar date in the years MIN_YEAR to MAX_YEAR (1970 to
+ *   9998), in `reports.timezone`.
  * - **Defaults:** a missing `to` is today in that zone; a missing `from` is six days before
  *   `to`, so the default report is the last 7 days, today included.
  * - **Limits:** `from` must not be after `to`, and the period is at most MAX_DAYS days.
@@ -29,6 +30,13 @@ final class ReportPeriod
 
     /** The default period's length in days. */
     public const DEFAULT_DAYS = 7;
+
+    /**
+     * Years a date may have. The period ends at the day after `to`, which must still be a
+     * four-digit year, so 9999 is refused (round 2: `9999-12-31` made the end unparsable).
+     */
+    public const MIN_YEAR = 1970;
+    public const MAX_YEAR = 9998;
 
     private const DATE_PATTERN = '/^(\d{4})-(\d{2})-(\d{2})$/D';
 
@@ -130,7 +138,7 @@ final class ReportPeriod
     {
         if (preg_match(self::DATE_PATTERN, $text, $match) !== 1
             || !checkdate((int) $match[2], (int) $match[3], (int) $match[1])
-            || (int) $match[1] < 1970) {
+            || (int) $match[1] < self::MIN_YEAR || (int) $match[1] > self::MAX_YEAR) {
             throw new InvalidReportQuery('format');
         }
 
@@ -145,6 +153,11 @@ final class ReportPeriod
      */
     private static function startOf(DateTimeImmutable $day, DateTimeZone $zone): int
     {
-        return (new DateTimeImmutable($day->format('Y-m-d') . ' 00:00:00', $zone))->getTimestamp();
+        try {
+            return (new DateTimeImmutable($day->format('Y-m-d') . ' 00:00:00', $zone))->getTimestamp();
+        } catch (\Exception) {
+            // Not reachable within MIN_YEAR..MAX_YEAR; a bad date is still the caller's input.
+            throw new InvalidReportQuery('format');
+        }
     }
 }

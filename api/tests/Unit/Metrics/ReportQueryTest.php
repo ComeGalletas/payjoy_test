@@ -6,10 +6,13 @@ namespace FxInstallments\Tests\Unit\Metrics;
 
 use Closure;
 use FxInstallments\Db\Connection;
+use FxInstallments\Flow\SessionStore;
 use FxInstallments\Metrics\Metrics;
+use FxInstallments\Metrics\ReportFormatter;
 use FxInstallments\Metrics\ReportPeriod;
 use FxInstallments\Metrics\ReportQuery;
 use FxInstallments\Tests\Support\FakeClock;
+use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\TestEnvironment;
 use PDO;
 use PHPUnit\Framework\TestCase;
@@ -97,28 +100,27 @@ final class ReportQueryTest extends TestCase
         self::assertSame([
             'channel' => 'static', 'started' => 4, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 1,
             'steps' => [
-                ['step' => 'amount', 'reached' => 4, 'answered' => 2, 'retries' => 3, 'abandoned' => 1],
-                ['step' => 'currency', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 0],
-                ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0],
-                ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0],
+                // s3 never answered, s2 gave up here; s6 (no sessions row) waits after amount.
+                ['step' => 'amount', 'reached' => 4, 'answered' => 2, 'retries' => 3, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0],
+                ['step' => 'currency', 'reached' => 2, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 1],
+                ['step' => 'installments', 'reached' => 1, 'answered' => 1, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                ['step' => 'result', 'reached' => 1, 'completed' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
             ],
             'abandoned_by_code' => [['code' => 'BOT_MAX_RETRIES', 'count' => 1]],
         ], $static);
         self::assertSame([
             'channel' => 'cli', 'started' => 3, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 1, 'open' => 0,
             'steps' => [
-                ['step' => 'amount', 'reached' => 3, 'answered' => 2, 'retries' => 0, 'abandoned' => 0],
+                ['step' => 'amount', 'reached' => 3, 'answered' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 1, 'open' => 0],
                 // The conversion retry counts at the step it re-asked, and the session once.
-                ['step' => 'currency', 'reached' => 2, 'answered' => 2, 'retries' => 1, 'abandoned' => 0],
-                ['step' => 'installments', 'reached' => 2, 'answered' => 2, 'retries' => 0, 'abandoned' => 0],
-                ['step' => 'result', 'reached' => 2, 'completed' => 1, 'abandoned' => 1],
+                ['step' => 'currency', 'reached' => 2, 'answered' => 2, 'retries' => 1, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                ['step' => 'installments', 'reached' => 2, 'answered' => 2, 'retries' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0],
+                ['step' => 'result', 'reached' => 2, 'completed' => 1, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0],
             ],
             'abandoned_by_code' => [['code' => 'UPSTREAM_TIMEOUT', 'count' => 1]],
         ], $cli);
         self::assertSame(['typebot', 0, 0], [$typebot['channel'], $typebot['started'], $typebot['completed']]);
-        foreach ($report['funnel'] as $funnel) {
-            self::assertSame($funnel['started'], $funnel['completed'] + $funnel['abandoned'] + $funnel['never_answered'] + $funnel['open'], $funnel['channel']);
-        }
+        self::assertFunnelAddsUp($report['funnel']);
 
         // Event counts in the period's days are by event time: s7's completion is in, s8's end isn't.
         self::assertSame([7, 3, 3], [$report['summary']['sessions_started'], $report['summary']['sessions_completed'], $report['summary']['sessions_abandoned']]);
@@ -133,10 +135,173 @@ final class ReportQueryTest extends TestCase
             ['bot.session_abandoned', 'nickname', 'BOT_SESSION_EXPIRED', []],
         ]);
 
-        $static = $this->report('2026-10-21', '2026-10-21')['funnel'][0];
+        $report = $this->report('2026-10-21', '2026-10-21');
+        $static = $report['funnel'][0];
 
-        self::assertSame(['step' => 'nickname', 'reached' => null, 'answered' => 0, 'retries' => 1, 'abandoned' => 1], $static['steps'][4]);
+        // A session that ended outside the flow's order is counted on that step's row only.
+        self::assertSame(['step' => 'nickname', 'reached' => 1, 'answered' => 0, 'retries' => 1, 'abandoned' => 1, 'never_answered' => 0, 'open' => 0], $static['steps'][4]);
         self::assertSame(['amount', 'currency', 'installments', 'result', 'nickname'], array_column($static['steps'], 'step'));
+        self::assertFunnelAddsUp($report['funnel']);
+    }
+
+    /**
+     * Round 2: open sessions are placed at the step they wait on (`sessions.step`), so every
+     * step row adds up.
+     */
+    public function testOpenSessionsCountAtTheStepTheyWaitOn(): void
+    {
+        $store = new SessionStore(Connection::wrap($this->pdo), 30);
+        foreach (['amount', 'currency', 'installments', 'installments'] as $index => $step) {
+            $this->clock->now = self::DAY + 100 + $index;
+            $session = $store->create('typebot', $step, $this->clock->now);
+            $this->event($this->clock->now, 'bot.session_start', ['source' => 'bot', 'channel' => 'typebot', 'session_id' => $session->id, 'step' => 'greet']);
+            if ($step !== 'amount') {
+                $this->event($this->clock->now, 'bot.step', ['source' => 'bot', 'channel' => 'typebot', 'session_id' => $session->id, 'step' => 'amount']);
+            }
+        }
+
+        $typebot = $this->report('2026-10-21', '2026-10-21')['funnel'][2];
+
+        self::assertSame([4, 4, 0], [$typebot['started'], $typebot['open'], $typebot['never_answered']], 'open sessions are not swept here (no sweep given)');
+        self::assertSame([[4, 3, 1], [3, 2, 1], [2, 0, 2], [0, 0, 0]], array_map(
+            static fn (array $row): array => [$row['reached'], $row['answered'] ?? $row['completed'], $row['open']],
+            $typebot['steps'],
+        ));
+        self::assertFunnelAddsUp([$typebot]);
+    }
+
+    public function testTheSweepIsRepeatedWhileAPassClosesAFullBatch(): void
+    {
+        $passes = [500, 500, 20];
+        $calls = 0;
+        $query = new ReportQuery(Connection::wrap($this->pdo), Closure::fromCallable($this->clock), static function () use (&$passes, &$calls): int {
+            $calls++;
+
+            return array_shift($passes) ?? 0;
+        });
+        $notes = $query->run(ReportPeriod::fromStrings('2026-10-21', '2026-10-21', 'UTC', self::DAY))['notes'];
+        self::assertSame(3, $calls);
+        self::assertStringNotContainsString('expired sessions were waiting', implode("\n", $notes));
+
+        $calls = 0;
+        $endless = new ReportQuery(Connection::wrap($this->pdo), Closure::fromCallable($this->clock), static function () use (&$calls): int {
+            $calls++;
+
+            return 500;
+        });
+        $notes = $endless->run(ReportPeriod::fromStrings('2026-10-21', '2026-10-21', 'UTC', self::DAY))['notes'];
+        self::assertSame(ReportQuery::MAX_SWEEP_PASSES, $calls, 'bounded');
+        self::assertSame('At least 10000 expired sessions were waiting; 10000 were closed before counting, and any others may still show as open.', $notes[0]);
+    }
+
+    /**
+     * Round 2: more expired sessions than one sweep closes (SessionStore::SWEEP_LIMIT) are all
+     * closed before counting.
+     */
+    public function testMoreExpiredSessionsThanOneSweepAreAllClosed(): void
+    {
+        $this->clock->now = self::DAY + 100;
+        $store = new SessionStore(Connection::wrap($this->pdo), 30);
+        $this->pdo->beginTransaction();
+        for ($i = 0; $i < SessionStore::SWEEP_LIMIT + 20; $i++) {
+            $session = $store->create('static', 'amount', $this->clock->now);
+            $this->metrics->record('bot.session_start', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session->id, 'step' => 'greet']);
+        }
+        $this->pdo->commit();
+        $this->clock->now = self::DAY + 7200;
+        $app = TestEnvironment::app($this->clock, [], $this->pdo);
+
+        $report = $app->reportQuery()->run(ReportPeriod::fromStrings('2026-10-21', '2026-10-21', 'UTC', $this->clock->now));
+
+        self::assertSame([520, 520, 0], [$report['funnel'][0]['started'], $report['funnel'][0]['never_answered'], $report['funnel'][0]['open']]);
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM sessions WHERE status = 'open'")->fetchColumn());
+        self::assertStringNotContainsString('expired sessions were waiting', implode("\n", $report['notes']));
+    }
+
+    /**
+     * Round 2: an IP or a key in any free-form field never reaches JSON, CSV or the table;
+     * every such value is counted as `other`.
+     */
+    public function testNoFreeFormValueReachesAnyFormat(): void
+    {
+        $t = self::DAY + 100;
+        foreach ([self::IP, MockUpstream::FAKE_KEY] as $n => $secret) {
+            $session = 'leak' . $n;
+            $this->raw($t, 'bot.session_start', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session, 'step' => $secret]);
+            $this->raw($t, 'bot.step', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session, 'step' => $secret, 'error_code' => $secret, 'status' => 'error']);
+            $this->raw($t, 'bot.step', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session, 'step' => 'currency', 'currency' => $secret, 'country' => $secret]);
+            $this->raw($t, 'bot.session_abandoned', ['source' => 'bot', 'channel' => 'static', 'session_id' => $session, 'step' => $secret, 'error_code' => $secret, 'status' => 'error']);
+            $this->raw($t, 'bot.session_completed', ['source' => 'bot', 'channel' => 'static', 'session_id' => 'done' . $n, 'step' => $secret, 'currency' => $secret, 'country' => $secret, 'amount_usd_cents' => 100]);
+            $this->raw($t, 'api.request', ['currency' => $secret, 'amount_usd_cents' => 100]);
+            $this->raw($t, 'error', ['error_code' => $secret, 'status' => 'error']);
+            $this->raw($t, 'upstream.call', ['source' => 'upstream', 'currency' => $secret, 'error_code' => $secret, 'status' => 'error', 'meta' => ['result' => 'miss', 'endpoint' => $secret, 'reason' => $secret]]);
+            $this->raw($t, 'upstream.call', ['source' => 'upstream', 'meta' => ['result' => 'stale', 'endpoint' => 'latest', 'refresh_error' => $secret, 'reason' => $secret]]);
+            $this->raw($t, 'ip.block', ['meta' => ['block_source' => $secret, 'reason' => $secret, 'by' => $secret]]);
+            $this->raw($t, 'ip.unblock', ['meta' => ['block_source' => $secret, 'by' => $secret]]);
+        }
+
+        $report = $this->report('2026-10-21', '2026-10-21');
+        $outputs = [
+            'json' => json_encode(ReportFormatter::json($report), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'csv' => ReportFormatter::csv($report),
+            'table' => ReportFormatter::table($report),
+        ];
+
+        foreach ($outputs as $format => $text) {
+            self::assertStringNotContainsString(self::IP, $text, $format);
+            self::assertStringNotContainsString('203.0.113', $text, $format);
+            self::assertStringNotContainsString(MockUpstream::FAKE_KEY, $text, $format);
+            self::assertStringNotContainsString('fake-key', $text, $format);
+        }
+        self::assertSame(['other'], array_column($report['currencies'], 'currency'));
+        self::assertSame(['other'], array_column($report['countries'], 'country'));
+        self::assertSame(['other'], array_column($report['errors'], 'code'));
+        self::assertSame(['latest', 'codes', 'quota', 'other'], array_column($report['upstream']['endpoints'], 'endpoint'));
+        self::assertSame([['endpoint' => 'latest', 'code' => 'other', 'count' => 2], ['endpoint' => 'other', 'code' => 'other', 'count' => 2]], $report['upstream']['failures']);
+        self::assertSame([['block_source' => 'other', 'reason' => 'other', 'count' => 2, 'extended' => 0]], $report['ip_blocks']['blocks']);
+        self::assertSame([['block_source' => 'other', 'count' => 2]], $report['ip_blocks']['unblocks']);
+        self::assertSame(['amount', 'currency', 'installments', 'result', 'other'], array_column($report['funnel'][0]['steps'], 'step'));
+        self::assertStringContainsString('are counted as "other"', implode("\n", $report['notes']));
+    }
+
+    /**
+     * Round 2: a step named with digits (an int array key in PHP) is folded into `other`, and
+     * every format still prints.
+     */
+    public function testANumericStepNameStillPrints(): void
+    {
+        $this->session('s1', 'static', self::DAY + 10, [
+            ['bot.step', '2024', 'VALIDATION_AMOUNT', []],
+            ['bot.session_abandoned', '2024', 'BOT_MAX_RETRIES', []],
+        ]);
+
+        $report = $this->report('2026-10-21', '2026-10-21');
+
+        self::assertSame('other', $report['funnel'][0]['steps'][4]['step']);
+        self::assertStringContainsString('  other ', ReportFormatter::table($report));
+        self::assertStringContainsString("\r\nfunnel_step,static,other,abandoned,1\r\n", ReportFormatter::csv($report));
+    }
+
+    /**
+     * Round 2: only whole cents from 1 to `amount.max` × 100 are summed; any other value counts
+     * the conversion with no USD, in `unreadable_amounts`, and the sums stay integers.
+     */
+    public function testAmountsOutsideWholeCentsAreUnreadable(): void
+    {
+        $t = self::DAY + 100;
+        foreach ([100, PHP_INT_MAX, PHP_INT_MAX, -5, 0, 1.5, 'abc', null, 100_000_001, 100_000_000] as $cents) {
+            $this->raw($t, 'api.request', ['currency' => 'BRL', 'amount_usd_cents' => $cents, 'meta' => ['http_status' => 200, 'rate_scaled' => 1]]);
+        }
+
+        $report = $this->report('2026-10-21', '2026-10-21');
+
+        self::assertSame([10, 100_000_100, 8], [$report['summary']['conversions'], $report['summary']['amount_usd_cents'], $report['summary']['unreadable_amounts']]);
+        self::assertIsInt($report['days'][0]['amount_usd_cents']);
+        self::assertSame(100_000_100, $report['currencies'][0]['amount_usd_cents']);
+        self::assertStringContainsString('8 conversion(s) have an amount that is not whole cents', implode("\n", $report['notes']));
+        self::assertSame('1,000,001.00', ReportFormatter::json($report)['summary']['amount_usd']);
+        self::assertStringContainsString('USD converted', ReportFormatter::table($report));
+        self::assertStringContainsString('summary,,,unreadable_amounts,8', ReportFormatter::csv($report));
     }
 
     public function testTheSweepRunsBeforeCountingAndAFailedSweepOnlyAddsANote(): void
@@ -300,7 +465,7 @@ final class ReportQueryTest extends TestCase
         self::assertStringNotContainsString('203.0.113', serialize($report));
     }
 
-    public function testLabelsFromEventColumnsAreMadeSafe(): void
+    public function testLabelsAreCheckedAgainstTheirAllowLists(): void
     {
         $t = self::DAY + 100;
         $this->event($t, 'api.request', ['currency' => '=CMD()', 'amount_usd_cents' => 100, 'meta' => ['http_status' => 200]]);
@@ -308,12 +473,19 @@ final class ReportQueryTest extends TestCase
         $this->event($t, 'api.request', ['currency' => "\xC3(", 'amount_usd_cents' => 100, 'meta' => ['http_status' => 200]]);
         $this->event($t, 'api.request', ['currency' => str_repeat('x', 100), 'amount_usd_cents' => 100, 'meta' => ['http_status' => 200]]);
 
-        $codes = array_column($this->report('2026-10-21', '2026-10-21')['currencies'], 'currency');
+        $this->event($t, 'api.request', ['currency' => 'BRL', 'amount_usd_cents' => 100, 'meta' => ['http_status' => 200]]);
 
-        // Sorted as strings; the formula stays as it is here (CSV guards it, see CsvWriter).
-        self::assertSame(['=CMD()', '?(', "B\u{FFFD}[31mR", str_repeat('x', 64)], $codes);
-        self::assertSame(null, ReportQuery::label(null));
-        self::assertSame('7', ReportQuery::label(7));
+        $report = $this->report('2026-10-21', '2026-10-21');
+
+        // Round 2: anything but a 3-letter uppercase code is folded into `other`.
+        self::assertSame([['BRL', 1], ['other', 4]], array_map(static fn (array $row): array => [$row['currency'], $row['conversions']], $report['currencies']));
+        self::assertSame([null, 'BRL', 'other', 'other'], [ReportQuery::currency(null), ReportQuery::currency('BRL'), ReportQuery::currency('brl'), ReportQuery::currency(7)]);
+        self::assertSame(['Brazil', 'other', null], [ReportQuery::country('Brazil'), ReportQuery::country('brazil'), ReportQuery::country(null)]);
+        self::assertSame(['UPSTREAM_QUOTA', 'other', null], [ReportQuery::code('UPSTREAM_QUOTA'), ReportQuery::code('upstream_quota'), ReportQuery::code(null)]);
+        self::assertSame(['not_in_flow', 'other', 'other', 'none'], [ReportQuery::step('not_in_flow'), ReportQuery::step('Amount'), ReportQuery::step(str_repeat('a', 33)), ReportQuery::step(null)]);
+        $others = 0;
+        self::assertSame(['quota', 'other'], [ReportQuery::word('quota', ReportQuery::ENDPOINTS, $others), ReportQuery::word('Quota', ReportQuery::ENDPOINTS, $others)]);
+        self::assertSame(1, $others);
     }
 
     public function testTheRetentionNoteAppearsWhenThePeriodStartsBeforeTheKeptRequests(): void
@@ -343,6 +515,43 @@ final class ReportQueryTest extends TestCase
             $ts = $endAt !== null && $index === $count - 1 ? $endAt : $start + $index + 1;
             $this->event($ts, $type, $base + ['step' => $step, 'error_code' => $code] + $fields);
         }
+    }
+
+    /**
+     * Every step row of every channel adds up: reached = answered (or completed) + abandoned +
+     * never_answered + open; and started = completed + abandoned + never_answered + open.
+     *
+     * @param list<array<string, mixed>> $funnel
+     */
+    public static function assertFunnelAddsUp(array $funnel): void
+    {
+        foreach ($funnel as $channel) {
+            self::assertSame($channel['started'], $channel['completed'] + $channel['abandoned'] + $channel['never_answered'] + $channel['open'], $channel['channel']);
+            foreach ($channel['steps'] as $row) {
+                self::assertSame(
+                    $row['reached'],
+                    ($row['answered'] ?? $row['completed']) + $row['abandoned'] + $row['never_answered'] + $row['open'],
+                    "{$channel['channel']} {$row['step']}",
+                );
+            }
+        }
+    }
+
+    /**
+     * An events row written straight to the table, bypassing Metrics' checks (a hand-edited or
+     * imported row).
+     *
+     * @param array<string, mixed> $fields
+     */
+    private function raw(int $ts, string $type, array $fields): void
+    {
+        $fields += ['source' => 'api', 'status' => 'ok'];
+        if (isset($fields['meta'])) {
+            $fields['meta'] = json_encode($fields['meta'], JSON_THROW_ON_ERROR);
+        }
+        $columns = ['ts', 'event_type', ...array_keys($fields)];
+        $this->pdo->prepare(sprintf('INSERT INTO events (%s) VALUES (%s)', implode(', ', $columns), implode(', ', array_fill(0, count($columns), '?'))))
+            ->execute([$ts, $type, ...array_values($fields)]);
     }
 
     /**

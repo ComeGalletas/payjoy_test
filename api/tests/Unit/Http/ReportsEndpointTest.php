@@ -87,6 +87,9 @@ final class ReportsEndpointTest extends TestCase
         yield 'from after to' => [['from' => '2026-10-21', 'to' => '2026-10-20']];
         yield 'more than 366 days' => [['from' => '2025-10-20', 'to' => '2026-10-21']];
         yield 'a formula' => [['from' => '=CMD()']];
+        // Round 2: was a 500 INTERNAL (the day after it isn't a four-digit year).
+        yield 'year 9999' => [['from' => '9999-12-31', 'to' => '9999-12-31']];
+        yield 'to in year 9999' => [['from' => '9998-12-31', 'to' => '9999-01-01']];
     }
 
     /**

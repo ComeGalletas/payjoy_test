@@ -89,6 +89,15 @@ final class ReportPeriodTest extends TestCase
         ReportPeriod::fromStrings('2026-01-01', '2027-01-02', 'UTC', self::NOW);
     }
 
+    public function testTheLastAcceptedYearIs9998(): void
+    {
+        $period = ReportPeriod::fromStrings('9998-12-31', '9998-12-31', 'America/Bogota', self::NOW);
+
+        self::assertSame([ReportPeriod::MAX_YEAR, 1], [(int) substr($period->to, 0, 4), $period->dayCount()]);
+        self::assertGreaterThan($period->startUnix, $period->endUnix);
+        self::assertSame('1970-01-01', ReportPeriod::fromStrings('1970-01-01', '1970-01-01', 'America/Bogota', self::NOW)->from);
+    }
+
     public function testFromAfterToIsRefused(): void
     {
         try {
@@ -113,6 +122,9 @@ final class ReportPeriodTest extends TestCase
         yield 'trailing newline' => ["2026-10-21\n"];
         yield 'leading space' => [' 2026-10-21'];
         yield 'before 1970' => ['1969-12-31'];
+        // Round 2: the day after 9999-12-31 isn't a four-digit year.
+        yield 'year 9999' => ['9999-12-31'];
+        yield 'early in 9999' => ['9999-01-01'];
         yield 'relative' => ['yesterday'];
         yield 'formula' => ['=CMD()'];
     }

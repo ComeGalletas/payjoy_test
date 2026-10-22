@@ -15,6 +15,7 @@ use FxInstallments\Db\Migrator;
 use FxInstallments\Http\Request;
 use FxInstallments\Http\Response;
 use FxInstallments\Metrics\ErrorCodes;
+use FxInstallments\Rates\QuotaCache;
 use FxInstallments\Rates\RateStore;
 use FxInstallments\Rates\RateTable;
 use FxInstallments\Rates\UpstreamError;
@@ -22,6 +23,7 @@ use FxInstallments\Tests\Support\FakeClock;
 use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\OverridesEnvironment;
 use FxInstallments\Tests\Support\TestEnvironment;
+use FxInstallments\Tests\Support\TransactionSpyPdo;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -83,14 +85,73 @@ final class HealthEndpointTest extends TestCase
         self::assertSame(401, $this->health($this->app(), 'Bearer ' . self::TOKEN)->status(), 'an unset token refuses every admin request');
     }
 
-    public function testAWrongOrMalformedTokenIs401NotThePublicView(): void
+    public function testAWrongOrMalformedBearerTokenIs401NotThePublicView(): void
     {
-        foreach (['Bearer wrong', 'Bearer ' . self::TOKEN . "\n", 'Basic ' . self::TOKEN, ''] as $header) {
+        foreach (['Bearer wrong', 'Bearer ' . self::TOKEN . "\n", 'bearer', 'BEARER  ', "Bearer\t" . self::TOKEN, ' Bearer ' . self::TOKEN] as $header) {
             $response = $this->health($this->app(), $header);
 
             self::assertSame(401, $response->status(), json_encode($header, JSON_THROW_ON_ERROR));
             self::assertSame(ErrorCodes::ADMIN_UNAUTHORIZED, $response->errorCode());
         }
+    }
+
+    /**
+     * Round 2: only the Bearer scheme asks for the admin view; a proxy's Basic credentials or
+     * another scheme get the public one, not a 401.
+     */
+    public function testAnotherSchemeGetsThePublicView(): void
+    {
+        foreach (['Basic ' . base64_encode('user:pass'), 'Digest username="x"', 'Bearertoken', '', 'Token ' . self::TOKEN] as $header) {
+            $response = $this->health($this->app(), $header);
+
+            self::assertSame(200, $response->status(), json_encode($header, JSON_THROW_ON_ERROR));
+            self::assertSame('{"ok":true,"data":{"status":"ok"}}', $response->body());
+        }
+    }
+
+    /**
+     * Round 2: the write probe always rolls back and never commits.
+     */
+    public function testTheWriteProbeRollsBackAndNeverCommits(): void
+    {
+        $spy = TransactionSpyPdo::open($this->path);
+        $app = TestEnvironment::app($this->clock, [], $spy, $this->log, new MockUpstream());
+
+        self::assertSame(200, $this->health($app)->status());
+
+        self::assertSame(['begin' => 1, 'commit' => 0, 'rollBack' => 1], $spy->calls);
+        unset($app, $spy);
+    }
+
+    /**
+     * Round 2: while the database can't be written, the admin view never asks upstream for the
+     * quota (the answer couldn't be cached); it shows the last stored answer, or none.
+     */
+    public function testAReadOnlyDatabaseNeverAsksUpstreamForTheQuota(): void
+    {
+        $this->pdo->prepare('INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)')->execute([
+            QuotaCache::STATE_KEY,
+            json_encode(['checked_at' => self::NOW - 7200, 'plan_quota' => 1500, 'requests_remaining' => 1400, 'refresh_day_of_month' => 21], JSON_THROW_ON_ERROR),
+            self::NOW - 7200,
+        ]);
+        $upstream = new MockUpstream([self::quota(1500, 1, 21), self::quota(1500, 1, 21)]);
+        $readOnly = TestEnvironment::connectReadOnly($this->path);
+        $app = TestEnvironment::app($this->clock, [], $readOnly, $this->log, $upstream);
+
+        foreach ([1, 2, 3] as $view) {
+            $quota = $this->data($this->health($app, 'Bearer ' . self::TOKEN))['quota'];
+            self::assertSame(['blocked', '2026-10-22T01:00:00Z', 7200, 1400, null], [$quota['source'], $quota['checked_at'], $quota['age_seconds'], $quota['requests_remaining'], $quota['error_code']], "view {$view}");
+        }
+        self::assertSame(0, $upstream->calls());
+        unset($app, $readOnly);
+
+        // With nothing stored: blocked, no numbers.
+        $this->pdo->exec("DELETE FROM app_state WHERE key = '" . QuotaCache::STATE_KEY . "'");
+        $readOnly = TestEnvironment::connectReadOnly($this->path);
+        $empty = $this->data($this->health(TestEnvironment::app($this->clock, [], $readOnly, $this->log, $upstream), 'Bearer ' . self::TOKEN))['quota'];
+        self::assertSame(['blocked', null, null], [$empty['source'], $empty['checked_at'], $empty['plan_quota']]);
+        self::assertSame(0, $upstream->calls());
+        unset($readOnly);
     }
 
     public function testAReadOnlyDatabaseIsUnhealthy(): void

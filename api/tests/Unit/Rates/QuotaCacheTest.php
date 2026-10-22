@@ -117,6 +117,26 @@ final class QuotaCacheTest extends TestCase
         self::assertSame(['result' => 'blocked', 'endpoint' => 'quota', 'reason' => 'auth'], $this->events()[1][4]);
     }
 
+    /**
+     * Round 2: `mayAsk: false` (a database that can't be written) never asks upstream; a fresh
+     * cached answer is still a hit, an old one comes back as `blocked`.
+     */
+    public function testWithoutAskingTheLastAnswerIsShown(): void
+    {
+        $upstream = new MockUpstream([self::quota(1500, 1497, 21)]);
+        $cache = $this->cache($upstream);
+        self::assertSame(QuotaStatus::BLOCKED, $cache->status(false)->source, 'nothing stored yet');
+        $cache->status();
+        self::assertSame(QuotaStatus::CACHE, $cache->status(false)->source);
+        $this->clock->advance(7200);
+
+        $old = $cache->status(false);
+
+        self::assertSame([QuotaStatus::BLOCKED, self::NOW, 1497, null], [$old->source, $old->checkedAt, $old->quota?->requestsRemaining, $old->errorCode]);
+        self::assertSame(1, $upstream->calls());
+        self::assertSame(['result' => 'blocked', 'endpoint' => 'quota', 'reason' => 'read_only'], $this->events()[3][4]);
+    }
+
     public function testOtherTripsDoNotStopTheQuotaCall(): void
     {
         $upstream = new MockUpstream([self::quota(1500, 0, 1)]);

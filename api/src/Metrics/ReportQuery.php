@@ -5,41 +5,59 @@ declare(strict_types=1);
 namespace FxInstallments\Metrics;
 
 use Closure;
+use FxInstallments\Convert\CurrencyCountryMap;
 use FxInstallments\Db\Connection;
+use FxInstallments\Flow\SessionStore;
+use FxInstallments\Http\IpBlock;
 use JsonException;
 use PDO;
 use Throwable;
 
 /**
  * The numbers behind `/reports` and `bin/report.php` (docs/PLAN.md §1 "measurable", §6; P1-08),
- * read from `events` and `requests` over a ReportPeriod. Plain integers and fixed words only;
- * ReportFormatter turns them into JSON, CSV or a table. Portable SQL (§8): no date or JSON
- * functions, `meta` is decoded here.
+ * read from `events`, `sessions` and `requests` over a ReportPeriod. Plain integers and fixed
+ * words only; ReportFormatter turns them into JSON, CSV or a table. Portable SQL (§8): no date
+ * or JSON functions, `meta` is decoded here.
  *
  * **Never shown:** an IP (`requests.ip` and `ip_blocks` are never selected), the API key, or
- * any upstream text (no event holds them). Labels that come from event columns (currency,
- * country, step, error code) are cut to MAX_LABEL characters, with invalid UTF-8 and control
- * characters replaced, so a hand-edited row can't break the JSON or a terminal.
+ * any upstream text. Every label taken from an event is checked against an allow-list, and
+ * anything else is counted under OTHER (round 2), so a hand-edited or imported row can't put
+ * free text into any format:
+ * - endpoint: ENDPOINTS; error codes and `refresh_error`: ErrorCodes; `block_source`: `auto`,
+ *   `manual` (`none` when null); block `reason`: BLOCK_REASONS; channel: Metrics::CHANNELS;
+ * - currency: `^[A-Z]{3}$`; country: a CurrencyCountryMap name; step: `^[a-z_]{1,32}$`.
+ *
+ * **Amounts:** a conversion's cents count only when they are an integer from 1 to
+ * `amount.max` × 100; any other value (null, negative, REAL, text, too large) counts the
+ * conversion with no USD and adds to `summary.unreadable_amounts` and a note. So the sums are
+ * integers that can't overflow in practice (round 2).
  *
  * **Before counting**, expired sessions are closed (`App::sessionSweeper()`, ADR 0021), so the
- * funnel doesn't show them as still open. A failed sweep doesn't stop the report; it adds a note.
+ * funnel doesn't show them as still open. One sweep closes at most SessionStore::SWEEP_LIMIT,
+ * so it is repeated while a pass closes that many, at most `maxSweepPasses` times (round 2); if
+ * the bound is reached, or a sweep fails, the report still runs and says so in a note.
  *
  * Sections, all for events with `from <= ts < to` unless said otherwise:
  * - **summary** and **days** (split on `reports.timezone`): sessions started, completed and
  *   abandoned (event counts), conversions (an `api.request` with status ok plus a
  *   `bot.session_completed`) and their USD total as an integer sum of `amount_usd_cents`,
  *   `/convert` requests and errors, error responses, upstream calls.
- * - **currencies:** per currency, `requested` (an `api.request` with a validated currency, or a
- *   bot currency step answered) and conversions, split api and bot, with the cents total.
+ * - **currencies:** per currency, `requested` (an `api.request` with a currency, or a bot
+ *   currency step answered) and conversions, split api and bot, with the cents total.
  *   **countries:** per typed country (bot only), `requested` and conversions.
  * - **funnel** per channel: the sessions that *started* in the period (`bot.session_start`),
- *   followed to their end even after the period: started → each step (reached, answered,
- *   retries, abandoned) → completed. `retries` counts every failed answer at a step, a
- *   conversion that sent the user back (`via: convert`) included. A session that ended with no
- *   answer at all (an opened widget, closed as expired at `amount`) is `never_answered`, its
- *   own outcome, not counted in `abandoned`; it is still a `bot.session_abandoned` event
- *   (ADR 0022). Open sessions are `open`. So started = completed + abandoned + never_answered
- *   + open.
+ *   followed to their end even after the period. Each session has one final position: the step
+ *   where it completed (`result`), was abandoned, is still open (its `sessions.step`), or, for a
+ *   session that never sent an answer (an opened widget, closed as expired), `never_answered`
+ *   at `amount`: its own outcome, not counted in `abandoned`; it is still a
+ *   `bot.session_abandoned` event (ADR 0022). Per step, `reached` counts the sessions whose
+ *   final position is this step or a later one, `answered` those that got past it (the next
+ *   step's `reached`), and `abandoned`, `never_answered` and `open` those whose final position
+ *   is this step; so `reached = answered + abandoned + never_answered + open` on every row (for
+ *   `result`, `completed` in place of `answered`), and started = completed + abandoned +
+ *   never_answered + open. `retries` counts every failed answer at a step, a conversion that
+ *   sent the user back (`via: convert`) included. A step name outside the flow's order gets its
+ *   own row after the known ones.
  * - **errors** by code: `http`, one per error response (the Kernel's `error` event; a
  *   `/convert` 4xx or 503 also has an `api.request` event, which is not counted again;
  *   rate-limited and INTERNAL answers have only the `error` event; blocked requests have
@@ -57,11 +75,13 @@ use Throwable;
  *   `block_source`.
  *
  * Cost: one pass over the period's events, one over the funnel cohort's bot events (from the
- * period start on, through the `events_ts` index), and one grouped read of `requests`.
+ * period start on, through the `events_ts` index), one read of the cohort's open sessions, and
+ * one grouped read of `requests`.
  */
 final class ReportQuery
 {
-    public const MAX_LABEL = 64;
+    /** The label every value outside its allow-list is counted under. */
+    public const OTHER = 'other';
 
     public const CHANNELS = Metrics::CHANNELS;
 
@@ -72,24 +92,38 @@ final class ReportQuery
 
     public const RESULTS = ['hit', 'miss', 'stale', 'blocked'];
 
+    /** `ip.block` reasons: automatic thresholds (IpBlock), and manual `given` or `default`. */
+    public const BLOCK_REASONS = [IpBlock::REASON_RATE_LIMIT_HITS, IpBlock::REASON_ERROR_RESPONSES, 'given', 'default'];
+
+    public const BLOCK_SOURCES = [IpBlock::AUTO, IpBlock::MANUAL];
+
     /** The widget's file routes (WidgetEndpoint), for the request-log split. */
     public const WIDGET_ASSET_PATHS = ['/bot/widget', '/bot/widget.js', '/bot/widget.css', '/bot/widget.svg'];
 
     public const FAVICON_PATH = '/favicon.ico';
+
+    /** The most sweep passes before counting (round 2). */
+    public const MAX_SWEEP_PASSES = 20;
 
     /** @var Closure(): int */
     private readonly Closure $clock;
 
     /**
      * @param (Closure(): int)|null $clock UTC epoch seconds; defaults to time()
-     * @param (Closure(): int)|null $sweep closes expired sessions before counting (App::sessionSweeper())
+     * @param (Closure(): int)|null $sweep one sweep pass, returning how many sessions it
+     *        closed (App::sessionSweeper()->sweep())
      * @param int $requestsRetentionDays `requests.retention_days`, for the request-log note
+     * @param int $maxAmountCents `amount.max` × 100: the largest readable conversion amount
+     * @param int $sweepBatch the most one pass closes (SessionStore::SWEEP_LIMIT)
      */
     public function __construct(
         private readonly Connection $db,
         ?Closure $clock = null,
         private readonly ?Closure $sweep = null,
         private readonly int $requestsRetentionDays = 30,
+        private readonly int $maxAmountCents = 100_000_000,
+        private readonly int $sweepBatch = SessionStore::SWEEP_LIMIT,
+        private readonly int $maxSweepPasses = self::MAX_SWEEP_PASSES,
     ) {
         $this->clock = $clock ?? static fn (): int => time();
     }
@@ -99,14 +133,7 @@ final class ReportQuery
      */
     public function run(ReportPeriod $period): array
     {
-        $notes = [];
-        if ($this->sweep !== null) {
-            try {
-                ($this->sweep)();
-            } catch (Throwable) {
-                $notes[] = 'Expired sessions could not be closed before counting, so some sessions may still show as open.';
-            }
-        }
+        $notes = $this->sweepFirst();
         $now = ($this->clock)();
 
         $report = [
@@ -135,6 +162,19 @@ final class ReportQuery
                 $events['missing_rate'],
             );
         }
+        $unreadable = $report['summary']['unreadable_amounts'];
+        if ($unreadable > 0) {
+            $notes[] = sprintf(
+                '%d conversion(s) have an amount that is not whole cents from 0.01 to amount.max; they are counted with no USD.',
+                $unreadable,
+            );
+        }
+        if ($events['other_labels'] > 0) {
+            $notes[] = sprintf(
+                '%d value(s) outside the known codes, currencies, countries, steps or words are counted as "other".',
+                $events['other_labels'],
+            );
+        }
         $retainedFrom = $now - $this->requestsRetentionDays * 86_400;
         if ($period->startUnix < $retainedFrom) {
             $notes[] = sprintf(
@@ -148,10 +188,41 @@ final class ReportQuery
     }
 
     /**
+     * Sweeps expired sessions, pass after pass while a pass closes a full batch, at most
+     * maxSweepPasses times. Returns the notes to add.
+     *
+     * @return list<string>
+     */
+    private function sweepFirst(): array
+    {
+        if ($this->sweep === null) {
+            return [];
+        }
+        $passes = 0;
+        try {
+            do {
+                $closed = ($this->sweep)();
+                $passes++;
+            } while ($closed >= $this->sweepBatch && $passes < $this->maxSweepPasses);
+        } catch (Throwable) {
+            return ['Expired sessions could not be closed before counting, so some sessions may still show as open.'];
+        }
+        if ($closed >= $this->sweepBatch) {
+            return [sprintf(
+                'At least %d expired sessions were waiting; %d were closed before counting, and any others may still show as open.',
+                $passes * $this->sweepBatch,
+                $passes * $this->sweepBatch,
+            )];
+        }
+
+        return [];
+    }
+
+    /**
      * One pass over the period's events: summary, days, currencies, countries, errors, upstream,
      * ip_blocks.
      *
-     * @return array{sections: array<string, mixed>, missing_rate: int}
+     * @return array{sections: array<string, mixed>, missing_rate: int, other_labels: int}
      */
     private function eventSections(ReportPeriod $period): array
     {
@@ -169,7 +240,7 @@ final class ReportQuery
         foreach ($period->days as [$date]) {
             $days[] = ['date' => $date] + $dayTemplate;
         }
-        $summary = $dayTemplate + ['conversions_api' => 0, 'conversions_bot' => 0, 'api_errors' => 0, 'bot_errors' => 0];
+        $summary = $dayTemplate + ['conversions_api' => 0, 'conversions_bot' => 0, 'unreadable_amounts' => 0, 'api_errors' => 0, 'bot_errors' => 0];
         $currencies = [];
         $countries = [];
         $errors = [];
@@ -182,6 +253,7 @@ final class ReportQuery
         $blocks = [];
         $unblocks = [];
         $missingRate = 0;
+        $others = 0;
 
         $statement = $this->db->pdo()->prepare(
             'SELECT ts, event_type, status, error_code, step, currency, country, amount_usd_cents, meta'
@@ -195,10 +267,9 @@ final class ReportQuery
             }
             $type = (string) $row['event_type'];
             $ok = $row['status'] === 'ok';
-            $code = self::label($row['error_code']);
-            $currency = self::label($row['currency']);
-            $country = self::label($row['country']);
-            $cents = self::cents($row['amount_usd_cents']);
+            $code = self::code($row['error_code'], $others);
+            $currency = self::currency($row['currency'], $others);
+            $country = self::country($row['country'], $others);
             $meta = self::meta($row['meta']);
 
             switch ($type) {
@@ -208,7 +279,7 @@ final class ReportQuery
 
                 case 'bot.session_completed':
                     $days[$day]['sessions_completed']++;
-                    self::conversion($days[$day], $summary, $currencies, $countries, 'bot', $currency, $country, $cents);
+                    $this->conversion($days[$day], $summary, $currencies, $countries, 'bot', $currency, $country, $row['amount_usd_cents']);
                     if (!isset($meta['rate_scaled'])) {
                         $missingRate++;
                     }
@@ -240,7 +311,7 @@ final class ReportQuery
                         self::requested($currencies, $currency);
                     }
                     if ($ok) {
-                        self::conversion($days[$day], $summary, $currencies, $countries, 'api', $currency, null, $cents);
+                        $this->conversion($days[$day], $summary, $currencies, $countries, 'api', $currency, null, $row['amount_usd_cents']);
                         if (!isset($meta['rate_scaled'])) {
                             $missingRate++;
                         }
@@ -251,11 +322,11 @@ final class ReportQuery
 
                 case 'error':
                     $days[$day]['error_responses']++;
-                    self::countError($errors, $code ?? 'UNKNOWN', 'http');
+                    self::countError($errors, $code ?? self::OTHER, 'http');
                     break;
 
                 case 'upstream.call':
-                    $endpoint = self::label($meta['endpoint'] ?? 'latest') ?? 'latest';
+                    $endpoint = array_key_exists('endpoint', $meta) ? self::word($meta['endpoint'], self::ENDPOINTS, $others) : 'latest';
                     $upstream[$endpoint] ??= self::endpointTemplate();
                     $result = is_string($meta['result'] ?? null) && in_array($meta['result'], self::RESULTS, true) ? $meta['result'] : null;
                     $upstream[$endpoint]['lookups']++;
@@ -274,8 +345,8 @@ final class ReportQuery
                     $upstream[$endpoint]['calls']++;
                     $days[$day]['upstream_calls']++;
                     $failed = $result === 'stale'
-                        ? self::label($meta['refresh_error'] ?? null)
-                        : (isset($meta['reason']) ? ($code ?? 'UNKNOWN') : null);
+                        ? self::code($meta['refresh_error'] ?? null, $others)
+                        : (array_key_exists('reason', $meta) ? ($code ?? self::OTHER) : null);
                     if ($failed !== null) {
                         $upstream[$endpoint]['failed_calls']++;
                         $failures[$endpoint . "\0" . $failed] = ($failures[$endpoint . "\0" . $failed] ?? 0) + 1;
@@ -287,7 +358,9 @@ final class ReportQuery
                     break;
 
                 case 'ip.block':
-                    $key = (self::label($meta['block_source'] ?? null) ?? 'none') . "\0" . (self::label($meta['reason'] ?? null) ?? 'none');
+                    $reason = $meta['reason'] ?? null;
+                    $key = self::blockSource($meta['block_source'] ?? null, $others) . "\0"
+                        . ($reason === null ? 'none' : self::word($reason, self::BLOCK_REASONS, $others));
                     $blocks[$key] ??= ['count' => 0, 'extended' => 0];
                     $blocks[$key]['count']++;
                     if (($meta['extended'] ?? false) === true) {
@@ -296,7 +369,7 @@ final class ReportQuery
                     break;
 
                 case 'ip.unblock':
-                    $key = self::label($meta['block_source'] ?? null) ?? 'none';
+                    $key = self::blockSource($meta['block_source'] ?? null, $others);
                     $unblocks[$key] = ($unblocks[$key] ?? 0) + 1;
                     break;
             }
@@ -324,8 +397,8 @@ final class ReportQuery
         }
         $failureRows = [];
         foreach ($failures as $key => $count) {
-            [$endpoint, $code] = explode("\0", (string) $key, 2);
-            $failureRows[] = ['endpoint' => $endpoint, 'code' => $code, 'count' => $count];
+            [$endpoint, $failedCode] = explode("\0", (string) $key, 2);
+            $failureRows[] = ['endpoint' => $endpoint, 'code' => $failedCode, 'count' => $count];
         }
         $blockRows = [];
         foreach ($blocks as $key => $counts) {
@@ -353,6 +426,7 @@ final class ReportQuery
                 'ip_blocks' => ['blocks' => $blockRows, 'unblocks' => $unblockRows],
             ],
             'missing_rate' => $missingRate,
+            'other_labels' => $others,
         ];
     }
 
@@ -363,22 +437,23 @@ final class ReportQuery
      */
     private function funnel(ReportPeriod $period): array
     {
+        $cohort = "SELECT session_id FROM events WHERE event_type = 'bot.session_start' AND ts >= ? AND ts < ?";
         $statement = $this->db->pdo()->prepare(
             "SELECT session_id, channel, event_type, step, error_code, status FROM events WHERE source = 'bot' AND ts >= ?"
-            . " AND session_id IN (SELECT session_id FROM events WHERE event_type = 'bot.session_start' AND ts >= ? AND ts < ?)"
-            . ' ORDER BY id',
+            . " AND session_id IN ({$cohort}) ORDER BY id",
         );
         $statement->execute([$period->startUnix, $period->startUnix, $period->endUnix]);
 
+        $ignored = 0;
         /** @var array<string, array{channel: ?string, answered: array<string, true>, retries: array<string, int>, steps: int, end: ?array{string, string, ?string}}> $sessions */
         $sessions = [];
         while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
             $id = (string) $row['session_id'];
             $sessions[$id] ??= ['channel' => null, 'answered' => [], 'retries' => [], 'steps' => 0, 'end' => null];
-            $step = self::label($row['step']) ?? 'none';
+            $step = self::step($row['step'], $ignored);
             switch ($row['event_type']) {
                 case 'bot.session_start':
-                    $sessions[$id]['channel'] ??= self::label($row['channel']) ?? 'none';
+                    $sessions[$id]['channel'] ??= self::word($row['channel'], self::CHANNELS, $ignored);
                     break;
                 case 'bot.step':
                     $sessions[$id]['steps']++;
@@ -389,43 +464,49 @@ final class ReportQuery
                     }
                     break;
                 case 'bot.session_completed':
-                    $sessions[$id]['end'] ??= ['completed', $step, null];
+                    $sessions[$id]['end'] ??= ['completed', 'result', null];
                     break;
                 case 'bot.session_abandoned':
-                    $sessions[$id]['end'] ??= ['abandoned', $step, self::label($row['error_code']) ?? 'UNKNOWN'];
+                    $sessions[$id]['end'] ??= ['abandoned', $step, self::code($row['error_code'], $ignored) ?? self::OTHER];
                     break;
             }
         }
         $statement->closeCursor();
 
+        // Where each open session waits: its `sessions.step`.
+        $waiting = [];
+        $open = $this->db->pdo()->prepare("SELECT session_id, step FROM sessions WHERE status = 'open' AND session_id IN ({$cohort})");
+        $open->execute([$period->startUnix, $period->endUnix]);
+        foreach ($open->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $waiting[(string) $row['session_id']] = self::step($row['step'], $ignored);
+        }
+
         $channels = [];
         foreach (self::CHANNELS as $channel) {
             $channels[$channel] = self::channelTemplate();
         }
-        foreach ($sessions as $session) {
+        foreach ($sessions as $id => $session) {
             if ($session['channel'] === null) {
                 continue; // its start event was outside the cohort query (not possible; defensive)
             }
-            $channel = $session['channel'];
-            $channels[$channel] ??= self::channelTemplate();
-            $funnel = &$channels[$channel];
+            $funnel = &$channels[$session['channel']];
+            $funnel ??= self::channelTemplate();
             $funnel['started']++;
-            foreach (array_keys($session['answered']) as $step) {
-                $funnel['answered'][$step] = ($funnel['answered'][$step] ?? 0) + 1;
-            }
             foreach ($session['retries'] as $step => $count) {
-                $funnel['retries'][$step] = ($funnel['retries'][$step] ?? 0) + $count;
+                $funnel['retries'][(string) $step] = ($funnel['retries'][(string) $step] ?? 0) + $count;
             }
             if ($session['end'] === null) {
+                $at = $waiting[(string) $id] ?? self::nextStep($session['answered']);
                 $funnel['open']++;
+                $funnel['open_at'][$at] = ($funnel['open_at'][$at] ?? 0) + 1;
             } elseif ($session['end'][0] === 'completed') {
                 $funnel['completed']++;
             } elseif ($session['steps'] === 0) {
                 $funnel['never_answered']++;
             } else {
-                [, $step, $code] = $session['end'];
+                [, $at, $code] = $session['end'];
                 $funnel['abandoned']++;
-                $funnel['abandoned_at'][$step] = ($funnel['abandoned_at'][$step] ?? 0) + 1;
+                $funnel['abandoned_at'][$at] = ($funnel['abandoned_at'][$at] ?? 0) + 1;
                 $funnel['abandoned_by_code'][(string) $code] = ($funnel['abandoned_by_code'][(string) $code] ?? 0) + 1;
             }
             unset($funnel);
@@ -440,41 +521,67 @@ final class ReportQuery
     }
 
     /**
+     * The step an open session without a `sessions` row waits at: the one after the furthest
+     * known step it answered (never `result`), or the first.
+     *
+     * @param array<string, true> $answered
+     */
+    private static function nextStep(array $answered): string
+    {
+        $next = 0;
+        foreach (self::STEPS as $index => $step) {
+            if (isset($answered[$step])) {
+                $next = $index + 1;
+            }
+        }
+
+        return self::STEPS[min($next, count(self::STEPS) - 2)];
+    }
+
+    /**
      * @param array<string, mixed> $funnel
      * @return array<string, mixed>
      */
     private static function funnelRow(string $channel, array $funnel): array
     {
-        $names = array_unique(array_merge(
-            array_keys($funnel['answered']),
-            array_keys($funnel['retries']),
-            array_keys($funnel['abandoned_at']),
-        ));
-        $others = array_values(array_diff($names, self::STEPS));
-        sort($others, SORT_STRING);
+        // Sessions whose final position is each step.
+        $ending = [];
+        foreach (self::STEPS as $index => $step) {
+            $ending[$index] = ($funnel['abandoned_at'][$step] ?? 0) + ($funnel['open_at'][$step] ?? 0)
+                + ($index === 0 ? $funnel['never_answered'] : 0)
+                + ($step === 'result' ? $funnel['completed'] : 0);
+        }
+        $atOrBeyond = static fn (int $index): int => array_sum(array_slice($ending, $index));
 
         $steps = [];
-        $previous = $funnel['started'];
-        foreach (self::STEPS as $step) {
-            $answered = $funnel['answered'][$step] ?? 0;
-            $row = ['step' => $step, 'reached' => $previous];
+        foreach (self::STEPS as $index => $step) {
+            $row = ['step' => $step, 'reached' => $atOrBeyond($index)];
             if ($step === 'result') {
                 $row['completed'] = $funnel['completed'];
             } else {
-                $row['answered'] = $answered;
+                $row['answered'] = $atOrBeyond($index + 1);
                 $row['retries'] = $funnel['retries'][$step] ?? 0;
             }
             $row['abandoned'] = $funnel['abandoned_at'][$step] ?? 0;
+            $row['never_answered'] = $index === 0 ? $funnel['never_answered'] : 0;
+            $row['open'] = $funnel['open_at'][$step] ?? 0;
             $steps[] = $row;
-            $previous = $answered;
         }
+
+        $others = array_map('strval', array_keys($funnel['retries'] + $funnel['abandoned_at'] + $funnel['open_at']));
+        $others = array_values(array_diff(array_unique($others), self::STEPS));
+        sort($others, SORT_STRING);
         foreach ($others as $step) {
+            $abandoned = $funnel['abandoned_at'][$step] ?? 0;
+            $open = $funnel['open_at'][$step] ?? 0;
             $steps[] = [
                 'step' => $step,
-                'reached' => null,
-                'answered' => $funnel['answered'][$step] ?? 0,
+                'reached' => $abandoned + $open,
+                'answered' => 0,
                 'retries' => $funnel['retries'][$step] ?? 0,
-                'abandoned' => $funnel['abandoned_at'][$step] ?? 0,
+                'abandoned' => $abandoned,
+                'never_answered' => 0,
+                'open' => $open,
             ];
         }
         ksort($funnel['abandoned_by_code'], SORT_STRING);
@@ -525,7 +632,7 @@ final class ReportQuery
 
         $rows = [];
         foreach ($kinds as $kind => $counts) {
-            $rows[] = ['kind' => $kind] + $counts;
+            $rows[] = ['kind' => (string) $kind] + $counts;
         }
 
         return [
@@ -541,8 +648,13 @@ final class ReportQuery
      * @param array<string, array<string, int>> $currencies
      * @param array<string, array<string, int>> $countries
      */
-    private static function conversion(array &$day, array &$summary, array &$currencies, array &$countries, string $via, ?string $currency, ?string $country, int $cents): void
+    private function conversion(array &$day, array &$summary, array &$currencies, array &$countries, string $via, ?string $currency, ?string $country, mixed $rawCents): void
     {
+        $cents = $this->readableCents($rawCents);
+        if ($cents === null) {
+            $summary['unreadable_amounts']++;
+            $cents = 0;
+        }
         $day['conversions']++;
         $day['amount_usd_cents'] += $cents;
         $summary['conversions']++;
@@ -560,6 +672,18 @@ final class ReportQuery
             $countries[$country]['conversions_' . $via]++;
             $countries[$country]['amount_usd_cents'] += $cents;
         }
+    }
+
+    /**
+     * Whole cents from 1 to `amount.max` × 100, or null for anything else.
+     */
+    private function readableCents(mixed $value): ?int
+    {
+        if (is_string($value) && preg_match('/^[1-9]\d{0,17}$/D', $value) === 1) {
+            $value = (int) $value; // drivers that return integers as text
+        }
+
+        return is_int($value) && $value >= 1 && $value <= $this->maxAmountCents ? $value : null;
     }
 
     /**
@@ -582,7 +706,7 @@ final class ReportQuery
     }
 
     /**
-     * @param array<string, array<string, int>> $byKey
+     * @param array<array-key, array<string, int>> $byKey
      * @return list<array<string, int|string>>
      */
     private static function rows(string $name, array $byKey): array
@@ -618,34 +742,79 @@ final class ReportQuery
     {
         return [
             'started' => 0, 'completed' => 0, 'abandoned' => 0, 'never_answered' => 0, 'open' => 0,
-            'answered' => [], 'retries' => [], 'abandoned_at' => [], 'abandoned_by_code' => [],
+            'retries' => [], 'abandoned_at' => [], 'open_at' => [], 'abandoned_by_code' => [],
         ];
     }
 
     /**
-     * A safe label from an event column or meta value: null for null or a non-string, otherwise
-     * valid UTF-8 with control characters replaced, at most MAX_LABEL characters.
+     * $value when it is one of $allowed, otherwise OTHER (and $others is counted).
+     *
+     * @param list<string> $allowed
      */
-    public static function label(mixed $value): ?string
+    public static function word(mixed $value, array $allowed, int &$others = 0): string
     {
-        if (is_int($value)) {
-            $value = (string) $value;
+        if (is_string($value) && in_array($value, $allowed, true)) {
+            return $value;
         }
-        if (!is_string($value) || $value === '') {
-            return null;
-        }
-        $text = (string) preg_replace('/\p{Cc}/u', "\u{FFFD}", mb_scrub($value, 'UTF-8'));
+        $others++;
 
-        return mb_substr($text, 0, self::MAX_LABEL, 'UTF-8');
+        return self::OTHER;
     }
 
-    private static function cents(mixed $value): int
+    /**
+     * An ErrorCodes code, null for null, otherwise OTHER.
+     */
+    public static function code(mixed $value, int &$others = 0): ?string
     {
-        if (is_string($value) && preg_match('/^(0|[1-9]\d{0,17})$/D', $value) === 1) {
-            return (int) $value;
+        if ($value === null) {
+            return null;
         }
 
-        return is_int($value) && $value > 0 ? $value : 0;
+        return is_string($value) && ErrorCodes::isKnown($value) ? $value : self::word(null, [], $others);
+    }
+
+    /**
+     * A 3-letter uppercase code, null for null, otherwise OTHER.
+     */
+    public static function currency(mixed $value, int &$others = 0): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return is_string($value) && preg_match('/^[A-Z]{3}$/D', $value) === 1 ? $value : self::word(null, [], $others);
+    }
+
+    /**
+     * A CurrencyCountryMap country name, null for null, otherwise OTHER.
+     */
+    public static function country(mixed $value, int &$others = 0): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return is_string($value) && CurrencyCountryMap::currencyOf($value) !== null ? $value : self::word(null, [], $others);
+    }
+
+    /**
+     * A step name (`^[a-z_]{1,32}$`), `none` for null, otherwise OTHER.
+     */
+    public static function step(mixed $value, int &$others = 0): string
+    {
+        if ($value === null) {
+            return 'none';
+        }
+
+        return is_string($value) && preg_match('/^[a-z_]{1,32}$/D', $value) === 1 ? $value : self::word(null, [], $others);
+    }
+
+    /**
+     * `auto` or `manual`, `none` for null (an unblock with no active block), otherwise OTHER.
+     */
+    private static function blockSource(mixed $value, int &$others): string
+    {
+        return $value === null ? 'none' : self::word($value, self::BLOCK_SOURCES, $others);
     }
 
     /**

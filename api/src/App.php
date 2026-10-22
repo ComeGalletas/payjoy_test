@@ -131,15 +131,21 @@ final class App
     }
 
     /**
-     * The report over `events` and `requests` (P1-08); it sweeps expired sessions first.
+     * The report over `events`, `sessions` and `requests` (P1-08). It sweeps expired sessions
+     * first, one SessionStore::SWEEP_LIMIT batch per pass, repeated while a pass closes a full
+     * batch, at most ReportQuery::MAX_SWEEP_PASSES passes (round 2).
      */
     public function reportQuery(): ReportQuery
     {
+        $sweeper = $this->sessionSweeper();
+
         return new ReportQuery(
             $this->db,
             $this->clock,
-            fn (): int => $this->sessionSweeper()->sweep(),
+            static fn (): int => $sweeper->sweep(),
             $this->config->int('requests.retention_days'),
+            $this->config->int('amount.max') * 100,
+            SessionStore::SWEEP_LIMIT,
         );
     }
 

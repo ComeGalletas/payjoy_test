@@ -37,6 +37,15 @@ final class CsvWriterTest extends TestCase
         yield 'formula with a comma' => ['=HYPERLINK("http://x","y")', "\"'=HYPERLINK(\"\"http://x\"\",\"\"y\"\")\""];
         yield 'negative int is guarded too' => [-5, "'-5"];
         yield 'unicode text' => ['México', 'México'];
+        // Round 2: semicolon locales, and whitespace before a formula.
+        yield 'semicolon is quoted' => ['a;b', '"a;b"'];
+        yield 'a formula after a semicolon' => ["X;=cmd|' /C calc'!A0;", "\"X;'=cmd|' /C calc'!A0;\""];
+        yield 'every segment is guarded' => ['=1;+2;ok;@3', "\"'=1;'+2;ok;'@3\""];
+        yield 'space before a formula' => [' =CMD()', "' =CMD()"];
+        yield 'spaces before an at' => ['  @x', "'  @x"];
+        yield 'newline before a formula' => ["\n=1", "\"'\n=1\""];
+        yield 'space before a formula after a semicolon' => ['a; -1', "\"a;' -1\""];
+        yield 'plain spaces are fine' => [' a b', ' a b'];
     }
 
     #[DataProvider('cells')]
