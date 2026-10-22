@@ -2,7 +2,7 @@
 # Captured 2026-10-22 (America/Bogota) from P1-10's real-key run: one call, made by the lead.
 # Codes only: no key and no rates. 166 codes, sorted.
 # Used by tests/Acceptance/P1_10_LiveCodesTest.php. To refresh it, replace the codes with a new
-# capture, update the date above and the count, and run that test.
+# capture, update the date above, the count and the test's sha256, and run that test.
 AED
 AFN
 ALL

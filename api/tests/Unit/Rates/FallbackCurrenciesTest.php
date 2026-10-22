@@ -54,8 +54,9 @@ final class FallbackCurrenciesTest extends TestCase
 
     public function testTheCodesUpstreamQuotesOutsideIso4217AreUpstreamOnly(): void
     {
-        // P1-10: the offshore yuan and the legacy codes upstream still quoted on 2026-10-22.
-        foreach (['CNH', 'ANG', 'HRK', 'SLL', 'ZWL'] as $code) {
+        // P1-10: the offshore yuan and the legacy codes upstream still quoted on 2026-10-22
+        // (BGN moved from the ISO list by owner decision, round 2).
+        foreach (['CNH', 'ANG', 'BGN', 'HRK', 'SLL', 'ZWL'] as $code) {
             self::assertContains($code, FallbackCurrencies::UPSTREAM_ONLY, $code);
             self::assertNotContains($code, FallbackCurrencies::ISO_4217, $code);
         }

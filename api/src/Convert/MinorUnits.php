@@ -19,8 +19,8 @@ use LogicException;
  * - Upstream's non-ISO territory codes take their parent currency's exponent: FOK (DKK), GGP,
  *   IMP, JEP (GBP), KID, TVD (AUD): all 2.
  * - CNH, the offshore yuan, is the same currency as CNY, so it takes CNY's exponent: 2.
- * - The legacy codes ANG, HRK, SLL and ZWL keep the exponent ISO 4217 gave them before their
- *   withdrawal: all 2.
+ * - The legacy codes ANG, BGN, HRK, SLL and ZWL keep the exponent ISO 4217 gave them before
+ *   their withdrawal: all 2.
  *
  * A code that isn't in the table (a code upstream starts quoting later) uses DEFAULT; callers
  * record `meta.minor_units_default=true` for it (isKnown()).
@@ -44,7 +44,7 @@ final class MinorUnits
     /** @var list<string> codes with 2 decimals */
     private const TWO_DECIMALS = [
         'AED', 'AFN', 'ALL', 'AMD', 'AOA', 'ARS', 'AUD', 'AWG', 'AZN',
-        'BAM', 'BBD', 'BDT', 'BGN', 'BMD', 'BND', 'BOB', 'BRL', 'BSD', 'BTN', 'BWP', 'BYN', 'BZD',
+        'BAM', 'BBD', 'BDT', 'BMD', 'BND', 'BOB', 'BRL', 'BSD', 'BTN', 'BWP', 'BYN', 'BZD',
         'CAD', 'CDF', 'CHF', 'CNY', 'COP', 'CRC', 'CUP', 'CVE', 'CZK',
         'DKK', 'DOP', 'DZD',
         'EGP', 'ERN', 'ETB', 'EUR',
@@ -75,7 +75,7 @@ final class MinorUnits
         // The offshore yuan (CNY's exponent)
         'CNH',
         // Legacy codes upstream still quotes after their replacement (their last ISO exponent)
-        'ANG', 'HRK', 'SLL', 'ZWL',
+        'ANG', 'BGN', 'HRK', 'SLL', 'ZWL',
     ];
 
     /** @var array<string, int>|null */

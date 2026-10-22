@@ -10,7 +10,9 @@ use FxInstallments\App;
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Convert\MinorUnits;
 use FxInstallments\Db\Connection;
+use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\Request;
+use FxInstallments\Metrics\ErrorCodes;
 use FxInstallments\Rates\FallbackCurrencies;
 use FxInstallments\Rates\RateStore;
 use FxInstallments\Rates\RateTableAllowList;
@@ -30,7 +32,12 @@ use PHPUnit\Framework\TestCase;
  * - every captured code is on the fallback currency list, so on a cold start no code upstream
  *   quotes answers VALIDATION_CURRENCY (ADR 0012 amendment, the cold-start known limit);
  * - every captured code has an explicit `MinorUnits` exponent, so none falls back to DEFAULT;
- * - the codes P1-10 added convert through `/convert` on a cold start, with the mocked upstream.
+ * - `MinorUnits` lists exactly the fallback codes, and the fallback list holds exactly three
+ *   codes upstream didn't quote, KPW, SVC and VED (owner decision: kept);
+ * - the codes P1-10 put in `UPSTREAM_ONLY` (BGN included, moved there in round 2) convert
+ *   through `/convert` on a cold start and with a stored table, with the mocked upstream;
+ * - a kept code the stored table lacks answers `not_in_table` on the refreshing request, then
+ *   `not_allowed`.
  */
 final class P1_10_LiveCodesTest extends TestCase
 {
@@ -40,12 +47,19 @@ final class P1_10_LiveCodesTest extends TestCase
 
     private const CAPTURED_COUNT = 166;
 
+    /** sha256 of the captured codes, each followed by "\n" (the header left out) */
+    private const CAPTURED_CODES_SHA256 = '9df483d9ad14fea1118e0f1e803655572ed58c49846d038cfdcde8f430354429';
+
+    /** Fallback codes upstream didn't quote on 2026-10-22, kept by owner decision. */
+    private const KEPT_UNQUOTED = ['KPW', 'SVC', 'VED'];
+
     private const WHEN_UPSTREAM_ADDS_A_CODE = 'When upstream starts quoting a new code: add it to'
         . ' Rates\FallbackCurrencies (ISO_4217 if it is an active ISO 4217 code, otherwise'
         . ' UPSTREAM_ONLY with a one-line reason) and to Convert\MinorUnits (its ISO 4217 exponent,'
-        . ' or its parent currency\'s), refresh tests/Fixtures/upstream_latest_usd_codes.txt from a'
-        . ' new /latest/USD capture (codes only; new date and count in its header), and ask the lead'
-        . ' to update ADR 0012 and CONTEXT.md.';
+        . ' or its parent currency\'s; where the exponent is a choice, record it in ADR 0011,'
+        . ' amendment item 6), refresh tests/Fixtures/upstream_latest_usd_codes.txt from a new'
+        . ' /latest/USD capture (codes only; new date and count in its header, new sha256 here),'
+        . ' and ask the lead to update ADR 0012 and CONTEXT.md.';
 
     private const CLIENT = '203.0.113.10';
 
@@ -83,6 +97,16 @@ final class P1_10_LiveCodesTest extends TestCase
         sort($sorted, SORT_STRING);
         self::assertSame($sorted, $codes, 'sorted, each code once');
         self::assertContains('USD', $codes, 'the base currency quotes itself');
+        self::assertContains('BGN', $codes, 'upstream still quoted BGN on 2026-10-22');
+        // Pins the list itself, so removing a code and editing the count together still fails.
+        self::assertSame(self::CAPTURED_CODES_SHA256, hash('sha256', implode('', array_map(static fn (string $code): string => $code . "\n", $codes))));
+    }
+
+    public function testTheListsMatchEachOtherAndTheCapture(): void
+    {
+        // Both are sorted by code (SORT_STRING), so they are compared in order.
+        self::assertSame(FallbackCurrencies::all(), array_keys(MinorUnits::all()), 'MinorUnits lists exactly the fallback codes');
+        self::assertSame(self::KEPT_UNQUOTED, array_values(array_diff(FallbackCurrencies::all(), self::capturedCodes())), 'the only fallback codes upstream did not quote are the ones the owner kept');
     }
 
     public function testEveryCapturedCodeIsOnTheFallbackList(): void
@@ -125,31 +149,100 @@ final class P1_10_LiveCodesTest extends TestCase
     /**
      * @return iterable<string, array{string}>
      */
-    public static function codesAddedInP1_10(): iterable
+    public static function upstreamOnlyCodesFromP1_10(): iterable
     {
-        foreach (['ANG', 'CNH', 'HRK', 'SLL', 'ZWL'] as $code) {
+        foreach (['ANG', 'BGN', 'CNH', 'HRK', 'SLL', 'ZWL'] as $code) {
             yield $code => [$code];
         }
     }
 
-    #[DataProvider('codesAddedInP1_10')]
-    public function testACodeAddedInP1_10ConvertsOnAColdStart(string $code): void
+    #[DataProvider('upstreamOnlyCodesFromP1_10')]
+    public function testAnUpstreamOnlyCodeFromP1_10ConvertsOnAColdStart(string $code): void
     {
-        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM rate_cache')->fetchColumn(), 'cold start');
+        self::assertSame(0, $this->storedRates(), 'cold start');
         $upstream = new MockUpstream([MockUpstream::latest(['USD' => 1, $code => 2.5])]);
 
-        $response = $this->app($upstream)->kernel()->handle(
+        $response = $this->convert($this->app($upstream), $code);
+
+        self::assertConverted($code, $response);
+        self::assertSame(1, $upstream->calls());
+        self::assertArrayNotHasKey('minor_units_default', $this->apiRequestMetas()[0], 'an explicit exponent, not DEFAULT');
+    }
+
+    #[DataProvider('upstreamOnlyCodesFromP1_10')]
+    public function testAnUpstreamOnlyCodeFromP1_10ConvertsWithAStoredTable(string $code): void
+    {
+        $upstream = new MockUpstream([MockUpstream::latest(['USD' => 1, $code => 2.5])]);
+        $app = $this->app($upstream);
+        self::assertSame(200, $this->convert($app, 'USD')->status(), 'the first request stores the table');
+        self::assertSame(2, $this->storedRates());
+        self::assertFalse($app->currencyAllowList()->usesFallback(), 'the stored table is the allow-list');
+
+        $response = $this->convert($app, $code);
+
+        self::assertConverted($code, $response);
+        self::assertSame(1, $upstream->calls(), 'served from the stored table');
+        self::assertArrayNotHasKey('minor_units_default', $this->apiRequestMetas()[1]);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function keptUnquotedCodes(): iterable
+    {
+        foreach (self::KEPT_UNQUOTED as $code) {
+            yield $code => [$code];
+        }
+    }
+
+    #[DataProvider('keptUnquotedCodes')]
+    public function testAKeptCodeTheTableLacksIsRefusedAfterTheRefresh(string $code): void
+    {
+        // The FallbackCurrencies docblock: the refreshing request answers `not_in_table`; once the
+        // table is stored, it is the allow-list, so the code is `not_allowed`.
+        $upstream = new MockUpstream([MockUpstream::latest(['USD' => 1, 'EUR' => 0.8594])]);
+        $app = $this->app($upstream);
+
+        $first = $this->convert($app, $code);
+        $second = $this->convert($app, $code);
+
+        self::assertSame([400, ErrorCodes::UPSTREAM_UNSUPPORTED_CODE], [$first->status(), $first->errorCode()]);
+        self::assertSame([400, ErrorCodes::VALIDATION_CURRENCY], [$second->status(), $second->errorCode()]);
+        self::assertSame(['not_in_table', 'not_allowed'], array_column($this->apiRequestMetas(), 'reason'));
+        self::assertSame(1, $upstream->calls());
+    }
+
+    private function convert(App $app, string $code): JsonResponse
+    {
+        return $app->kernel()->handle(
             new Request('GET', '/convert', ['amount' => '200', 'cy' => $code, 'installments' => '3'], remoteAddr: self::CLIENT),
         );
+    }
 
+    private static function assertConverted(string $code, JsonResponse $response): void
+    {
         self::assertSame(200, $response->status(), $response->body());
         $data = json_decode($response->body(), true, 8, JSON_THROW_ON_ERROR)['data'];
         self::assertSame($code, $data['currency']);
         self::assertSame(['500.00', '166.66', '166.68'], [$data['display']['converted'], $data['display']['installment'], $data['display']['last_installment']]);
-        self::assertSame(1, $upstream->calls());
+    }
 
-        $meta = json_decode((string) $this->pdo->query("SELECT meta FROM events WHERE event_type = 'api.request'")->fetchColumn(), true, 8, JSON_THROW_ON_ERROR);
-        self::assertArrayNotHasKey('minor_units_default', $meta, 'an explicit exponent, not DEFAULT');
+    private function storedRates(): int
+    {
+        return (int) $this->pdo->query('SELECT COUNT(*) FROM rate_cache')->fetchColumn();
+    }
+
+    /**
+     * @return list<array<string, mixed>> the api.request events' meta, in order
+     */
+    private function apiRequestMetas(): array
+    {
+        $metas = [];
+        foreach ($this->pdo->query("SELECT meta FROM events WHERE event_type = 'api.request' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN) as $meta) {
+            $metas[] = json_decode((string) $meta, true, 8, JSON_THROW_ON_ERROR);
+        }
+
+        return $metas;
     }
 
     private function app(MockUpstream $upstream): App

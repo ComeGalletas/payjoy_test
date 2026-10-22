@@ -9,17 +9,19 @@ namespace FxInstallments\Rates;
  * is empty (a cold start), so a user still gets VALIDATION_CURRENCY for a code that isn't a
  * currency, and an upstream error only when upstream is the problem (docs/PLAN.md §3b).
  *
- * ISO_4217: the active ISO 4217 codes that name a currency, as of 2026 (`BGN` kept while
- * upstream may still publish it after the 2026 euro change). Left out: precious metals (XAU,
- * XAG, XPD, XPT), bond-market units (XBA to XBD), XSU, XUA, the test and no-currency codes
- * (XTS, XXX), and the fund codes upstream doesn't quote (BOV, CHE, CHW, COU, MXV, USN, UYI,
- * UYW). CLF and XDR stay: upstream quotes both. KPW, SVC and VED stay although upstream didn't
- * quote them on 2026-10-22: on a cold start they pass validation, and once a refresh has stored
- * the table they answer `not_in_table` like any code the table lacks (ADR 0012 amendment item 9).
+ * ISO_4217: the active ISO 4217 codes that name a currency, as of 2026. Left out: precious
+ * metals (XAU, XAG, XPD, XPT), bond-market units (XBA to XBD), XSU, XUA, the test and
+ * no-currency codes (XTS, XXX), and the fund codes upstream doesn't quote (BOV, CHE, CHW, COU,
+ * MXV, USN, UYI, UYW). CLF and XDR stay: upstream quotes both. KPW, SVC and VED stay although
+ * upstream didn't quote them on 2026-10-22 (owner decision): on a cold start they pass
+ * validation, and the request whose refresh stores a table without them answers 400
+ * UPSTREAM_UNSUPPORTED_CODE (`not_in_table`, ADR 0012 amendment item 9). Once that table is
+ * stored it is the allow-list, so later requests are refused as 400 VALIDATION_CURRENCY
+ * (`not_allowed`), like any code the table lacks.
  *
  * UPSTREAM_ONLY: codes ExchangeRate-API quotes that are not active ISO 4217 codes: territory
  * currencies pegged to a parent currency, the offshore yuan, and legacy codes upstream still
- * quotes after their replacement.
+ * quotes after their replacement (BGN among them since the 2026 euro change).
  *
  * Both lists were compared with the codes of a real `/latest/USD` answer on 2026-10-22 (P1-10):
  * every code upstream quoted is here. tests/Acceptance/P1_10_LiveCodesTest.php pins that, with
@@ -32,7 +34,7 @@ final class FallbackCurrencies
     /** @var list<string> */
     public const ISO_4217 = [
         'AED', 'AFN', 'ALL', 'AMD', 'AOA', 'ARS', 'AUD', 'AWG', 'AZN',
-        'BAM', 'BBD', 'BDT', 'BGN', 'BHD', 'BIF', 'BMD', 'BND', 'BOB', 'BRL', 'BSD', 'BTN', 'BWP',
+        'BAM', 'BBD', 'BDT', 'BHD', 'BIF', 'BMD', 'BND', 'BOB', 'BRL', 'BSD', 'BTN', 'BWP',
         'BYN', 'BZD',
         'CAD', 'CDF', 'CHF', 'CLF', 'CLP', 'CNY', 'COP', 'CRC', 'CUP', 'CVE', 'CZK',
         'DJF', 'DKK', 'DOP', 'DZD',
@@ -75,6 +77,7 @@ final class FallbackCurrencies
         'CNH', // offshore yuan: the renminbi traded outside mainland China; ISO 4217 has only CNY
         // Legacy codes upstream still quotes after their replacement
         'ANG', // Netherlands Antillean guilder, replaced by XCG in 2025
+        'BGN', // Bulgarian lev, replaced by EUR in 2026
         'HRK', // Croatian kuna, replaced by EUR in 2023
         'SLL', // Sierra Leonean leone, redenominated as SLE in 2022
         'ZWL', // Zimbabwean dollar, replaced by ZWG in 2024
