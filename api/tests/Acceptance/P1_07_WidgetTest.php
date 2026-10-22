@@ -72,11 +72,21 @@ final class P1_07_WidgetTest extends TestCase
 
     private const HARNESS = __DIR__ . '/../js/widget.test.js';
 
+    /** The harness's check count after round 3; fewer means checks were deleted. */
+    private const HARNESS_MIN_CHECKS = 61;
+
+    private const HARNESS_TIMEOUT_SECONDS = 30;
+
     /**
      * Patterns no widget file may contain, with the reason. Matched on the whole text, comments
      * included: JavaScript comments can't be stripped reliably with a pattern (`//` in strings
      * and URLs, regular expression literals), so the widget files simply never mention these.
      * Case-sensitive (JavaScript names are), except `javascript:` URLs.
+     *
+     * Frozen after P1-07 round 3: this list is a tripwire for review, not the control. The
+     * controls are Trusted Types in the page CSP (no HTML or script sink can run) and the Node
+     * harness's DOM proxy (any sink or unexpected property set fails it). Don't grow the list to
+     * chase obfuscation; strengthen those instead.
      */
     private const FORBIDDEN = [
         // Output safety (§3): every text goes in through textContent, never parsed as HTML.
@@ -98,9 +108,20 @@ final class P1_07_WidgetTest extends TestCase
         'new Function' => '/\bnew\s+Function\b/',
         'Reflect' => '/\bReflect\b/',
         'setTimeout/setInterval(string)' => '/\bset(?:Timeout|Interval)\s*\(\s*[\'"`]/',
+        // A backslash-u escape: `inner` + backslash-u-0048 + `TML` in an identifier still names
+        // innerHTML. Matches a backslash followed by u.
+        'unicode escape' => '/\\\\u/',
+        // Ways to set a property whose name the patterns above can't see.
+        'Object.assign/defineProperty' => '/\bObject\s*\.\s*assign\b|\bdefinePropert(?:y|ies)\b|__define[GS]etter__/',
+        '.call(/.apply(' => '/\.\s*(?:call|apply)\s*\(/',
+        // Computed object-literal keys (`{['inner' + 'HTML']: s}`), in JavaScript.
+        'computed object key' => '/[{,]\s*\[[^\]]*\]\s*:/',
         // Computed member access (`node['inner' + 'HTML']`, `list[0]`) in JavaScript, after a
-        // name, `)` or `]`; an array literal after `return` and similar keywords is allowed.
-        'computed member access' => '/(?:[)\]]|\b(?!(?:return|typeof|in|of|case|else|void|await|yield|throw)\b)[A-Za-z_$][\w$]*)\s*\[/',
+        // name, `)` or `]`; an array literal after `return` and similar keywords, and
+        // destructuring after `var`, `let` or `const`, are allowed. JSDoc types (`string[]`) are
+        // not exempted: a `/**` inside a string or regular expression would hide code, and the
+        // widget has no JSDoc.
+        'computed member access' => '/(?:[)\]]|\b(?!(?:return|typeof|in|of|case|else|void|await|yield|throw|var|let|const)\b)[A-Za-z_$][\w$]*)\s*\[/',
         // INV-01: the widget shows `display` strings verbatim and never rounds or formats a number.
         'toFixed' => '/toFixed/',
         'toPrecision' => '/toPrecision/',
@@ -111,7 +132,7 @@ final class P1_07_WidgetTest extends TestCase
     ];
 
     /** Checked in `.js` files only: CSS and HTML use `[` in selectors and attributes. */
-    private const JS_ONLY = ['computed member access'];
+    private const JS_ONLY = ['computed object key', 'computed member access'];
 
     private string $path;
 
@@ -325,6 +346,10 @@ final class P1_07_WidgetTest extends TestCase
             'new Function' => 'const make = new Function;',
             'Reflect' => "Reflect.set(box, 'inner' + 'HTML', reply);",
             'setTimeout/setInterval(string)' => "setInterval('tick()', 10);",
+            'unicode escape' => 'box.inner' . chr(92) . 'u0048TML = reply;', // chr(92) is a backslash
+            'Object.assign/defineProperty' => 'Object.assign(box, props);',
+            '.call(/.apply(' => 'setter.call(box, reply);',
+            'computed object key' => "var props = { ['inner' + 'HTML']: reply };",
             'computed member access' => "box ['inner' + 'HTML'] = reply;",
             'toFixed' => 'total.toFixed(2);',
             'toPrecision' => 'total.toPrecision(4);',
@@ -340,7 +365,7 @@ final class P1_07_WidgetTest extends TestCase
             $names[$file] = $name;
             file_put_contents($directory . '/' . $file, "// fine\n{$code}\n");
         }
-        file_put_contents($directory . '/comment.css', "/* never set innerHTML, even in a comment */\n.fxw [hidden] { display: none; }\n");
+        file_put_contents($directory . '/comment.css', "/* never set innerHTML, even in a comment */\n.fxw [hidden], .a, [b]:focus { display: none; }\n");
         file_put_contents($directory . '/clean.js', implode("\n", [
             'node.textContent = reply; // retrieval(x) is not eval',
             "node.setAttribute('aria-label', label);",
@@ -348,6 +373,9 @@ final class P1_07_WidgetTest extends TestCase
             'function make() { return [1, 2]; }',
             "var link = document.querySelector('link.fxw-stylesheet');",
             'var mathematics = 1;',
+            'const [first, second] = pair;',
+            'let [head] = list;',
+            'handlers.callback(reply);',
             '',
         ]));
 
@@ -377,8 +405,10 @@ final class P1_07_WidgetTest extends TestCase
         [$exit, $output] = self::runCommand(['node', self::HARNESS, App::WIDGET_DIR . '/widget.js']);
 
         self::assertSame(0, $exit, $output);
-        self::assertMatchesRegularExpression('/^0 failed of [1-9]\d* *$/m', $output);
-        self::assertStringNotContainsString('FAIL ', $output);
+        self::assertSame(1, preg_match('/^0 failed of (\d+) *$/m', $output, $summary), $output);
+        self::assertGreaterThanOrEqual(self::HARNESS_MIN_CHECKS, (int) $summary[1], 'harness checks were removed');
+        self::assertSame(0, substr_count($output, 'FAIL '));
+        self::assertSame((int) $summary[1], substr_count($output, 'PASS '), 'every check reported a result');
     }
 
     public function testAWidgetSessionOpensWithAnEmptyTextAndAScriptTagIsOnlyText(): void
@@ -621,12 +651,13 @@ final class P1_07_WidgetTest extends TestCase
 
     /**
      * Runs a command without a shell. Returns [exit code, stdout and stderr]; exit -1 when it
-     * couldn't be started.
+     * couldn't be started. A command still running after $timeoutSeconds is terminated and
+     * the test fails.
      *
      * @param list<string> $command
      * @return array{int, string}
      */
-    private static function runCommand(array $command): array
+    private static function runCommand(array $command, float $timeoutSeconds = self::HARNESS_TIMEOUT_SECONDS): array
     {
         $output = TestEnvironment::tempDir('node') . '/output.txt';
         $process = @proc_open($command, [0 => ['pipe', 'r'], 1 => ['file', $output, 'w'], 2 => ['file', $output, 'a']], $pipes);
@@ -634,8 +665,18 @@ final class P1_07_WidgetTest extends TestCase
             return [-1, ''];
         }
         fclose($pipes[0]);
-        $exit = proc_close($process);
 
-        return [$exit, (string) file_get_contents($output)];
+        $deadline = microtime(true) + $timeoutSeconds;
+        while (($status = proc_get_status($process))['running']) {
+            if (microtime(true) >= $deadline) {
+                proc_terminate($process);
+                proc_close($process);
+                self::fail(sprintf('%s did not finish within %d s: %s', implode(' ', $command), $timeoutSeconds, (string) file_get_contents($output)));
+            }
+            usleep(20_000);
+        }
+        proc_close($process);
+
+        return [(int) $status['exitcode'], (string) file_get_contents($output)];
     }
 }

@@ -11,7 +11,6 @@ const fs = require('fs');
 const vm = require('vm');
 
 const source = fs.readFileSync(process.argv[2], 'utf8');
-
 // Properties the widget may set on a node; anything else is reported.
 const ALLOWED_SETS = new Set(['className', 'textContent', 'hidden', 'type', 'autocomplete', 'maxLength',
   'disabled', 'value', 'rel', 'href', 'scrollTop', 'parentNode']);
@@ -185,8 +184,9 @@ const GENERIC = "Sorry, the chat can't be reached right now. Please try again la
     await tick();
     const p = parts(env);
     check('lazy: no request on page load', env.calls.length === 0, env.calls.length);
-    check('lazy: Start button shown, box usable, nothing focused', p.again.textContent === 'Start' && p.ending.hidden === false
+    check('lazy: Start chat button shown, box usable, nothing focused', p.again.textContent === 'Start chat' && p.ending.hidden === false
       && p.form.hidden === false && p.input.disabled === false && env.doc.activeElement === null);
+    check('the box takes at most 500 characters', p.input.maxLength === 500, p.input.maxLength);
     check('stylesheet link injected from script src', env.doc.head.all().some((n) => n.tagName === 'LINK' && n.href === 'https://api.test/bot/widget.css'));
 
     // First focus opens the session; the user types and submits before it answers.
@@ -209,7 +209,7 @@ const GENERIC = "Sorry, the chat can't be reached right now. Please try again la
     check('lazy: a message sent while opening waits for the open', env.calls.length === 1 && p.input.value === '200', [env.calls.length, p.input.value]);
     opening.release();
     await tick(); await tick();
-    check('lazy: the waiting message is then sent as an answer with the new id', env.calls.length === 2 && env.calls[1].body.text === '200' && env.calls[1].body.session_id === SID, env.calls.map((c) => c.body));
+    check('lazy: the waiting message is then sent as an answer with the new id, and the box is emptied', env.calls.length === 2 && env.calls[1].body.text === '200' && env.calls[1].body.session_id === SID && p.input.value === '', [env.calls.map((c) => c.body), p.input.value]);
     check('lazy: greeting first, then the answer, then the reply', JSON.stringify(texts(p)) === JSON.stringify([GREETING, '200', 'Which currency?']), texts(p));
     check('timeouts armed at 15 s and cleared', env.timers.length === 2 && env.timers.every((t) => t.ms === 15000 && t.cleared), env.timers);
     check('screen-reader prefixes', JSON.stringify(msgs(p).map((m) => m[2])) === JSON.stringify(['Bot: ', 'You: ', 'Bot: ']), msgs(p));
