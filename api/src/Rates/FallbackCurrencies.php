@@ -13,10 +13,17 @@ namespace FxInstallments\Rates;
  * upstream may still publish it after the 2026 euro change). Left out: precious metals (XAU,
  * XAG, XPD, XPT), bond-market units (XBA to XBD), XSU, XUA, the test and no-currency codes
  * (XTS, XXX), and the fund codes upstream doesn't quote (BOV, CHE, CHW, COU, MXV, USN, UYI,
- * UYW). CLF and XDR stay: upstream quotes both.
+ * UYW). CLF and XDR stay: upstream quotes both. KPW, SVC and VED stay although upstream didn't
+ * quote them on 2026-10-22: on a cold start they pass validation, and once a refresh has stored
+ * the table they answer `not_in_table` like any code the table lacks (ADR 0012 amendment item 9).
  *
- * UPSTREAM_ONLY: codes ExchangeRate-API quotes that are not in ISO 4217 (territory currencies
- * pegged to a parent currency).
+ * UPSTREAM_ONLY: codes ExchangeRate-API quotes that are not active ISO 4217 codes: territory
+ * currencies pegged to a parent currency, the offshore yuan, and legacy codes upstream still
+ * quotes after their replacement.
+ *
+ * Both lists were compared with the codes of a real `/latest/USD` answer on 2026-10-22 (P1-10):
+ * every code upstream quoted is here. tests/Acceptance/P1_10_LiveCodesTest.php pins that, with
+ * the captured codes in tests/Fixtures/upstream_latest_usd_codes.txt.
  *
  * Once a refresh has stored a table, its codes are the allow-list instead (RateTableAllowList).
  */
@@ -56,7 +63,22 @@ final class FallbackCurrencies
     ];
 
     /** @var list<string> */
-    public const UPSTREAM_ONLY = ['FOK', 'GGP', 'IMP', 'JEP', 'KID', 'TVD'];
+    public const UPSTREAM_ONLY = [
+        // Territory currencies pegged to a parent currency
+        'FOK', // Faroese krona (DKK)
+        'GGP', // Guernsey pound (GBP)
+        'IMP', // Manx pound (GBP)
+        'JEP', // Jersey pound (GBP)
+        'KID', // Kiribati dollar (AUD)
+        'TVD', // Tuvaluan dollar (AUD)
+        // Offshore market rate
+        'CNH', // offshore yuan: the renminbi traded outside mainland China; ISO 4217 has only CNY
+        // Legacy codes upstream still quotes after their replacement
+        'ANG', // Netherlands Antillean guilder, replaced by XCG in 2025
+        'HRK', // Croatian kuna, replaced by EUR in 2023
+        'SLL', // Sierra Leonean leone, redenominated as SLE in 2022
+        'ZWL', // Zimbabwean dollar, replaced by ZWG in 2024
+    ];
 
     /** @var array<string, true>|null */
     private static ?array $set = null;

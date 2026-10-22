@@ -10,13 +10,17 @@ use LogicException;
  * ISO 4217 minor units (docs/PLAN.md §3a, ADR 0011, CONTEXT "minor unit"): how many decimals
  * each currency's smallest unit has. All splitting and display work in integer minor units.
  *
- * The table covers every code in `Rates\FallbackCurrencies` (a unit test checks it) plus a few
- * legacy codes upstream may still quote. Sources and choices:
+ * The table covers every code in `Rates\FallbackCurrencies` (a unit test checks it), and so
+ * every code upstream quoted in a real `/latest/USD` answer on 2026-10-22
+ * (tests/Acceptance/P1_10_LiveCodesTest.php). Sources and choices:
  * - The exponents are ISO 4217's ("minor unit" column), as of 2026. ISO's value is used even
  *   where everyday practice differs (IDR, HUF, IQD, LBP keep their ISO exponents).
  * - XDR has no minor unit in ISO 4217 ("N.A."): 2 by convention, like most currencies.
  * - Upstream's non-ISO territory codes take their parent currency's exponent: FOK (DKK), GGP,
  *   IMP, JEP (GBP), KID, TVD (AUD): all 2.
+ * - CNH, the offshore yuan, is the same currency as CNY, so it takes CNY's exponent: 2.
+ * - The legacy codes ANG, HRK, SLL and ZWL keep the exponent ISO 4217 gave them before their
+ *   withdrawal: all 2.
  *
  * A code that isn't in the table (a code upstream starts quoting later) uses DEFAULT; callers
  * record `meta.minor_units_default=true` for it (isKnown()).
@@ -68,8 +72,10 @@ final class MinorUnits
         'ZAR', 'ZMW', 'ZWG',
         // Upstream's territory codes (parent currency's exponent)
         'FOK', 'GGP', 'IMP', 'JEP', 'KID', 'TVD',
-        // Legacy codes upstream may still quote after their replacement
-        'ANG', 'SLL', 'ZWL',
+        // The offshore yuan (CNY's exponent)
+        'CNH',
+        // Legacy codes upstream still quotes after their replacement (their last ISO exponent)
+        'ANG', 'HRK', 'SLL', 'ZWL',
     ];
 
     /** @var array<string, int>|null */

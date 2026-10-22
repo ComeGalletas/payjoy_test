@@ -39,6 +39,8 @@ final class MinorUnitsTest extends TestCase
             'CLF' => 4,
             // Upstream's territory codes follow their parent currency.
             'FOK' => 2, 'GGP' => 2, 'IMP' => 2, 'JEP' => 2, 'KID' => 2, 'TVD' => 2,
+            // The offshore yuan follows CNY; legacy codes keep their last ISO exponent (P1-10).
+            'CNH' => 2, 'ANG' => 2, 'HRK' => 2, 'SLL' => 2, 'ZWL' => 2,
         ];
         foreach ($expected as $code => $exponent) {
             self::assertSame($exponent, MinorUnits::of($code), $code);
