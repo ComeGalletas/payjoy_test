@@ -73,7 +73,7 @@ Reasons and consequences are in the ADR named in each row.
 
 | Topic | Decision | ADR |
 |---|---|---|
-| Language | PHP 8.3, no framework. Composer: `guzzlehttp/guzzle` (`^8.3`), `vlucas/phpdotenv`, `symfony/yaml`; `phpunit/phpunit` as require-dev. | 0001 |
+| Language | PHP 8.3, no framework. Composer: `guzzlehttp/guzzle` (`^8.3`), `vlucas/phpdotenv`, `symfony/yaml` (`^7.4`); `phpunit/phpunit` as require-dev. | 0001 |
 | Database | SQLite via PDO behind a `Database` factory, portable SQL, UTC epoch integers, JSON as TEXT. Postgres support (`Dialect`, second schema) deferred to L-03. | 0010 |
 | Chatbot MVP | Static flow in YAML, run by a PHP state machine. **No LLM in the MVP.** Deterministic parsing only. | 0003 |
 | LLM | Phase 2, feature-flagged normalizer in front of the deterministic validators. Never replaces validation. | 0003 |
@@ -229,7 +229,8 @@ string (`^\d{1,7}(\.\d{1,2})?$`) or "unclear":
 
 "Unclear" → the bot asks for clarification ("I couldn't read that amount. Please type it like 200,
 200.50 or 1.000,50."). This counts as a retry and records `bot.step` invalid with
-`VALIDATION_AMOUNT` and `meta.reason=unclear`. After `bot.max_retries` the session is abandoned.
+`VALIDATION_AMOUNT` and `meta.reason=unclear`. After `bot.max_retries` failures at one step the
+session is abandoned (retries count per step, ADR 0021).
 `/convert` does not use `AmountParser`; it accepts only the strict form.
 
 **Summary of the ADR 0013 amendment:** markers only at the ends; only space, NBSP and U+202F
@@ -321,6 +322,7 @@ Error codes (stable strings) and HTTP status:
 | Code | HTTP |
 |---|---|
 | `VALIDATION_AMOUNT`, `VALIDATION_CURRENCY`, `VALIDATION_INSTALLMENTS` | 400 |
+| `BAD_REQUEST` | 400 (an unreadable `/bot/message` body; ADR 0021) |
 | `UPSTREAM_UNSUPPORTED_CODE` | 400; 503 while an `unsupported-code` backoff is open (from P1-05, ADR 0012 amendment item 9) |
 | `UPSTREAM_TIMEOUT`, `UPSTREAM_QUOTA`, `UPSTREAM_AUTH`, `UPSTREAM_MALFORMED` | 503 |
 | `ADMIN_UNAUTHORIZED` | 401 |
@@ -336,7 +338,7 @@ Error codes (stable strings) and HTTP status:
 | Endpoint | Phase | Purpose |
 |---|---|---|
 | `GET /convert?amount&cy&installments?` | 1 | Conversion, installment amount (unrounded), `display` block, `rate_as_of`, `stale`. `amount` and `cy` required; `installments` defaults to `installments.default`; a missing `amount` or `cy`, an empty value, or an array answers `format`; checked in the order amount, currency, installments; extra parameters ignored, and a repeated one keeps its last value (PHP) |
-| `POST /bot/message {session_id?, text}` → `{session_id, reply, buttons?, step, done}` | 1 | Static flow engine; the contract every channel uses |
+| `POST /bot/message {session_id?, text}` → `{session_id, reply, buttons?, step, done}` | 1 | Static flow engine; the contract every channel uses. A JSON object of at most 4 KiB with `Content-Type: application/json`, else 400 `BAD_REQUEST`; `buttons` only while the waiting step has them; `done` once completed or abandoned; `reply` empty only with `done` for a double-submit on a closed session (ADR 0021) |
 | `GET /bot/widget` | 1 | Built-in chat page |
 | `GET /reports?from&to&format=json\|csv` (admin) | 1 | Summary, currencies/countries, funnel by step and channel, errors by code, upstream usage (calls, hits, stale, blocked) |
 | `GET /health` | 1 | Public: `status` only. Admin: quota left (cached), cache age, DB writable, breaker state |
@@ -415,6 +417,12 @@ steps:
     stale_note: "Rates couldn't be refreshed just now, so this uses the last known rate."
 ```
 
+> **Refined in P1-06: ADR 0021 is authoritative.** It adds the flow keys `max_retries_reply`,
+> `reasons` (per-reason texts, which may use `{{message_for_user}}`) and `upstream_error`, and the
+> rules for the first message, per-step retries, conversion retries, double-submits, the sweeper
+> and the loader. `not_in_table` re-asks the currency instead of ending the session (owner
+> decision).
+
 Engine rules:
 
 - Template choice: `installments = 1` → `say_single`; `display.even` → `say_even`; otherwise
@@ -425,7 +433,8 @@ Engine rules:
   or "Just one payment" on the optional step → `installments.default`.
 - If `convert` returns `VALIDATION_INSTALLMENTS`, the engine re-asks the installments step with the
   API's `message_for_user`; this counts as a retry. Upstream errors end the session with the API's
-  `message_for_user` and `bot.session_abandoned` carrying the error code.
+  `message_for_user` and `bot.session_abandoned` carrying the error code, except `not_in_table`,
+  which re-asks the currency (ADR 0021).
 - Sessions: ids are issued by the server (`bin2hex(random_bytes(16))`); an unknown or expired id
   starts a new session. On every `/bot/message` and before every report, open sessions past
   `expires_at` are closed as `bot.session_abandoned` with `BOT_SESSION_EXPIRED` and their last
@@ -613,6 +622,12 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   its own limit without updating the rate-limited-minute count (ADR 0016 second amendment).
   Also (from P1-05): the bot shows `display` verbatim, including the grouped `amount_usd`; its
   wording for `too_large` and `below_minor_unit` comes from the flow YAML.
+  *DONE 2026-10-21 (PR #18, two rounds). Decisions in ADR 0021 (owner: double-submits answer the
+  current question, `not_in_table` re-asks the currency, `BAD_REQUEST` accepted; ratified: per-step
+  retries, the first message is never an answer, the `below_minor_unit` wording, `bob` = BOB,
+  `won` ambiguous) and the ADR 0001 second amendment (`symfony/yaml` 7.4). Round 2 added
+  `Flow/SessionSweeper`, a lazily built upstream client, loader hardening and
+  `RoundingRuleTest` (INV-01, PHP in `api/src/`).*
 - **P1-07** `resources/widget/` at `GET /bot/widget`, `channel=static`, `textContent` only, CSP,
   `nosniff`, `frame-ancestors`.
   *Acceptance:* `tests/Acceptance/P1_07_WidgetTest.php` — response has the CSP and `nosniff`
@@ -624,6 +639,11 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   403 envelope; show its `message_for_user` verbatim. A widget embedded from another origin gets
   the 403 without CORS headers, so `fetch` fails; show a generic "try again later" for any network
   failure.
+  Also (from P1-06): open the session with `{"text": ""}` and `Content-Type: application/json`;
+  render `reply` with `textContent` (line breaks via `white-space: pre-line`); skip an empty
+  `reply`; show buttons only when present; lock input while a request is in flight; show the
+  `BAD_REQUEST` text verbatim. The widget checks of INV-01 aren't built yet: the acceptance test
+  should also reject `Math.round`.
 - **P1-08** `Metrics/ReportQuery`, `ReportFormatter`, `CsvWriter` → `GET /reports` (json/csv) and
   `bin/report.php` (table/csv/json); `GET /health` (public and admin views).
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
@@ -648,6 +668,10 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   the `error` event, and IP-blocked requests have neither. To recompute report amounts exactly,
   store the `rate_scaled` (and `rate_as_of`) used by each conversion first, e.g. in the
   `api.request` meta; nothing stores it today (ADR 0011 amendment).
+  Also (from P1-06): sweep with `App::sessionSweeper()` before counting; in the funnel, separate
+  sessions that never got an answer (page views abandoned at `amount`); `bot.step` can carry
+  `UPSTREAM_UNSUPPORTED_CODE` (`not_in_table`); bot conversions write no `api.request` event and
+  no `rate_scaled` (ADR 0021).
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
   IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
   the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
@@ -682,7 +706,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `OpenAiAdapter`; selected by `LLM_PROVIDER`. `llm.call` events: provider, model, tokens,
   latency, fallback flag.
 - **P2-03** `POST /normalize`; `FlowEngine` uses it only when `llm.enabled=true`. Tests with mocked
-  adapter, including prompt-injection inputs.
+  adapter, including prompt-injection inputs. The normalizer goes in `FlowEngine::read()`, ahead of
+  the same readers (ADR 0021).
 - **P2-04** Reports: LLM section (usage, est. cost, fallback rate, completion rate with vs
   without).
 - **P2-05** `/health` admin view checks LLM reachability.
@@ -709,12 +734,14 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,
   `meta` size cap, rate limit.
 - **P3-04** `GET /capabilities` and generated `docs/CAPABILITIES.md`.
-- **P3-05** Typebot flow with HTTP Request blocks against catalog endpoints; `{{resultId}}` as
-  `session_id`; `channel=typebot`; money only from `display.*`. Export to
+- **P3-05** Typebot flow with HTTP Request blocks against catalog endpoints; the server-issued
+  `session_id` stored and sent back (not `{{resultId}}`); a way to mark sessions
+  `channel=typebot`; money only from `display.*` (ADR 0004 amendment). Export to
   `typebot/flows/fx_installments.json` + sub-flow templates (validate-or-retry).
 - **P3-06** Loader snippet reading `config.bot.frontend`; `/health` checks the Typebot viewer for
   automatic fallback to the static widget.
-- **P3-07** Contract test: every HTTP block in the export maps to a catalog endpoint/field.
+- **P3-07** Contract test: every HTTP block in the export maps to a catalog endpoint/field. The
+  `/bot/message` response fields (ADR 0021) are part of the contract.
 - **P3-08** `GET /reports/dashboard` with Chart.js vendored under `resources/dashboard/`.
 - **P3-09** `daily_rollups` + `bin/rollup.php`, scheduled by a cron service in the compose stack;
   reports switch to rollups for past days.
@@ -733,7 +760,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   `UpstreamBreaker::succeeded()` read and delete in one transaction, so it can't erase a trip
   another process wrote in between (ADR 0012 amendment). On Postgres a failed INSERT aborts the
   transaction, so the UPDATE fallback in `UpstreamBreaker::write()` needs a savepoint or an upsert
-  (P1-05).
+  (P1-05). The session sweep is one transaction; on Postgres a failed event INSERT aborts it, so it
+  needs a savepoint per event (P1-06).
 - **L-04** Tooling backlog from the P0-06 review:
   - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
   - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
@@ -774,6 +802,17 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     compute the exact total (harmless, well under a microsecond per call).
   - (P1-05) The `ConvertService` and `Conversion` docblocks call the raw numbers "the nearest
     double"; they are products of the nearest doubles of the amount and rate. Fix the wording.
+  - (P1-06) `RoundingRuleTest`: add `floor(`, `ceil(` and `fdiv(`, and scan `api/bin/` too
+    (`bin/report.php` arrives in P1-08). It can't see dynamic calls (`array_map('round', …)`,
+    `$f = 'round'; $f()`, `sprintf($fmt, …)`); the behaviour tests are the backstop.
+  - (P1-06) A message in flight when expiry closes its session gets `done: true` with an empty
+    reply; answer it like an expired id instead (a new session and the greeting).
+  - (P1-06) Document the busy wait before a skipped sweep; the loader's `!!` error could name the
+    line; `FlowDefinition::steps()` is used only by tests; `Step` is a bag of nullable fields;
+    `abandon()` takes 9 parameters; `read()` returns a 4-tuple although `InstallmentsReading`
+    exists; a later `FlowLoader` / `FlowDefinition` split would shrink the loader.
+  - (P1-06) "Just one payment" maps to `installments.default`; if the owner changes the default
+    from 1, change the button text too.
 
 ## 11. Working agreements for the agent
 

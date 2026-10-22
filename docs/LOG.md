@@ -4,6 +4,52 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — P1-06 Flow engine and `POST /bot/message` (PR #18, head 8887acb)
+
+- PR #17 (P1-05 close-out) merged by the owner as `53199b1`.
+- **Round 1** (`f5d0b70`). Builder: DONE_WITH_CONCERNS. It built `flows/default.yaml`, the loader
+  (`symfony/yaml` 7.4.21), `FlowEngine`, `SessionStore`, `POST /bot/message`, `bin/bot.php`,
+  `InstallmentsReading`, a wider ambiguous list and 13 more countries. Concerns: `symfony/yaml` 7.4
+  instead of 8.x, a new `BAD_REQUEST` code, and the §9 vs P1-05 wording conflict.
+  Unit+Acceptance went from 1409 to 1665 tests; guards stayed at 80.
+- Tester round 1: PASS. 400 random conversations matched `/convert`'s `display` exactly; no typed
+  text stored; hostile input never reached a reply. Nits: `!!binary` passed the loader, an alias
+  bomb was expanded before the schema check, and a race loser could be stranded. Mutations M6b and
+  M9a survived. Judge round 1: APPROVE WITH NITS, with should-fixes on race replay, a sweep that
+  needed the YAML and ran without a transaction, and the CLI test's network guard.
+- Owner decisions: double-submits answer the current question (or `done: true`); `not_in_table`
+  re-asks the currency; `BAD_REQUEST` accepted, counting toward blocking; per-step retries, the
+  first-message rule, `symfony/yaml` 7.4, the `below_minor_unit` wording, `bob` = BOB and `won`
+  ambiguous ratified. Every agent brief now carries "one plain shell command per tool call".
+- **Round 2** (`8887acb`): the two behaviour changes, `Flow/SessionSweeper` in one transaction, a
+  lazily built upstream client (the CLI test runs with ADR 0018's gate flags), loader hardening,
+  `RoundingRuleTest`, `bot.max_retries` tests; 1688 tests. Tester: PASS, all 12 mutations caught.
+  Judge: APPROVE WITH NITS.
+- Co-leads: both approved. **Merge order:** GitHub shows PR #18 merged at the reviewed head as
+  `d5c75fd` by ComeGalletas at 03:25:34 UTC (2026-10-22), 23 seconds before the lead's approval
+  comment was posted (03:25:57 UTC); the lead's merge command then reported it already merged. As
+  with PRs #8 and #10, the code is the reviewed code, but the order differs from the ADR 0015
+  amendment (the lead posts the comment, then merges).
+- **Process.** The builder hit two worktree-guard refusals in round 1 and none in round 2 (PR #18
+  body); the tester hit three in round 1 and one in round 2 (its reports to the lead); the judge
+  none. Each was handled by the block message's own remedy once, or with the Write, Edit or Grep
+  tool; no guarded target was touched.
+- Upstream: 0 real calls.
+- **GUARDRAILS gap (owner request: note it, leave `docs/GUARDRAILS.md` unchanged for now).**
+  `docs/GUARDRAILS.md` lists two checks that weren't built:
+  - INV-01's "`make check` grep" for `round(` / `number_format(`, and for `toFixed`,
+    `Intl.NumberFormat` and `Math.round` in the widget. Since P1-06, `RoundingRuleTest` (in the
+    unit suite, so in `make check`) covers PHP in `api/src/`: `round(`, `number_format(`,
+    `floatval(`, `(float)` and printf-family float formats, token-based, outside
+    `InstallmentCalculator` and `ReportFormatter`. It doesn't cover `floor(`, `ceil(`, `fdiv(`,
+    dynamic calls or `api/bin/` (L-04). The widget checks don't exist yet (P1-07).
+  - GR-002's backstop, "secret scan in `make check`": not built (P0-07, deferred).
+- Lead docs: ADR 0021 (flow engine and bot message contract); ADR 0001 second amendment
+  (`symfony/yaml` 7.4); ADR 0004 amendment (Typebot session id and channel); PLAN §2, §3c, §5
+  (`BAD_REQUEST`), §6, §9 pointer and the `not_in_table` exception, P1-06 done note, follow-ups in
+  P1-07, P1-08, P2-03, P3-05, P3-07, L-03 and L-04; CONTEXT terms (conversion retry, double-submit,
+  say step, result template, max-retries reply, session sweeper; code words without `bob`).
+
 ## 2026-10-21 — P1-05 Convert and `GET /convert` (PR #16, head 0eda0ce)
 
 - PR #15 (P1-11 close-out) merged by the owner as `f751c91`. Owner decision: GUARDRAILS INV-08 now

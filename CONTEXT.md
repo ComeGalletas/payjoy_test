@@ -42,8 +42,8 @@ name, add it here in the same commit that introduces it.
 | **allow-list** | Currency codes in the latest stored rate table. Input not on it never reaches upstream. |
 | **fallback currency list** | Static list (`FallbackCurrencies`) of ISO 4217 currency codes plus upstream's non-ISO territory codes (FOK, GGP, IMP, JEP, KID, TVD); validates codes when the cache is empty. |
 | **synonym table** | Static map from currency names and symbols, in English and Spanish (`reais`, `R$`, `euro`), to a currency code (`CurrencySynonyms`). Country names live in the currency-country map, except countries with more than one currency (`Panama`), which are on the ambiguous list. |
-| **ambiguous currency text** | Text that several currencies share (`$`, `peso`, `dollar`, `libra`); always unclear, never guessed. |
-| **code word** | An English word that is also a currency code (`CurrencySynonyms::CODE_WORDS`: `all bob cup kid mad mop sos top try`). Typed in capitals it is the code (`TRY`); in any other case it is ambiguous (`try`, `Try`). |
+| **ambiguous currency text** | Text that several currencies share (`$`, `peso`, `dollar`, `libra`, `pound`, `won`, `¥`); always unclear, never guessed. |
+| **code word** | An English word that is also a currency code (`CurrencySynonyms::CODE_WORDS`: `all cup kid mad mop sos top try`; `bob` left it when Bolivia was mapped, so it is the BOB code in any case). Typed in capitals it is the code (`TRY`); in any other case it is ambiguous (`try`, `Try`). |
 | **currency-country map** | PHP array (`CurrencyCountryMap`) linking country names to currencies. A country is recorded only when the user typed one. |
 | **admin token** | `ADMIN_TOKEN` from `.env`, sent only as `Authorization: Bearer`; unset means all admin requests are refused. |
 | **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` equals `REMOTE_ADDR`. |
@@ -69,10 +69,16 @@ name, add it here in the same commit that introduces it.
 | **step** | One flow entry: `greet`, `amount`, `currency`, `installments`, `result`. |
 | **flow engine** | `Flow/FlowEngine`, the state machine that runs a flow. |
 | **session** | One conversation, with a server-issued `session_id`, stored in `sessions` with a TTL and a status (`open`, `completed`, `abandoned`). |
-| **retry** | A re-ask after invalid input. After `bot.max_retries` the session is abandoned. |
+| **retry** | A re-ask after invalid input. Counted per step: after `bot.max_retries` failures at one step the session is abandoned (ADR 0021). |
+| **conversion retry** | A retry caused by the conversion, not the typed answer: `too_large` re-asks the amount, `below_minor_unit` the installments, `not_in_table` the currency. |
+| **double-submit** | A message that loses the save race on its session (a double click, a client retry). It is read again only if the session still waits on the same step; otherwise it gets the current question, or `done: true` if the session closed (ADR 0021). |
+| **say step** | A flow step that only shows text (`greet`), at the start of a session. |
+| **result template** | `say_single`, `say_even` or `say_uneven`, chosen from `installments` and `display.even`. |
+| **max-retries reply** | `max_retries_reply` in the flow file: the text shown when a session is abandoned by max retries. |
+| **session sweeper** | `Flow/SessionSweeper`: closes expired open sessions as `BOT_SESSION_EXPIRED`, in one transaction, without needing the flow file. |
 | **clarification** | A retry asking the user to retype an amount `AmountParser` couldn't read unambiguously, or a currency answer that was ambiguous. |
 | **ok / unclear / invalid** | The three outcomes of reading bot input (`Validation\Outcome`): read; couldn't be read unambiguously (ask again); rejected — out of range, not allowed, unknown or malformed. |
-| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`, `too_large` (the total reaches 2^53 minor units). Currency: `format`, `not_allowed`, `unknown`, `ambiguous`. Installments: `format`, `out_of_range`, `below_minor_unit` (fewer minor units than installments). |
+| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`, `too_large` (the total reaches 2^53 minor units). Currency: `format`, `not_allowed`, `unknown`, `ambiguous`, and `not_in_table` from the conversion. Installments: `format`, `out_of_range`, `below_minor_unit` (fewer minor units than installments). |
 | **folding** | `TextNormalizer`: case-insensitive comparison of user text that also removes precomposed Latin accents (`México` = `mexico`), independent of locale. |
 | **completed session** | Reached the `result` step and showed a result. |
 | **abandoned session** | Ended by max retries (`BOT_MAX_RETRIES`), expiry (`BOT_SESSION_EXPIRED`) or an upstream error; the event records the step. |
