@@ -109,6 +109,7 @@ name, add it here in the same commit that introduces it.
 | **reached** / **passed** | Per funnel step: `reached` = final position at this step or later; `passed` = final position past this step (a session a conversion retry sent back counts at the earlier step). |
 | **never answered** | A session that ended with no `bot.step` at all (not even a failed answer); a funnel outcome of its own, though still a `bot.session_abandoned` event. |
 | **report** | Output of `ReportQuery`, via `/reports` (JSON or CSV) or `bin/report.php` (table, CSV or JSON), over a report period (ADR 0023). |
+| **demo data** | The rows `php api/db/seed_demo.php` writes into a throwaway database: events marked `"demo": true`, sessions with fixed ids, request-log rows from documentation addresses; never rates (ADR 0024). |
 | **report period** | Whole days in `reports.timezone`, `from` to `to` both included, years 1970 to 9998, at most 366 days; the last 7 days by default. |
 | **other** (label) | A value from an event outside its label allow-list; such values are counted together, and a note gives how many. (The `other` code a report gives a session closed without its end event isn't in that count.) |
 | **label allow-list** | The fixed set a report label must belong to (ADR 0023 item 8), such as `ErrorCodes`, or `^[A-Z]{3}$` for currency; not the rate table's allow-list. |

@@ -4,6 +4,54 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — P1-09 Seed data and docs (PR #26, head b3ae82d)
+
+- PR #24 (P1-08 close-out) merged by the owner as `fdb851d`.
+- Owner decisions before the build: CLAUDE.md says builders don't edit `docs/`, so for P1-09 only
+  the builder may create exactly `docs/README.md`, `docs/INSTALL_LOCAL.md` and `docs/REPORTS.md`;
+  and `seed_demo` writes no rates (the INSTALL `/convert` uses the real key, the test the mock).
+- **Round 1.** A Claude Code harness hook refused the builder's Write of `docs/REPORTS.md`
+  ("Subagents should return findings as text, not write report files"); the other two docs were
+  written. The builder applied the stated remedy once (the full file in its report) and stopped
+  (GR-030). The lead did not write into its worktree; by owner decision the lead added the file
+  in lead PR #25, merged by the owner as `f8e5f3f`, and the builder merged main and opened
+  PR #26 (`d860a31`). Unit+Acceptance went from 1918 to 1925 tests; guards 80. Tester: PASS WITH
+  NITS, 12 of 18 mutations caught. Judge: REQUEST CHANGES, no must-fix; should-fix: the
+  `schtasks` line fails in PowerShell, the backup advice (WAL, backups keep raw IPs), the
+  `php -S` bind advice was backwards, the guide seeded the real database (P1-10 would pass on
+  demo rows), the demo-marker wording, editing `defaults.php` against `git pull`, and tests that
+  didn't read INSTALL's output blocks.
+- Owner decisions: round 2 with those seven items only (the nits to this close-out); all six seed
+  decisions accepted; the derived demo session ids kept.
+- **Round 2** (`e0b2e04`): `Register-ScheduledTask` and `schtasks --%`, a `VACUUM INTO` backup,
+  the bind advice, a throwaway `DB_DSN` for the demo, the marker wording, the config failure
+  table, and tests that compare INSTALL's output blocks with real output; 1932 tests. Tester:
+  PASS WITH NITS. Judge: REQUEST CHANGES; must-fix R2-1: a shell `DB_DSN` doesn't beat `.env`
+  under `php -S`. The lead confirmed it with a fixture router under `php -S` (scratchpad only,
+  `APP_ENV=test`, gate flags, no key): with `variables_order=GPCS` the variable is in `getenv()`
+  only, with `EGPCS` also in `$_ENV`.
+- Owner decision: the docs-only fix (the demo server with `-d variables_order=EGPCS`), plus
+  explicit report dates and a test that every demo command uses the throwaway database.
+- **Round 3** (`b3ae82d`): those three; 1935 tests, guards 80. Tester: PASS WITH NITS, 7 of 8
+  mutations caught. Judge: APPROVE WITH NITS.
+- Co-leads: both approved. The lead posted the approval comment (18:07:19 UTC), then merged at the
+  reviewed head as `84e61a2` (18:07:23 UTC).
+- **Process.** Besides the harness hook above, one guard block: the round-2 tester's
+  `env -C <dir> php -r …` was refused ("cannot be shown not to be git"); its stated remedy had
+  already been done, so the tester did not retry (GR-030 followed). No other block; the builder
+  kept the one-plain-command rule in every round.
+- Upstream: 0 real calls.
+- **For the owner (owner-owned files unchanged).** GUARDRAILS INV-01 says a check fails on
+  `round(` "outside those two files"; `RoundingRuleTest` scans `api/src` only, so `api/db` and
+  `api/bin` aren't covered (the P1-09 test has its own token scan for `seed_demo`; widening is in
+  L-04). CLAUDE.md's "Builders don't edit `docs/`" had a one-task exception here; if it should
+  become a rule for doc tasks, that is a CLAUDE.md change (GR-005, an issue).
+- Lead docs: ADR 0024 (demo seed data); ADR 0016 note (`rate_limits` holds IPs); PLAN §2, §3, the
+  P1-09 done note and follow-ups in P1-10 and L-04; CONTEXT "demo data"; `REPORTS.md` example
+  dates; INSTALL nits from the reviews (the HTTPS check, `DB_DSN`, the built-in server wording,
+  backup names and SQLite version, the repair without `sqlite3`, `-Force`, cron, the real-use
+  server, "current or ahead", config failures, the test-suite sentence).
+
 ## 2026-10-22 — P1-08 Reports and health (PR #23, head 2e9b293)
 
 - PR #22 (P1-07 close-out) merged by the owner as `24ac2b9`.

@@ -45,7 +45,8 @@ openssl.cafile = "C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt"
 That path is the bundle Git for Windows installs (it is updated only when Git is). Any current
 bundle works, for example curl's `cacert.pem`. On Linux and macOS the system bundle is normally
 found without these settings; if not, set them to it (`/etc/ssl/certs/ca-certificates.crt` on
-Debian and Ubuntu). Check that HTTPS works:
+Debian and Ubuntu). Check that HTTPS works (this checks `openssl.cafile`; the upstream client
+uses curl, which reads `curl.cainfo`, so make sure that line points at the same file):
 
 ```
 php -r "echo file_get_contents('https://example.com') ? 'ok' : 'fail';"
@@ -109,7 +110,7 @@ Edit `.env` with any editor and save it as UTF-8 without a BOM. The keys:
 |---|---|
 | `EXCHANGERATE_API_KEY` | Your ExchangeRate-API key. Server-side only: it sits in the upstream URL path, and the app never shows it. Letters, digits, `-` and `_`; empty means every rate lookup fails with `UPSTREAM_AUTH` (reason `no_key`) without calling upstream. |
 | `ADMIN_TOKEN` | The bearer token for `/reports` and the admin view of `/health`. **Visible ASCII only** (characters `!` to `~`, no spaces), because the `Authorization: Bearer <token>` header is parsed strictly. Empty means every admin request is refused (401). |
-| `DB_DSN` | The PDO DSN. Empty means the SQLite file `api/var/app.db`. A relative SQLite path is read from the repository root, so `sqlite:api/var/app.db` is the same file. |
+| `DB_DSN` | The PDO DSN. **Leave it empty for the default**, the SQLite file `api/var/app.db`. A relative SQLite path is read from the repository root, but the app creates the `api/var` folder only for the default, so with any other value create the folder first. |
 | `DB_USER`, `DB_PASS` | Database credentials; leave them empty for SQLite. |
 | `TRUSTED_PROXY` | The one peer address whose `X-Forwarded-For` is believed. Empty when no proxy is in front (section 9). |
 | `DATA_ROOT`, `BACKUP_ROOT` | Placeholders for protected folders; Phase 1 doesn't use them. |
@@ -122,7 +123,9 @@ php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
 
 For the command-line tools (`php api/bin/…`, `php api/db/…`), a variable already set in the
 environment wins over `.env` (the file never overrides one). PHP's built-in server is different:
-it sees such a variable only when started with `-d variables_order=EGPCS` (section 7).
+it keeps such a variable over `.env`'s value only when `E` is in `variables_order`, which the demo
+command of section 7 sets with `-d variables_order=EGPCS`; with the usual `GPCS`, `.env`'s value
+wins whenever `.env` sets the key (ADR 0024).
 
 ## 4. Install the dependencies
 
@@ -164,14 +167,23 @@ SQLite keeps recent writes in a separate `app.db-wal` file while the database is
 plain file copy can miss them or catch them half-written. Make the backup with SQLite itself
 instead: `VACUUM INTO` writes one consistent, self-contained file, and is safe while the server
 runs. This line works as typed in PowerShell and in a Linux or macOS shell, from the repository
-root; it writes `api/var/app.db.bak-<UTC date and time>` and never overwrites an older backup:
+root; it writes `api/var/app.db.bak-<date and time>` (in `date.timezone`, or UTC when that is
+not set) and never overwrites an older backup:
 
 <!-- command: backup -->
 ```
 php -r "if (is_file('api/var/app.db')) { (new PDO('sqlite:api/var/app.db'))->exec('VACUUM INTO \'api/var/app.db.bak-' . date('Ymd-His') . '\''); echo 'backed up', PHP_EOL; } else { echo 'nothing to back up', PHP_EOL; }"
 ```
 
-Where the `sqlite3` tool is installed, its `.backup` command does the same:
+`VACUUM INTO` needs SQLite 3.27 or later. This shows the version PHP uses:
+
+```
+php -r "echo (new PDO('sqlite::memory:'))->query('SELECT sqlite_version()')->fetchColumn(), PHP_EOL;"
+```
+
+If the backup line reports that the database is locked, run it again. Where the `sqlite3` tool is
+installed, its `.backup` command makes the same kind of copy, but under a fixed name it
+overwrites each time (add a date to keep several):
 
 ```
 sqlite3 api/var/app.db ".backup 'api/var/app.db.bak'"
@@ -206,16 +218,23 @@ migrate: failed: FxInstallments\Db\SchemaCorrupt: app_state.schema_version is no
 
 1. Stop the server and back the file up as it is (the backup line above works on it).
 2. **Restore the backup** taken before the last migrate, if you have one, and run migrate again.
-3. Otherwise, check which schema the file really has, with the `sqlite3` tool, and set the row to
-   that version. Version 3 has the seven tables `app_state`, `events`, `ip_blocks`, `rate_cache`,
-   `rate_limits`, `requests` and `sessions`, and `events` has an `amount_usd_cents` column
-   (`api/db/schema.sql` is the full version 3 schema):
+3. Otherwise, check which schema the file really has, with the `sqlite3` tool (it is not one of
+   the prerequisites; where it is missing, run the same SQL through PHP, shown after the block),
+   and set the row to that version. Version 3 has the seven tables `app_state`, `events`,
+   `ip_blocks`, `rate_cache`, `rate_limits`, `requests` and `sessions`, and `events` has an
+   `amount_usd_cents` column (`api/db/schema.sql` is the full version 3 schema):
 
 ```
 sqlite3 api/var/app.db ".tables"
 sqlite3 api/var/app.db "PRAGMA table_info(events);"
 sqlite3 api/var/app.db "SELECT key, value FROM app_state;"
 sqlite3 api/var/app.db "UPDATE app_state SET value = '3' WHERE key = 'schema_version';"
+```
+
+   Without `sqlite3`, the update as one PHP line:
+
+```
+php -r "(new PDO('sqlite:api/var/app.db'))->exec('UPDATE app_state SET value = \'3\' WHERE key = \'schema_version\'');"
 ```
 
    If the row is missing, insert it instead:
@@ -225,7 +244,8 @@ sqlite3 api/var/app.db "INSERT INTO app_state (key, value, updated_at) VALUES ('
 ```
 
    Never set a version higher than the schema shows: migrate would skip the missing parts. A
-   version that is too low is safe, because the later migrations then fail loudly and roll back.
+   version that is too low is safe with the current migrations (1 to 3), because the later
+   migrations then fail loudly and roll back.
 4. `php api/bin/migrate.php` must then print `migrate: schema is current (version 3)`.
 
 ### A daily `--prune` job
@@ -262,7 +282,9 @@ Register-ScheduledTask -TaskName "fx-installments prune" -Action $action -Trigge
 ```
 
 A task registered like this runs **only while you are logged on**. To run it whether you are
-logged on or not, register it with a principal instead (this may need an elevated PowerShell);
+logged on or not, register it with a principal instead of the first `Register-ScheduledTask`
+line (or add `-Force` to replace a task you already registered; this may need an elevated
+PowerShell);
 the `S4U` logon stores no password and gives the task no network shares, which the prune doesn't
 need:
 
@@ -282,10 +304,11 @@ schtasks --% /Create /SC DAILY /ST 03:30 /TN "fx-installments prune" /TR "\"C:\p
 Drop the `--%` when you type it in `cmd.exe`. `schtasks` tasks also run only while you are logged
 on, unless you add `/RU <user> /RP` (it then asks for the password).
 
-Linux and macOS (`crontab -e`):
+Linux and macOS (`crontab -e`). Cron runs with a minimal `PATH`, so give php's full path
+(`command -v php` shows it), and keep the output, since a failing prune is otherwise silent:
 
 ```
-30 3 * * * php "/path/to/fx-installments/api/bin/migrate.php" --prune
+30 3 * * * /usr/bin/php "/path/to/fx-installments/api/bin/migrate.php" --prune >> "/path/to/fx-installments/api/var/prune.log" 2>&1
 ```
 
 ## 6. Demo data: `seed_demo.php`
@@ -368,7 +391,8 @@ php -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php
 
 `api/public/index.php` is the single entry point; every request goes through it. Keep the
 terminal open: PHP's development server writes the app's error log lines there. That command is
-for real use: it opens the database `.env` names (`api/var/app.db` when `DB_DSN` is empty).
+for real use: start it in a shell without `DB_DSN` set, and it opens the database `.env` names
+(`api/var/app.db` when `DB_DSN` is empty).
 
 **To tour the demo data**, start the server in the shell where `DB_DSN` points at the demo file
 (section 6), with one more option:
@@ -517,8 +541,8 @@ automatically. Without a proxy, leave `TRUSTED_PROXY` empty.
 
 Monitors must use **`GET /health`**:
 
-- 200 `{"ok":true,"data":{"status":"ok"}}` when the database opens, its schema is current and it
-  accepts a write;
+- 200 `{"ok":true,"data":{"status":"ok"}}` when the database opens, its schema is current (or
+  ahead of the code) and it accepts a write;
 - 503 `UNHEALTHY` otherwise. `GET /health` is the one request that answers on a database behind
   the code, a corrupt schema version or a database that can't be opened; every other request
   then gets 500 `INTERNAL`.
@@ -561,7 +585,8 @@ loudly instead of being guessed:
   `GET /health` included, and the error log shows
   `fx-installments INTERNAL before routing: InvalidArgumentException at …`.
 - Every other key is read only by the requests that use it: a wrong type makes those answer 500
-  (for example `amount.max` breaks `/convert` and the bot).
+  (for example `amount.max` breaks `/convert`, the bot and the reports, and
+  `bot.session_ttl_minutes` breaks the bot and the reports' sweep).
 - `requests.retention_days` of the wrong type, or below 1, and a `block.window_minutes` out of
   range, make `php api/bin/migrate.php --prune` exit 1
   (`migrate: failed: InvalidArgumentException: …`). A wrong type of `requests.retention_days`
@@ -668,5 +693,5 @@ make check
 - **Node is optional locally.** The widget harness (`api/tests/js/widget.test.js`) runs from the
   suite when `node` is on `PATH` and is skipped without it; CI sets `CI`, and there a missing
   `node` fails the run instead.
-- Never run the tests or the CLIs against `api/var/app.db` by hand to try something; the suite
-  makes its own temporary databases.
+- Never point the test suite at `api/var/app.db`; it makes its own temporary databases. Try
+  things out in a throwaway database (section 6).

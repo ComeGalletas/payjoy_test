@@ -83,6 +83,7 @@ Reasons and consequences are in the ADR named in each row.
 | Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
 | Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
 | Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
+| Demo data | `api/db/seed_demo.php` writes fixed report demo data, never rates, into a throwaway database. | 0024 |
 | Reports | `/reports` and `bin/report.php` share one query: a cohort funnel, labels checked against label allow-lists (anything else is `other`), integer money, a formula-safe long-format CSV. | 0023 |
 | Widget | Built-in `static` front-end at `/bot/widget`: lazy open, strict CSP with Trusted Types, embeddable by iframe or `<script>`. | 0022 |
 | Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; from P1-04 also `disable_functions=curl_exec,curl_multi_exec` and Guzzle handler stubs. | 0018 |
@@ -133,8 +134,8 @@ Reasons and consequences are in the ADR named in each row.
   answers 403 `IP_BLOCKED` with `Connection: close` before routing. `block.rate_limit_hits` counts
   rate-limited minutes, `block.error_responses` counts 4xx other than 429; 5xx and blocked
   requests never count. Loopback, the trusted proxy and non-IPs are never blocked automatically,
-  and a failed block check lets the request through. Raw IPs live only in `requests` and
-  `ip_blocks`; `ip.block` and `ip.unblock` events never hold them.
+  and a failed block check lets the request through. Raw IPs live only in `requests`,
+  `rate_limits` and `ip_blocks`; `ip.block` and `ip.unblock` events never hold them.
 - **Rounding.** Only `InstallmentCalculator::display()` rounds money or rates;
   `Metrics/ReportFormatter` may format report aggregates. Nowhere else, including the widget JS.
 - Tests first for validators, `AmountParser`, installment math and display. PHPUnit stays green.
@@ -770,6 +771,12 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   and the "no stored rate" note.
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
+  *DONE 2026-10-22 (PR #26, three rounds; `docs/REPORTS.md` through lead PR #25 after a harness
+  hook refused the builder's write). Decisions in ADR 0024 (owner: the builder may create the
+  three docs, P1-09 only; no demo rates; the six seed decisions and the derived session ids
+  accepted; the docs-only `variables_order=EGPCS` fix for the demo server). The walkthrough runs
+  INSTALL's commands and compares its output blocks with real output; the real-key `/convert`
+  runs in-process with the mocked upstream.*
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
   `docs/LOG.md`. **Deliver MVP.** The lead repeats the by-hand widget check (a typed `<script>`
   shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
@@ -777,7 +784,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   report's `latest` endpoint row: `/quota` calls are counted apart, and whether upstream counts
   them is unverified (ADR 0012 second amendment). Check it: read the admin `/health` view twice,
   more than `health.quota_cache_minutes` apart with no rate refresh in between, compare the quota
-  left, and log the result.
+  left, and log the result. Run it on a database without demo rows (ADR 0024): the demo's
+  completed sessions on both channels would pass the acceptance below on their own.
   *Acceptance:* owner sees one completed session per channel in `/reports`, and quota used is ≤ 3
   calls.
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
@@ -934,6 +942,17 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     from `RoundingRuleTest`'s allowed files, since it doesn't round (the owner may then narrow
     INV-01). Fix two stale code comments: `QuotaStatus` says `blocked` happens only during an
     auth block, and `App.php` says every request fails closed on an old schema.
+  - (P1-09) `bot.php`, `upstream.php` and `public/index.php` create a missing SQLite file, while
+    `report.php`, `ip.php` and `seed_demo.php` refuse; `Database::fromEnvironment` creates
+    `api/var` only for the exact default DSN; the CLI hints say `php bin/migrate.php` (relative
+    to `api/`), and `--prune` on a corrupt schema prints `migrate:`; the `RequestLog` docblock
+    should list `rate_limits` among the IP tables. Widen `RoundingRuleTest` to `api/db` and
+    `api/bin`. `seed_demo` should read `block.duration_minutes` and guard a long
+    `bot.session_ttl_minutes`. Tighten `P1_09_SeedAndDocsTest`: anchor the REPORTS example
+    parts and check its quoted notes against `ReportQuery`, count the demo `DB_DSN` lines per
+    section, normalise whitespace in the open-ids check, drop the duplicated DSN check, and make
+    the backup test tell `VACUUM INTO` from a plain copy. Owner's call: make `Env::get` prefer
+    the process environment, so the demo server needs no `variables_order` option (ADR 0024).
 
 ## 11. Working agreements for the agent
 
