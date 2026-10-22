@@ -77,6 +77,10 @@ personal data (Colombia's Ley 1581), so this is what is kept, and for how long:
 - **Ended blocks** (expired or unblocked) are kept one more `block.window_minutes` (10 minutes)
   after their end, so the requests before the block never count again, and then `--prune`
   deletes them.
+- **Backups hold raw IPs too.** A database backup (INSTALL_LOCAL.md, section 5) is a copy of the
+  request log and the blocks as they were, and nothing prunes it. Delete old backups, or keep
+  them under the folder you set as `BACKUP_ROOT` with a retention of their own (the app itself
+  doesn't use `BACKUP_ROOT` yet).
 - **Block events never hold an IP.** `ip.block` and `ip.unblock` events record the source, the
   reason and the duration, never the address and never the operator's reason text. Events are
   never pruned.

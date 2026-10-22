@@ -4,9 +4,11 @@ This guide takes a clean checkout to a working `/convert`, the chat widget and a
 data on one machine, **without Docker** (ADR 0005: the local install is the only path in Phases 1
 and 2; Docker arrives in P3-01).
 
-Commands are run **from the repository root**. They are the same in PowerShell (Windows) and in
-a Linux or macOS shell unless a block says otherwise. The repository path may contain spaces, so
-keep the quotes around paths.
+Commands are run **from the repository root**. Each one works as typed in PowerShell 5.1 or later
+(Windows) and in a Linux or macOS shell, unless the text before its block names one shell
+(PowerShell, Linux and macOS, or `cmd.exe`). Blocks the text calls `php.ini`, `.env` or
+`defaults.php` lines are file contents, and output blocks show what a command prints. The
+repository path may contain spaces, so keep the quotes around paths.
 
 ## 1. Prerequisites
 
@@ -139,6 +141,7 @@ php api/bin/migrate.php
 
 On a new checkout it prints:
 
+<!-- output: migrate -->
 ```
 migrate: applied 1 p1_01_baseline
 migrate: applied 2 phase1_tables
@@ -153,20 +156,30 @@ usage errors.
 **Run it after `composer install` and after every `git pull`**, before starting the server:
 
 - **One migrate at a time.** Two runs at once are not coordinated.
-- **Back up `api/var/app.db` first.** Stop the server and any CLI first, so SQLite has folded its
-  write-ahead log into the file; if an `app.db-wal` file is still there, copy it too.
+- **Back up `api/var/app.db` first, if it exists** (a first install has nothing to back up).
 
-PowerShell:
+SQLite keeps recent writes in a separate `app.db-wal` file while the database is in use, so a
+plain file copy can miss them or catch them half-written. Make the backup with SQLite itself
+instead: `VACUUM INTO` writes one consistent, self-contained file, and is safe while the server
+runs. This line works as typed in PowerShell and in a Linux or macOS shell, from the repository
+root; it writes `api/var/app.db.bak-<UTC date and time>` and never overwrites an older backup:
+
+<!-- command: backup -->
+```
+php -r "if (is_file('api/var/app.db')) { (new PDO('sqlite:api/var/app.db'))->exec('VACUUM INTO \'api/var/app.db.bak-' . date('Ymd-His') . '\''); echo 'backed up', PHP_EOL; } else { echo 'nothing to back up', PHP_EOL; }"
+```
+
+Where the `sqlite3` tool is installed, its `.backup` command does the same:
 
 ```
-Copy-Item api/var/app.db "api/var/app.db.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+sqlite3 api/var/app.db ".backup 'api/var/app.db.bak'"
 ```
 
-Linux and macOS:
-
-```
-cp api/var/app.db "api/var/app.db.bak-$(date +%Y%m%d-%H%M%S)"
-```
+If `DB_DSN` points at another file, use that path instead. To **restore** a backup, stop the
+server and every CLI, move `api/var/app.db` and any `app.db-wal` and `app.db-shm` next to it out
+of the way (a leftover write-ahead log must not meet the restored file), then copy the backup to
+`api/var/app.db`. Backups hold the request log's raw IPs, and nothing prunes them: see the privacy
+note in [README.md](README.md).
 
 - **A database behind the code fails closed.** Until migrate runs, every request answers 500
   `INTERNAL`, and the server's error log (the `php -S` terminal) shows
@@ -189,7 +202,7 @@ migrate: failed: FxInstallments\Db\SchemaCorrupt: app_state.schema_version is no
 
 (or `app_state exists but has no schema_version row`). Nothing guesses a version. To repair:
 
-1. Stop the server and copy the database file as it is.
+1. Stop the server and back the file up as it is (the backup line above works on it).
 2. **Restore the backup** taken before the last migrate, if you have one, and run migrate again.
 3. Otherwise, check which schema the file really has, with the `sqlite3` tool, and set the row to
    that version. Version 3 has the seven tables `app_state`, `events`, `ip_blocks`, `rate_cache`,
@@ -221,8 +234,9 @@ php api/bin/migrate.php --prune
 
 It deletes rate-limit windows older than a day, closed sessions older than 30 days, request-log
 rows older than `requests.retention_days` (30) and IP blocks that ended at least
-`block.window_minutes` ago, and prints one line per table:
+`block.window_minutes` ago, and prints one line per table (here on a new database):
 
+<!-- output: prune -->
 ```
 prune: rate_limits 0 deleted
 prune: sessions 0 deleted
@@ -236,11 +250,35 @@ Run it once a day at a quiet hour: while it holds SQLite's write lock for more t
 `/health` reads as unhealthy. The script finds `.env` and the database from its own location, so
 the job can start in any folder.
 
-Windows (Task Scheduler; use your own paths to `php.exe` and the checkout):
+Windows, in PowerShell (Task Scheduler; use your own paths to `php.exe` and the checkout; `php`
+alone is not enough, because a task doesn't get your terminal's `PATH`):
 
 ```
-schtasks /Create /SC DAILY /ST 03:30 /TN "fx-installments prune" /TR "\"C:\php\php.exe\" \"D:\path with spaces\fx-installments\api\bin\migrate.php\" --prune"
+$action = New-ScheduledTaskAction -Execute "C:\php\php.exe" -Argument '"D:\path with spaces\fx-installments\api\bin\migrate.php" --prune'
+$trigger = New-ScheduledTaskTrigger -Daily -At 3:30am
+Register-ScheduledTask -TaskName "fx-installments prune" -Action $action -Trigger $trigger
 ```
+
+A task registered like this runs **only while you are logged on**. To run it whether you are
+logged on or not, register it with a principal instead (this may need an elevated PowerShell);
+the `S4U` logon stores no password and gives the task no network shares, which the prune doesn't
+need:
+
+```
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U
+Register-ScheduledTask -TaskName "fx-installments prune" -Action $action -Trigger $trigger -Principal $principal
+```
+
+(In Task Scheduler's window, the same switch is "Run whether user is logged on or not".) In
+`cmd.exe`, `schtasks` does the same; from PowerShell, put `--%` after `schtasks` so PowerShell
+passes the rest unchanged, because `\"` is not a PowerShell escape:
+
+```
+schtasks --% /Create /SC DAILY /ST 03:30 /TN "fx-installments prune" /TR "\"C:\php\php.exe\" \"D:\path with spaces\fx-installments\api\bin\migrate.php\" --prune"
+```
+
+Drop the `--%` when you type it in `cmd.exe`. `schtasks` tasks also run only while you are logged
+on, unless you add `/RU <user> /RP` (it then asks for the password).
 
 Linux and macOS (`crontab -e`):
 
@@ -250,16 +288,44 @@ Linux and macOS (`crontab -e`):
 
 ## 6. Demo data: `seed_demo.php`
 
-To see the reports filled before any real traffic, seed demo data **after migrate**, on the new
-database:
+To see the reports filled before any real traffic, seed demo data into a **throwaway database**,
+never into the one real traffic will use. Demo rows stay in `/reports` for good (`events` are
+never pruned), and the demo's completed sessions on both channels would pass a real end-to-end
+check, such as P1-10's "one completed session per channel", on their own.
+
+The simplest way is a separate `DB_DSN` set in the shell. A variable already set in the
+environment wins over `.env`, so every command in that shell, the server included, uses the demo
+file while `.env` keeps pointing at the real one. A relative SQLite path is read from the
+repository root.
+
+PowerShell:
 
 ```
+$env:DB_DSN = "sqlite:api/var/demo.db"
+```
+
+Linux and macOS:
+
+```
+export DB_DSN=sqlite:api/var/demo.db
+```
+
+Then, in that same shell, migrate the demo file and seed it:
+
+```
+php api/bin/migrate.php
 php api/db/seed_demo.php
 ```
 
-It prints a line like
-`seed_demo: wrote 14 sessions, 92 events and 97 request-log rows, 2026-10-16 to 2026-10-22
-(America/Bogota)` and writes, in one transaction:
+It prints a line like this one (the dates are the default report period, which moves with the
+day you run it):
+
+<!-- output: seed_demo -->
+```
+seed_demo: wrote 14 sessions, 92 events and 97 request-log rows, 2026-10-16 to 2026-10-22 (America/Bogota)
+```
+
+It writes, in one transaction:
 
 - 14 bot sessions on the `static` and `cli` channels, spread over the default report period (the
   last 7 days in `reports.timezone`): completed, abandoned at several steps, never answered, and
@@ -270,13 +336,26 @@ It prints a line like
   198.51.100.0/24, 203.0.113.0/24).
 
 Amounts are integer cents. It writes **no rates** (nothing in `rate_cache`, the breaker or the
-quota cache), so your first real conversion still makes one real `/latest/USD` call. Every demo
-event has `"demo": true` in its meta.
+quota cache), so your first real conversion still makes one real `/latest/USD` call.
+
+**Telling demo rows apart.** Every event the seed writes has `"demo": true` in its meta. The two
+open sessions are closed later by a sweep (the next bot message or report after they expire),
+and those `bot.session_abandoned` events, written by the app, don't carry the marker; find them
+by their fixed session ids, `96e07728de607b51e754a996f4a232fc` (static) and
+`95d7296436cf2be91541220a218d1d65` (cli). `sessions` rows have no marker either (every demo
+session id is fixed), and the demo's `requests` rows all come from the documentation addresses
+above.
 
 It refuses (exit 1) a database that already has events or sessions, so it never mixes demo rows
-into real ones and never runs twice. There is no undo, because events are never pruned: for a
-database without demo data, stop the server, move `api/var/app.db` (and any `app.db-wal` and
-`app.db-shm`) away, and run migrate again. Exit codes: 0 done, 1 refused or failed, 2 usage.
+into real ones and never runs twice. Exit codes: 0 done, 1 refused or failed, 2 usage.
+
+**Before real use, and before an end-to-end check such as P1-10, start from a database without
+demo rows.** With the throwaway file above, leave the demo shell (or clear the variable:
+`Remove-Item Env:DB_DSN` in PowerShell, `unset DB_DSN` in a Linux or macOS shell); the commands
+then use `.env`'s database again, and you can delete `api/var/demo.db` and its `-wal` and `-shm`
+files once the server is stopped. If you seeded the real `api/var/app.db` anyway, there is no
+undo: stop the server, move `api/var/app.db` and any `app.db-wal` and `app.db-shm` away, and run
+`php api/bin/migrate.php` again for a new, empty database.
 
 ## 7. Start the server
 
@@ -285,25 +364,38 @@ php -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php
 ```
 
 `api/public/index.php` is the single entry point; every request goes through it. Keep the
-terminal open: PHP's development server writes the app's error log lines there. Bind it to
-`127.0.0.1`, as above, unless a proxy on the same machine forwards to it (section 9). Phase 3
-replaces it with nginx and php-fpm (P3-01).
+terminal open: PHP's development server writes the app's error log lines there. To tour the demo
+data, start it in the shell where `DB_DSN` points at the demo file (section 6); for real use,
+start it in a shell without that variable.
+
+**Bind it to `127.0.0.1`**, as above, also when a reverse proxy on the same machine forwards to
+it (section 9): the proxy reaches it there, and nothing else can. Bind another address only when
+the proxy runs on another machine, and then let only that proxy reach the port (a firewall rule).
+**Never expose `php -S` directly to the internet**: it is PHP's development server, with no TLS,
+and Phase 3 puts nginx and php-fpm in front instead (P3-01).
 
 ## 8. Try it
 
-In a second terminal. On Windows PowerShell 5.1, type `curl.exe`, because `curl` is an alias for
-`Invoke-WebRequest` there; on Linux and macOS, type `curl`.
+In a second terminal (for the demo tour, one where `DB_DSN` points at the demo file too, so the
+report below reads the same database). The HTTP examples come in two forms: in Windows
+PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`, so type `curl.exe` there.
 
-The health check:
+The health check, PowerShell:
 
 ```
 curl.exe "http://127.0.0.1:8080/health"
 ```
 
-answers `{"ok":true,"data":{"status":"ok"}}`.
+Linux and macOS:
+
+```
+curl "http://127.0.0.1:8080/health"
+```
+
+It answers `{"ok":true,"data":{"status":"ok"}}`.
 
 A conversion, with your real key (one `/latest/USD` call refreshes every rate; later conversions
-in the same refresh window make none):
+in the same refresh window make none), PowerShell:
 
 ```
 curl.exe "http://127.0.0.1:8080/convert?amount=200&cy=BRL&installments=3"
@@ -318,6 +410,7 @@ curl "http://127.0.0.1:8080/convert?amount=200&cy=BRL&installments=3"
 The numbers depend on today's rate. At a rate of 5.2291 (the test suite's mocked upstream) the
 answer is:
 
+<!-- output: convert -->
 ```
 {"ok":true,"data":{"amount_usd":200,"currency":"BRL","rate":5.2291,"converted":1045.82,"installments":3,"installment_amount":348.6066666666666,"rate_as_of":"2026-10-21T00:00:01Z","stale":false,"display":{"amount_usd":"200.00","rate":"5.2291","converted":"1,045.82","installment":"348.60","last_installment":"348.62","regular_count":2,"even":false,"rate_as_of":"2026-10-21 00:00 UTC"}}}
 ```
@@ -335,16 +428,38 @@ in [README.md](README.md)).
 php api/bin/report.php
 ```
 
-  On the demo data plus your one conversion it shows 14 sessions, 12 conversions (6 via
-  `/convert`, 6 via the bot) and 8 `/convert` requests, and the upstream `latest` row shows 1
-  call: yours (the demo's lookups are all cache hits). [REPORTS.md](REPORTS.md) explains every
-  section. Over HTTP, with your admin token in the header (never in the URL):
+On the demo data plus your one conversion it shows 14 sessions, 12 conversions (6 via
+`/convert`, 6 via the bot), 8 `/convert` requests and 1 upstream call, yours: the demo's
+lookups are all cache hits, so the `latest` row's 1 call is your real one. These lines of the
+table:
+
+<!-- output: report after the conversion -->
+```
+  Sessions started                         14
+  Conversions                              12
+    via /convert                            6
+    via the bot                             6
+  USD converted                      6,289.88
+  /convert requests                         8
+  Upstream calls                            1
+  latest         12   11     1      0        0      1       0       0
+```
+
+[REPORTS.md](REPORTS.md) explains every section. Over HTTP, with your admin token in the header
+(never in the URL), PowerShell:
 
 ```
 curl.exe -H "Authorization: Bearer <your ADMIN_TOKEN>" "http://127.0.0.1:8080/reports"
 ```
 
+Linux and macOS:
+
+```
+curl -H "Authorization: Bearer <your ADMIN_TOKEN>" "http://127.0.0.1:8080/reports"
+```
+
 That is the whole acceptance check of P1-09: a working `/convert` with demo data, without Docker.
+Then go back to a database without demo rows before real use (section 6).
 
 ## 9. Behind a proxy: `TRUSTED_PROXY`
 
@@ -358,7 +473,9 @@ ever blocked. Set `TRUSTED_PROXY` in `.env` to the exact address the proxy conne
 TRUSTED_PROXY=127.0.0.1
 ```
 
-Then, for requests from that peer only, the app uses the **last** address in `X-Forwarded-For`
+With the proxy on another machine, set it to that machine's address, again as `REMOTE_ADDR`
+shows it. Then, for requests from that peer only, the app uses the **last** address in
+`X-Forwarded-For`
 (the one your proxy appended), so the proxy must append the client's address to that header.
 Earlier entries come from the client and are ignored. The trusted proxy itself is never blocked
 automatically. Without a proxy, leave `TRUSTED_PROXY` empty.
@@ -386,8 +503,40 @@ quota is not yet known (ADR 0012 second amendment).
 ### How config changes in Phase 1
 
 The settings are **read-only defaults in `api/src/Config/defaults.php`**: to change one, edit
-that file and restart the server (Phase 3 adds a config API). Each value is type-checked when it
-is read, so a wrong type fails loudly. The keys and defaults:
+that file and restart the server (Phase 3 adds a config API).
+
+That file is tracked by git, so a local edit meets the `git pull` routine of section 5. Keep the
+edit out of the way of each pull, for example with a stash:
+
+```
+git stash push -m "local config" -- api/src/Config/defaults.php
+git pull
+git stash pop
+```
+
+(or keep it as a local commit and let `git pull` merge it; either way, resolve a conflict in that
+file by hand). After every edit, and after every pull, check `GET /health` and one `/convert`
+(section 8).
+
+Each value is type-checked when it is read, and some are range-checked, so a mistake fails
+loudly instead of being guessed:
+
+- The app reads `ratelimit.per_minute`, `cors.allowed_origins`, `reports.timezone`,
+  `rates.max_stale_hours`, `health.quota_cache_minutes` and the four `block.*` keys while it
+  wires up each request, before routing. A wrong type there, a `ratelimit.per_minute` below 1, or
+  a `block.*` value out of its range (below) makes **every request answer 500 `INTERNAL`**,
+  `GET /health` included, and the error log shows
+  `fx-installments INTERNAL before routing: InvalidArgumentException at …`.
+- Every other key is read only by the requests that use it: a wrong type makes those answer 500
+  (for example `amount.max` breaks `/convert` and the bot).
+- `requests.retention_days` of the wrong type, or below 1, and a `block.window_minutes` out of
+  range, make `php api/bin/migrate.php --prune` exit 1
+  (`migrate: failed: InvalidArgumentException: …`). A wrong type of `requests.retention_days`
+  also breaks `/reports` and `bin/report.php`.
+- A `reports.timezone` that is a string but not a known zone breaks only the reports (and
+  `seed_demo.php`).
+
+The keys and defaults:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -425,6 +574,8 @@ Each entry must be exactly what a browser sends in its `Origin` header:
 - an optional port, but not the scheme's default (no `:443` on `https`, no `:80` on `http`) and
   without leading zeros;
 - **no path and no trailing slash**; `*` and `null` are never allowed.
+
+In `api/src/Config/defaults.php`:
 
 ```
 'cors.allowed_origins' => ['https://shop.example.com', 'http://localhost:3000'],

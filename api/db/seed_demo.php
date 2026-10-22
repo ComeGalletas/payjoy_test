@@ -26,11 +26,18 @@ declare(strict_types=1);
  * - **Deterministic:** the same rows every time, at fixed local times on each of the six days
  *   before today, plus two sessions still open, started minutes before now (they stay open for
  *   `bot.session_ttl_minutes`, then the next sweep closes them as expired). Only the times move
- *   with "now"; there is no randomness. Every event's meta has `"demo": true`.
+ *   with "now"; there is no randomness.
+ * - **Telling demo rows apart:** every event this script writes has `"demo": true` in its meta.
+ *   The expiry events a later sweep writes for the two open sessions come from the app and
+ *   don't carry it; find them by their fixed session ids (sha256 of
+ *   `fx-installments demo session 13` and `… 14`, first 32 hex digits). `sessions` rows carry no
+ *   marker (their ids are fixed the same way), and demo `requests` rows use the documentation
+ *   addresses.
  *
- * Run it after `php api/bin/migrate.php`, on a database without events or sessions: it refuses
- * one that already has any, so it never mixes demo rows into real ones or runs twice. There is
- * no undo: `events` are never pruned.
+ * Run it after `php api/bin/migrate.php`, on a throwaway database (a separate DB_DSN), never on
+ * the one real traffic will use: there is no undo, because `events` are never pruned
+ * (docs/INSTALL_LOCAL.md, section 6). It refuses a database that already has events or
+ * sessions, so it never mixes demo rows into real ones or runs twice.
  *
  * Exit codes: 0 done; 1 failed (no database file, a schema behind the code or corrupt, a
  * database that already has events or sessions, a failed write; stderr names the exception

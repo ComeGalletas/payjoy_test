@@ -7,7 +7,9 @@ namespace FxInstallments\Tests\Acceptance;
 use ArrayObject;
 use FxInstallments\App;
 use FxInstallments\Config\ConfigRepository;
+use FxInstallments\Convert\InstallmentCalculator;
 use FxInstallments\Db\Connection;
+use FxInstallments\Db\Retention;
 use FxInstallments\Http\Request;
 use FxInstallments\Tests\Support\MockUpstream;
 use FxInstallments\Tests\Support\TestEnvironment;
@@ -81,7 +83,11 @@ final class P1_09_SeedAndDocsTest extends TestCase
             ['bin/report.php', [], "report: failed: {$class}\n"],
             ['bin/bot.php', [], "bot: failed: {$class}\n"],
             ['bin/ip.php', ['list'], "ip: failed: {$class}\n"],
+            // Round 2: the write subcommands refuse before writing anything too.
+            ['bin/ip.php', ['block', '192.0.2.1'], "ip: failed: {$class}\n"],
+            ['bin/ip.php', ['unblock', '192.0.2.1'], "ip: failed: {$class}\n"],
             ['bin/upstream.php', ['status'], "upstream: failed: {$class}\n"],
+            ['bin/upstream.php', ['reset'], "upstream: failed: {$class}\n"],
             ['db/seed_demo.php', [], "seed_demo: failed: {$class}\n"],
             ['bin/migrate.php', [], "migrate: failed: {$class}: {$message}\n"],
             ['bin/migrate.php', ['--prune'], "migrate: failed: {$class}: {$message}\n"],
@@ -105,17 +111,29 @@ final class P1_09_SeedAndDocsTest extends TestCase
             }
         }
 
+        // Round 2: every output block the doc shows is compared with the real output.
         $path = TestEnvironment::tempDir('walkthrough') . '/app.db';
         [$exit, $out, $err] = self::runDocCommand('php api/bin/migrate.php', $path);
         self::assertSame([0, ''], [$exit, $err]);
-        self::assertSame(
-            "migrate: applied 1 p1_01_baseline\nmigrate: applied 2 phase1_tables\nmigrate: applied 3 events_amount_usd_cents\nmigrate: schema version 0 -> 3\n",
-            $out,
-        );
+        self::assertSame(self::installBlock('output: migrate') . "\n", $out, 'INSTALL_LOCAL.md migrate output');
+
+        [$exit, $out, $err] = self::runDocCommand('php api/bin/migrate.php --prune', $path);
+        self::assertSame([0, ''], [$exit, $err]);
+        self::assertSame(self::installBlock('output: prune') . "\n", $out, 'INSTALL_LOCAL.md prune output');
 
         [$exit, $out, $err] = self::runDocCommand('php api/db/seed_demo.php', $path);
         self::assertSame([0, ''], [$exit, $err]);
-        self::assertMatchesRegularExpression('~^seed_demo: wrote 14 sessions, 92 events and 97 request-log rows, \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2} \(America/Bogota\)\n$~D', $out);
+        // The dates are the default report period, which moves with the day.
+        $undated = static fn (string $text): string => (string) preg_replace('/\d{4}-\d{2}-\d{2}/', 'YYYY-MM-DD', $text);
+        self::assertSame($undated(self::installBlock('output: seed_demo') . "\n"), $undated($out), 'INSTALL_LOCAL.md seed_demo output');
+        self::assertMatchesRegularExpression('~^seed_demo: wrote \d+ sessions, \d+ events and \d+ request-log rows, \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2} \(America/Bogota\)\n$~D', $out);
+
+        // The ids INSTALL_LOCAL.md gives for the two open sessions, whose later expiry events
+        // carry no demo marker.
+        $open = TestEnvironment::connect($path)->query("SELECT session_id FROM sessions WHERE status = 'open' ORDER BY channel DESC")->fetchAll(PDO::FETCH_COLUMN);
+        self::assertCount(2, $open);
+        $install = (string) file_get_contents(self::repoRoot() . '/docs/INSTALL_LOCAL.md');
+        self::assertStringContainsString("`{$open[0]}` (static) and\n`{$open[1]}` (cli)", $install);
 
         [$exit, $table, $err] = self::runDocCommand('php api/bin/report.php', $path);
         self::assertSame([0, ''], [$exit, $err]);
@@ -178,14 +196,16 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $response = $app->kernel()->handle(new Request('GET', (string) $url['path'], $query, remoteAddr: '127.0.0.1'));
 
         self::assertSame(200, $response->status(), $response->body());
-        $data = json_decode($response->body(), true, 8, JSON_THROW_ON_ERROR)['data'];
-        self::assertSame(['200.00', 'BRL', '1,045.82', '348.60', '348.62', 2], [
-            $data['display']['amount_usd'], $data['currency'], $data['display']['converted'],
-            $data['display']['installment'], $data['display']['last_installment'], $data['display']['regular_count'],
-        ]);
+        self::assertSame(self::installBlock('output: convert'), $response->body(), 'INSTALL_LOCAL.md sample /convert answer');
         self::assertSame(1, $upstream->calls(), 'one /latest/USD call, as the walkthrough says');
         self::assertSame([], $log->getArrayCopy());
         unset($app, $pdo);
+
+        [$exit, $table, $err] = self::runDocCommand('php api/bin/report.php', $path);
+        self::assertSame([0, ''], [$exit, $err]);
+        foreach (explode("\n", self::installBlock('output: report after the conversion')) as $line) {
+            self::assertStringContainsString("\n{$line}\n", $table, 'INSTALL_LOCAL.md report lines after the conversion');
+        }
 
         $after = self::jsonReport($path);
         self::assertSame([14, 12, 6, 8], [$after['summary']['sessions_started'], $after['summary']['conversions'], $after['summary']['conversions_api'], $after['summary']['api_requests']]);
@@ -296,6 +316,155 @@ final class P1_09_SeedAndDocsTest extends TestCase
     }
 
     /**
+     * @return iterable<string, array{string}>
+     */
+    public static function failingWrites(): iterable
+    {
+        // Each trigger lets the seed get partway, then refuses one insert.
+        yield 'an event' => ["CREATE TRIGGER p1_09_fail BEFORE INSERT ON events WHEN (SELECT COUNT(*) FROM events) >= 40 BEGIN SELECT RAISE(ABORT, 'p1-09 test'); END"];
+        yield 'a request-log row' => ["CREATE TRIGGER p1_09_fail BEFORE INSERT ON requests WHEN (SELECT COUNT(*) FROM requests) >= 50 BEGIN SELECT RAISE(ABORT, 'p1-09 test'); END"];
+        yield 'a session row' => ["CREATE TRIGGER p1_09_fail BEFORE INSERT ON sessions WHEN (SELECT COUNT(*) FROM sessions) >= 5 BEGIN SELECT RAISE(ABORT, 'p1-09 test'); END"];
+    }
+
+    #[DataProvider('failingWrites')]
+    public function testAWriteThatFailsPartwayLeavesNothing(string $trigger): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        $pdo = TestEnvironment::connect($path);
+        $pdo->exec($trigger);
+
+        [$exit, $out, $err] = self::runScript('db/seed_demo.php', [], $path);
+
+        self::assertSame([1, ''], [$exit, $out]);
+        self::assertMatchesRegularExpression('/^seed_demo: failed: (RuntimeException|PDOException)\n$/D', $err);
+        foreach (['events', 'sessions', 'requests'] as $table) {
+            self::assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM {$table}")->fetchColumn(), "{$table}: the transaction rolled back");
+        }
+    }
+
+    public function testConversionMetaMatchesWhatTheAppWouldStore(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        self::assertSame(0, self::runScript('db/seed_demo.php', [], $path)[0]);
+        $pdo = TestEnvironment::connect($path);
+
+        $rows = $pdo->query("SELECT ts, event_type, currency, amount_usd_cents, installments, meta FROM events WHERE event_type IN ('api.request', 'bot.session_completed') AND status = 'ok'")->fetchAll(PDO::FETCH_ASSOC);
+        self::assertCount(11, $rows);
+        $templates = [];
+        foreach ($rows as $row) {
+            $meta = json_decode((string) $row['meta'], true, 8, JSON_THROW_ON_ERROR);
+            $ts = (int) $row['ts'];
+            // Upstream updates at 00:00:01 UTC; the stored time is the last update before the conversion.
+            self::assertLessThanOrEqual($ts, $meta['rate_as_of'], 'rate_as_of is not after the conversion');
+            self::assertGreaterThan($ts - 86_400, $meta['rate_as_of'], 'rate_as_of is the latest daily update');
+            self::assertSame(1, $meta['rate_as_of'] % 86_400);
+            self::assertIsInt($meta['rate_scaled']);
+            if ($row['event_type'] !== 'bot.session_completed') {
+                continue;
+            }
+            $display = InstallmentCalculator::display((int) $row['amount_usd_cents'], $meta['rate_scaled'], (int) $row['installments'], (string) $row['currency'], $meta['rate_as_of']);
+            $expected = (int) $row['installments'] === 1 ? 'single' : ($display->even ? 'even' : 'uneven');
+            self::assertSame($expected, $meta['template'], "the template the flow engine would pick for {$row['currency']}");
+            $templates[] = $meta['template'];
+        }
+        sort($templates);
+        self::assertSame(['even', 'single', 'single', 'uneven', 'uneven', 'uneven'], $templates, 'the demo shows every result template');
+    }
+
+    public function testTheBackupLineInTheGuideMakesAConsistentCopy(): void
+    {
+        $line = self::installBlock('command: backup');
+        self::assertMatchesRegularExpression('/^php -r "[^"]+"$/D', $line, 'one php -r line without inner double quotes');
+        self::assertStringNotContainsString('$', $line, 'nothing a PowerShell or POSIX double-quoted string would expand');
+        self::assertStringNotContainsString('`', $line);
+        $code = substr($line, strlen('php -r "'), -1);
+
+        // A first install: nothing to back up, and no database file is created.
+        $root = TestEnvironment::tempDir('backup-root');
+        self::assertSame([0, 'nothing to back up' . PHP_EOL, ''], self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-r', $code], $root));
+        self::assertDirectoryDoesNotExist($root . '/api');
+
+        // A seeded database: one self-contained copy with the same rows.
+        mkdir($root . '/api/var', 0777, true);
+        $path = $root . '/api/var/app.db';
+        self::assertSame(0, self::runScript('bin/migrate.php', [], $path)[0]);
+        self::assertSame(0, self::runScript('db/seed_demo.php', [], $path)[0]);
+        self::assertSame([0, 'backed up' . PHP_EOL, ''], self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-r', $code], $root));
+        $copies = glob($root . '/api/var/app.db.bak-*') ?: [];
+        self::assertCount(1, $copies);
+        self::assertMatchesRegularExpression('/app\.db\.bak-\d{8}-\d{6}$/', $copies[0]);
+        self::assertFileDoesNotExist($copies[0] . '-wal');
+        $copy = TestEnvironment::connect($copies[0]);
+        self::assertSame('ok', $copy->query('PRAGMA integrity_check')->fetchColumn());
+        self::assertSame(self::snapshot(TestEnvironment::connect($path)), self::snapshot($copy));
+    }
+
+    public function testAShellDbDsnWinsOverTheDotenvFile(): void
+    {
+        // INSTALL_LOCAL.md section 6 relies on this: Bootstrap loads `.env` with
+        // Dotenv::createImmutable(), and the app reads variables through Env. A fixture file
+        // stands in for `.env`, which tests never touch.
+        $dir = TestEnvironment::tempDir('dotenv');
+        file_put_contents($dir . '/fixture.env', "DB_DSN=sqlite:from-the-file.db\nFX_P1_09_FILE_ONLY=from-the-file\n");
+        $code = 'require ' . var_export(dirname(__DIR__, 2) . '/vendor/autoload.php', true) . ';'
+            . ' Dotenv\Dotenv::createImmutable(' . var_export($dir, true) . ", 'fixture.env')->safeLoad();"
+            . " echo FxInstallments\\Env::get('DB_DSN'), ' ', FxInstallments\\Env::get('FX_P1_09_FILE_ONLY'), PHP_EOL;";
+        foreach (['GPCS', 'EGPCS'] as $order) {
+            self::assertSame(
+                [0, 'sqlite:from-the-shell.db from-the-file' . PHP_EOL, ''],
+                self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-d', "variables_order={$order}", '-r', $code], $dir, ['DB_DSN' => 'sqlite:from-the-shell.db']),
+                "variables_order={$order}",
+            );
+        }
+    }
+
+    public function testConfigMistakesFailAsTheInstallGuideSays(): void
+    {
+        // Read while each request is wired (App::kernel()), so index.php answers 500 to all.
+        foreach ([
+            ['ratelimit.per_minute' => '30'], ['ratelimit.per_minute' => 0], ['cors.allowed_origins' => 'https://a.example'],
+            ['reports.timezone' => 5], ['rates.max_stale_hours' => '48'], ['health.quota_cache_minutes' => '60'],
+            ['block.window_minutes' => 0], ['block.window_minutes' => 1441], ['block.rate_limit_hits' => 0],
+            ['block.error_responses' => 0], ['block.duration_minutes' => 525_601], ['block.duration_minutes' => '60'],
+        ] as $override) {
+            try {
+                TestEnvironment::app(config: $override)->kernel();
+                self::fail('kernel() accepted ' . json_encode($override));
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+        // A key read only on use leaves the kernel buildable.
+        TestEnvironment::app(config: ['amount.max' => '1000000'])->kernel();
+
+        // --prune: Retention and the config getter refuse what the guide says.
+        $pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
+        foreach ([[0, 10], [30, 0], [30, 1441]] as [$days, $window]) {
+            try {
+                new Retention($pdo, $days, $window);
+                self::fail("Retention accepted {$days} days, {$window} minutes");
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+        $this->expectException(\InvalidArgumentException::class);
+        (new ConfigRepository(['requests.retention_days' => '30']))->int('requests.retention_days');
+    }
+
+    /**
+     * The fenced block right after `<!-- $marker -->` in INSTALL_LOCAL.md, without its last
+     * line break.
+     */
+    private static function installBlock(string $marker): string
+    {
+        $doc = (string) file_get_contents(self::repoRoot() . '/docs/INSTALL_LOCAL.md');
+        $count = preg_match_all('/<!-- ' . preg_quote($marker, '/') . ' -->\n```[a-z]*\n(.*?)\n```/s', $doc, $match);
+        self::assertSame(1, $count, "INSTALL_LOCAL.md has one block marked `{$marker}`");
+
+        return $match[1][0];
+    }
+
+    /**
      * Every line inside a fenced code block of INSTALL_LOCAL.md, trimmed.
      *
      * @return list<string>
@@ -358,16 +527,33 @@ final class P1_09_SeedAndDocsTest extends TestCase
     }
 
     /**
+     * A command in $cwd with the test environment plus $env (no DB_DSN of its own).
+     *
      * @param list<string> $command
+     * @param array<string, string> $env
      * @return array{int, string, string}
      */
-    private static function runProcess(array $command, string $path, ?string $cwd): array
+    private static function runIn(array $command, string $cwd, array $env = []): array
+    {
+        return self::runProcess($command, null, $cwd, $env);
+    }
+
+    /**
+     * @param list<string> $command
+     * @param array<string, string> $extra
+     * @return array{int, string, string}
+     */
+    private static function runProcess(array $command, ?string $path, ?string $cwd, array $extra = []): array
     {
         $dir = TestEnvironment::tempDir('p1-09-cli');
         file_put_contents($dir . '/in', '');
         $env = getenv();
         $env['APP_ENV'] = 'test';
-        $env['DB_DSN'] = 'sqlite:' . $path;
+        unset($env['DB_DSN']);
+        if ($path !== null) {
+            $env['DB_DSN'] = 'sqlite:' . $path;
+        }
+        $env = $extra + $env;
         $env['EXCHANGERATE_API_KEY'] = MockUpstream::CANARY_KEY;
         $env['HTTPS_PROXY'] = $env['HTTP_PROXY'] = $env['https_proxy'] = $env['http_proxy'] = 'http://127.0.0.1:9';
         unset($env['NO_PROXY'], $env['no_proxy']);
