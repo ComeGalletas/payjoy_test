@@ -85,7 +85,8 @@ final class FlowDefinition
     private const MAX_BUTTONS = 8;
     private const MAX_BUTTON_CHARS = 40;
     private const MAX_STEPS = 20;
-    private const ID_PATTERN = '/^[a-z][a-z0-9_]{0,39}$/D';
+    /** Flow names and step ids; reports reuse it for step labels (P1-08 round 3). */
+    public const ID_PATTERN = '/^[a-z][a-z0-9_]{0,39}$/D';
 
     /**
      * @param list<Step> $steps

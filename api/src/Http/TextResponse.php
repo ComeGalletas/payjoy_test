@@ -8,7 +8,8 @@ use InvalidArgumentException;
 
 /**
  * A 200 response with a text body of a given media type: the widget's HTML page, script and
- * style sheet (P1-07). Not an envelope (INV-04 exception). Like JsonResponse it always sends
+ * style sheet (P1-07), and CSV reports (P1-08). Not an envelope (INV-04 exception). Like
+ * JsonResponse it always sends
  * `X-Content-Type-Options: nosniff`, so a browser never runs or styles a body under a type it
  * guessed. Errors are never TextResponses: they stay JSON envelopes.
  */

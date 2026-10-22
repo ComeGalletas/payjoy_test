@@ -10,7 +10,8 @@ declare(strict_types=1);
  *
  * Errors are never displayed: a failure anywhere, even before the app is wired, answers with
  * the INTERNAL envelope and no detail. That includes a database that can't be opened or whose
- * schema is behind the code (Migrator::assertCurrent).
+ * schema is behind the code (Migrator::assertCurrent), except on `GET /health`, which answers
+ * 503 UNHEALTHY for it (P1-08).
  *
  * No response carries `X-Powered-By` (P1-07). PHP adds `X-Powered-By: PHP/<version>` before
  * this script runs when `expose_php` is on; that setting can only be changed in php.ini, so the
@@ -29,11 +30,16 @@ try {
 
     FxInstallments\Bootstrap::init($apiRoot);
     $app = FxInstallments\App::fromEnvironment($apiRoot);
+    $request = FxInstallments\Http\Request::fromGlobals();
     // Open the database and check its schema version before routing: a database behind the
-    // code (run php bin/migrate.php) fails closed with INTERNAL below.
-    $app->db->pdo();
+    // code (run php bin/migrate.php) fails closed with INTERNAL below. `GET /health` is the one
+    // exception (P1-08): it reports an unusable database itself, as 503 UNHEALTHY. Any other
+    // method on /health fails closed too, instead of reaching the router's counted 404.
+    if ($request->method() !== 'GET' || $request->path() !== FxInstallments\Http\HealthEndpoint::PATH) {
+        $app->db->pdo();
+    }
     $app->kernel()
-        ->handle(FxInstallments\Http\Request::fromGlobals())
+        ->handle($request)
         ->send();
 } catch (Throwable $e) {
     error_log(sprintf('fx-installments INTERNAL before routing: %s at %s:%d', $e::class, $e->getFile(), $e->getLine()));

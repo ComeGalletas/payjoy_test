@@ -106,7 +106,7 @@ final class P1_06_FlowTest extends TestCase
             ['bot.step', 'amount', 'ok', null, 20_000, null, null, null, ['outcome' => 'ok']],
             ['bot.step', 'currency', 'ok', null, 20_000, 'BRL', 'Brazil', null, ['outcome' => 'ok']],
             ['bot.step', 'installments', 'ok', null, 20_000, 'BRL', 'Brazil', 3, ['outcome' => 'ok']],
-            ['bot.session_completed', 'result', 'ok', null, 20_000, 'BRL', 'Brazil', 3, ['template' => 'uneven', 'stale' => false]],
+            ['bot.session_completed', 'result', 'ok', null, 20_000, 'BRL', 'Brazil', 3, ['template' => 'uneven', 'stale' => false, 'rate_scaled' => 52_291_000_000, 'rate_as_of' => MockUpstream::LAST_UPDATE]],
         ], array_map(self::summary(...), $events));
         foreach ($events as $event) {
             self::assertSame(['bot', 'cli', $session], [$event['source'], $event['channel'], $event['session_id']]);

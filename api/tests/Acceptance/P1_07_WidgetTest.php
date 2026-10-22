@@ -7,10 +7,13 @@ namespace FxInstallments\Tests\Acceptance;
 use ArrayObject;
 use FilesystemIterator;
 use FxInstallments\App;
+use FxInstallments\Http\HealthEndpoint;
 use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\Kernel;
+use FxInstallments\Http\ReportsEndpoint;
 use FxInstallments\Http\Request;
 use FxInstallments\Http\Response;
+use FxInstallments\Http\TextResponse;
 use FxInstallments\Http\WidgetEndpoint;
 use FxInstallments\Metrics\ErrorCodes;
 use FxInstallments\Tests\Support\BuiltInServer;
@@ -35,7 +38,8 @@ use SplFileInfo;
  *   the script, style sheet and icon have their types and nosniff; `/favicon.ico` is a 204;
  * - repeated page views from one IP never answer a 4xx and never block it (owner decision
  *   2026-10-21: the favicon 404 counted toward `block.error_responses`);
- * - INV-04: on the production route table only the widget routes answer without the envelope;
+ * - INV-04: on the production route table only the widget routes (and, from P1-08, the CSV
+ *   report) answer without the envelope;
  * - the page loads only its own files and has no inline script, style or event handler;
  * - no file in `api/resources/widget/` names an HTML sink, a code-from-string API or a
  *   number-formatting API (INV-01, the widget half; FORBIDDEN lists each name and why), and the
@@ -227,14 +231,18 @@ final class P1_07_WidgetTest extends TestCase
 
     /**
      * INV-04 over the production route table: every route answers the JSON envelope except the
-     * widget's files and the favicon 204, and that exception list is exactly WidgetEndpoint's.
+     * widget's files and the favicon 204, and from P1-08 `GET /reports?format=csv`; that
+     * exception list is exactly WidgetEndpoint's plus the CSV report. The admin routes are
+     * tried with and without the token, and `/reports` with a bad format.
      */
-    public function testOnlyTheWidgetRoutesAnswerWithoutTheEnvelope(): void
+    public function testOnlyTheWidgetRoutesAndTheCsvReportAnswerWithoutTheEnvelope(): void
     {
+        $this->setEnvironment('ADMIN_TOKEN', 'the-real-admin-token');
         $app = $this->app(upstream: new MockUpstream());
         $routes = $app->router()->routes();
         self::assertSame(
-            [['GET', '/convert'], ['POST', '/bot/message'], ['GET', '/bot/widget'], ['GET', '/bot/widget.js'], ['GET', '/bot/widget.css'], ['GET', '/bot/widget.svg'], ['GET', '/favicon.ico']],
+            [['GET', '/convert'], ['POST', '/bot/message'], ['GET', '/bot/widget'], ['GET', '/bot/widget.js'], ['GET', '/bot/widget.css'], ['GET', '/bot/widget.svg'], ['GET', '/favicon.ico'],
+                ['GET', '/reports'], ['GET', '/health']],
             $routes,
             'a new route must be added here, with its envelope status',
         );
@@ -245,12 +253,19 @@ final class P1_07_WidgetTest extends TestCase
         foreach ($routes as [$method, $path]) {
             $requests[] = new Request($method, $path, [], ['Content-Type' => 'application/json'], '{}', self::CLIENT);
         }
+        $admin = ['Authorization' => 'Bearer the-real-admin-token'];
+        foreach ([[], ['format' => 'json'], ['format' => 'csv'], ['format' => 'xml'], ['from' => '2026-13-01']] as $query) {
+            $requests[] = new Request('GET', ReportsEndpoint::PATH, $query, $admin, remoteAddr: self::CLIENT);
+        }
+        $requests[] = new Request('GET', ReportsEndpoint::PATH, ['format' => 'csv'], remoteAddr: self::CLIENT);
+        $requests[] = new Request('GET', HealthEndpoint::PATH, [], $admin, remoteAddr: self::CLIENT);
+        $requests[] = new Request('GET', HealthEndpoint::PATH, [], ['Authorization' => 'Bearer wrong'], remoteAddr: self::CLIENT);
         $requests[] = new Request('GET', '/no/such/route', remoteAddr: self::CLIENT);
         $requests[] = new Request('OPTIONS', '/bot/message', [], ['Origin' => 'https://shop.example', 'Access-Control-Request-Method' => 'POST'], remoteAddr: self::CLIENT);
 
         foreach ($requests as $request) {
             $response = $kernel->handle($request);
-            $label = $request->method() . ' ' . $request->path();
+            $label = $request->method() . ' ' . $request->path() . ' ' . json_encode($request->query(), JSON_THROW_ON_ERROR);
             if (!$response instanceof JsonResponse) {
                 $nonEnvelope[] = $request->path();
                 self::assertNotSame('application/json', $response->header('Content-Type'), $label);
@@ -261,7 +276,12 @@ final class P1_07_WidgetTest extends TestCase
             self::assertIsBool($envelope['ok'] ?? null, $label);
             self::assertSame($envelope['ok'] ? ['ok', 'data'] : ['ok', 'error'], array_keys($envelope), $label);
         }
-        self::assertSame(WidgetEndpoint::paths(), $nonEnvelope);
+        self::assertSame([...WidgetEndpoint::paths(), ReportsEndpoint::PATH], $nonEnvelope);
+
+        $csv = $kernel->handle(new Request('GET', ReportsEndpoint::PATH, ['format' => 'csv'], $admin, remoteAddr: self::CLIENT));
+        self::assertInstanceOf(TextResponse::class, $csv);
+        self::assertSame('text/csv; charset=utf-8', $csv->header('Content-Type'));
+        self::assertSame('nosniff', $csv->header('X-Content-Type-Options'));
     }
 
     public function testTheAllowedOriginsMayFrameThePageAndCallTheBot(): void

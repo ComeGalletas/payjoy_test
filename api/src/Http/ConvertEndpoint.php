@@ -31,9 +31,10 @@ use FxInstallments\Validation\ValidationFailed;
  *
  * Every answered request writes one `api.request` event (source `api`): the validated
  * currency, `amount_usd_cents` and installments as far as validation got, status, error code,
- * latency, and meta `endpoint=convert`, `http_status`, `stale` on success, `reason` on failure
- * (a fixed word), and `minor_units_default=true` for a currency MinorUnits doesn't list. Never
- * raw input, upstream text, keys or IPs.
+ * latency, and meta `endpoint=convert`, `http_status`, on success `stale`, `rate_scaled` and
+ * `rate_as_of` (the stored rate used and its upstream time, so a report can recompute the
+ * display exactly, P1-08), `reason` on failure (a fixed word), and `minor_units_default=true`
+ * for a currency MinorUnits doesn't list. Never raw input, upstream text, keys or IPs.
  */
 final class ConvertEndpoint
 {
@@ -70,6 +71,8 @@ final class ConvertEndpoint
             $conversion = $service->convert($amount, $currency, $installments);
             $response = JsonResponse::ok($conversion->toArray());
             $meta['stale'] = $conversion->stale;
+            $meta['rate_scaled'] = $conversion->rateScaled;
+            $meta['rate_as_of'] = $conversion->rateAsOf;
         } catch (ValidationFailed $e) {
             $response = JsonResponse::error($e->errorCode);
             $meta['reason'] = $e->reason;

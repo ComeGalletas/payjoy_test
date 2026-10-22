@@ -103,6 +103,24 @@ final class AdminAuthTest extends TestCase
     }
 
     /**
+     * allows() (used by `/health` to pick its admin view, P1-08) gives the same answer as the
+     * middleware for every case above.
+     */
+    public function testAllowsAgreesWithTheMiddleware(): void
+    {
+        foreach (self::acceptedHeaders() as $name => [$header]) {
+            self::assertTrue((new AdminAuth(self::TOKEN))->allows(new Request('GET', '/admin', [], ['Authorization' => $header])), $name);
+        }
+        foreach (self::looseHeaders() as $name => [$header]) {
+            self::assertFalse((new AdminAuth(self::TOKEN))->allows(new Request('GET', '/admin', [], ['Authorization' => $header])), $name);
+        }
+        foreach (self::refusedRequests() as $name => $case) {
+            self::assertFalse((new AdminAuth($case[0]))->allows(new Request('GET', '/admin', $case[2] ?? [], $case[1])), $name);
+        }
+        self::assertSame([401, 'Bearer'], [AdminAuth::unauthorized()->status(), AdminAuth::unauthorized()->header('WWW-Authenticate')]);
+    }
+
+    /**
      * @param array<string, string> $headers
      * @param array<string, string> $query
      */

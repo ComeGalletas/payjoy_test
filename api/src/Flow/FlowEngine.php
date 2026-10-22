@@ -63,7 +63,8 @@ use RuntimeException;
  * (ok, or error with the VALIDATION_* or upstream code), `bot.session_completed`,
  * `bot.session_abandoned`. Columns hold only what the session collected (country only when a
  * country was typed); meta holds fixed words and numbers: `outcome`, `reason`, `retry`,
- * `default`, `via`, `template`, `stale`. Never the text the user typed.
+ * `default`, `via`, `template`, `stale`, and on completion `rate_scaled` and `rate_as_of` (the
+ * stored rate used, P1-08). Never the text the user typed.
  *
  * **Concurrent messages on one session** (owner decision 2026-10-21). The new state is saved
  * with SessionStore::save() (compare-and-set) and the events are written only after it
@@ -351,7 +352,8 @@ final class FlowEngine
             $reply .= "\n" . self::need($call->staleNote)->render();
         }
 
-        $meta = ['template' => $kind, 'stale' => $conversion->stale];
+        // The stored rate used, so a report can recompute the display exactly (P1-08).
+        $meta = ['template' => $kind, 'stale' => $conversion->stale, 'rate_scaled' => $conversion->rateScaled, 'rate_as_of' => $conversion->rateAsOf];
         if (!MinorUnits::isKnown($conversion->currency)) {
             $meta['minor_units_default'] = true;
         }

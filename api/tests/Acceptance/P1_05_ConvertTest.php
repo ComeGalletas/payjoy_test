@@ -98,7 +98,8 @@ final class P1_05_ConvertTest extends TestCase
             'installments' => 3,
             'status' => 'ok',
             'error_code' => null,
-            'meta' => ['endpoint' => 'convert', 'stale' => false, 'http_status' => 200],
+            // The stored rate used and its upstream time, so a report can recompute it (P1-08).
+            'meta' => ['endpoint' => 'convert', 'stale' => false, 'rate_scaled' => 52_291_000_000, 'rate_as_of' => MockUpstream::LAST_UPDATE, 'http_status' => 200],
         ]], $this->apiRequestEvents());
         self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM events WHERE meta LIKE '%203.0.113%'")->fetchColumn());
     }

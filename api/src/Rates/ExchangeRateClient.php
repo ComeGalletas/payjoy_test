@@ -35,6 +35,13 @@ use Throwable;
  * response with any other Content-Encoding is UPSTREAM_MALFORMED), and a body cap of
  * MAX_BODY_BYTES on the bytes that are decoded. The cap is checked on the Content-Length
  * header and while reading (the real guarantees), and also from curl's progress callback.
+ * That progress abort is unit-tested only: ExchangeRateClientTest calls the `progress` option
+ * directly, because Guzzle's MockHandler never calls `progress`, so no test drives it through
+ * a transfer (P1-04 review).
+ *
+ * `/quota` is called only by QuotaCache, for the admin `/health` view, at most once per
+ * `health.quota_cache_minutes`; `/codes` has no caller in Phase 1. Each call writes an
+ * `upstream.call` event with its `meta.endpoint`, so reports count every real call (P1-08).
  *
  * The key is held in an ApiKey, so var_export(), `(array)` casts and serialize() of the client
  * never show it.
