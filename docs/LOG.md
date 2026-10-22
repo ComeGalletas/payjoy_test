@@ -15,10 +15,9 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - Owner decisions: leave the guards as they are for now; every agent brief now says "one plain
   shell command per tool call" (no chains, loops, pipes into scripts or heredocs; Write/Edit for
   files, Grep/Glob for searches). The lead's count: every builder so far had hit about two such
-  refusals, always on compound commands or heredocs.
+  refusals, mostly on compound commands, heredocs or `.git` paths.
 - **Transcript audit** (lead, all 57 transcripts on this machine: the lead's session and 56
-  subagents;
-  text matching on tool inputs, plus a search of tool outputs for key or token values):
+  subagents; text matching on tool inputs, plus a search of tool outputs for key or token values):
   - `.env`: no Read, Edit, Write, Grep or Glob call on it. 15 shell commands name it, all for its
     name only: existence and ignore checks, the `.gitignore` rules, commit and PR text, a source
     search, the lead's scans. No real `EXCHANGERATE_API_KEY` or `ADMIN_TOKEN` value appears in any
@@ -34,10 +33,11 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
     change was ratified by the owner afterwards (PR #7). No agent edited `.claude/settings*`,
     `AGENTS.md` or a data root. The lead read the owner's user settings file once, read-only,
     during the guard review.
-  - Refusals: 35 across 14 subagents, all the worktree-complexity check; none involved `.env`.
+  - Refusals: 35 worktree-complexity refusals across 14 subagents, plus one permission-classifier
+    denial in P0-06 (`git restore --source=origin/main`, LOG 2026-10-20); none involved `.env`.
     Two builders switched shells after a refusal, before the GR-030 exceptions: P1-01's switch
     reached no guarded target; P0-04's refusals concerned `.git` paths, and its PowerShell re-run
-    is the hook install above (finding A).
+    includes the hook install above (finding A) and reads of git metadata.
   - Limits: text matching misses indirect access (the output search is the backstop); the audit
     covers Claude sessions on this machine only; and the lead audited its own session too.
   - Correction: in chat the lead first told the owner that neither shell switch reached a guarded
