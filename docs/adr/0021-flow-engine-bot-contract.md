@@ -1,7 +1,8 @@
 # 0021 — Flow engine and bot message contract
 
 - **Status:** Accepted (note 2026-10-22: the widget opens sessions lazily, ADR 0022; amended
-  2026-10-22: completion meta and report sweeps, see "Amendment")
+  2026-10-22: completion meta and report sweeps, see "Amendment"; note 2026-10-22: demo sessions
+  use derived ids, ADR 0024)
 - **Date:** 2026-10-21
 - **Deciders:** owner
 - **Relates to:** 0003 (static flow), 0004 (Typebot), 0011, 0012, 0013, 0016, 0018
@@ -40,7 +41,8 @@ which the tester and judge accepted.
      (item 6).
    - CORS runs before the rate limiter on `/bot/message`, so a 429 still carries CORS headers.
    - HTTP sessions are `static` and the body can't choose a channel; `bin/bot.php` uses `cli`.
-3. **Sessions.** Ids are `bin2hex(random_bytes(16))`, issued by the server. An unknown, malformed,
+3. **Sessions.** Ids are `bin2hex(random_bytes(16))`, issued by the server (the rows `seed_demo`
+   writes use derived ids, ADR 0024 item 4). An unknown, malformed,
    expired or finished id starts a new session (except a message that lost the race, item 6), and so
    does a row whose `collected` is damaged or whose step the flow no longer asks.
    **Owner-ratified:** the message that starts a session is never read as an answer, so a `3` meant

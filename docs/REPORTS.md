@@ -253,11 +253,13 @@ second guard.
 
 ## Example: the demo data
 
-On a new database, `php api/bin/migrate.php`, then `php api/db/seed_demo.php`, then
-`php api/bin/report.php` printed this (2026-10-22; the report's first two lines, with the dates,
-are left out). The seed writes the same rows every time, so your numbers match, except for the two
-open sessions: within 30 minutes of seeding they expire and the next sweep closes them, and then
-the static one is abandoned at `currency` and the CLI one never answered.
+On a new throwaway database (see `INSTALL_LOCAL.md` section 6): `php api/bin/migrate.php`, then
+`php api/db/seed_demo.php`, then `php api/bin/report.php --from=<first date> --to=<last date>`
+with the dates the seed printed. On 2026-10-22 it showed this (the report's first two lines,
+with the dates, are left out). The seed writes the same rows every time, so your numbers match
+over those dates (or with no options on the day you seed), except for the two open sessions:
+within 30 minutes of seeding they expire and the next sweep closes them, and then the static one
+is abandoned at `currency` and the CLI one never answered.
 
 <!-- seed_demo example: table -->
 ```text

@@ -26,7 +26,7 @@ Phase 1 (the deterministic MVP) runs locally without Docker; see
 | `php api/bin/migrate.php` | Creates and upgrades the database; `--prune` deletes expired rows | |
 | `php api/bin/ip.php` | Manual IP blocks: `block`, `unblock`, `list` | |
 | `php api/bin/upstream.php` | The upstream breaker: `status`, `reset` | |
-| `php api/db/seed_demo.php` | Demo data for the reports, on a new database | |
+| `php api/db/seed_demo.php` | Demo data for the reports, on a new, throwaway database (INSTALL_LOCAL.md section 6) | |
 
 Every JSON answer is an envelope: `{"ok": true, "data": {...}}` or
 `{"ok": false, "error": {"code": "...", "message_for_user": "..."}}`. Front-ends branch on `ok` and
