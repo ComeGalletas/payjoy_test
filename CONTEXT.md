@@ -84,6 +84,11 @@ name, add it here in the same commit that introduces it.
 | **abandoned session** | Ended by max retries (`BOT_MAX_RETRIES`), expiry (`BOT_SESSION_EXPIRED`) or an upstream error; the event records the step. |
 | **channel** | Where a session runs: `static` (every `/bot/message` session, including the built-in widget, until P3-05 adds `typebot`), `cli`, `typebot`. |
 | **front-end** | Anything that shows the bot to a person: widget, CLI, Typebot. |
+| **widget** | The built-in `static`-channel front-end at `GET /bot/widget` (`api/resources/widget/`), embeddable by iframe or one `<script>` (ADR 0022). |
+| **widget chrome** | The widget's own UI strings ("Start chat", "Try again", speaker prefixes…), kept in `widget.js`, as opposed to bot wording from the flow file. |
+| **embed** | The widget inside another page: an iframe of `/bot/widget` (another origin needs `frame-ancestors`) or one `<script>` (another origin needs CORS); both read `cors.allowed_origins`. |
+| **lazy open** | The widget opens its session on the first focus of the message box, a first submit, or "Start chat", not on page load; "Start a new conversation" and "Try again" open at once. |
+| **widget harness** | `api/tests/js/widget.test.js`: the widget's behaviour test in Node, with its own fake DOM, run from `P1_07_WidgetTest` (ADR 0022). |
 | **normalizer** | Phase 2 LLM step that extracts fields from free text before the deterministic parser and validators. Never replaces them. |
 
 ## Metrics

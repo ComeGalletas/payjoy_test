@@ -5,7 +5,7 @@ The first unchecked item not marked DEFERRED is the current work; the owner remo
 schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and adds its end status.
 
 **Current phase:** Phase 1 — Deterministic MVP
-**Next item:** P1-07
+**Next item:** P1-08
 
 ## Phase 0 — Pre-work
 
@@ -26,7 +26,7 @@ schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and a
 - [x] P1-11 Request log and IP blocking (runs before P1-05) — DONE (2026-10-21; PR #14, three rounds)
 - [x] P1-05 Convert and `GET /convert` — DONE (2026-10-21; PR #16, two rounds)
 - [x] P1-06 Flow engine and `POST /bot/message` — DONE (2026-10-21; PR #18, two rounds)
-- [ ] P1-07 Widget
+- [x] P1-07 Widget — DONE (2026-10-22; PR #21, three rounds)
 - [ ] P1-08 Reports and health
 - [ ] P1-09 Seed data and docs
 - [ ] P1-10 End-to-end run — deliver MVP

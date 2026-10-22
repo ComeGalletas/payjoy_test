@@ -83,6 +83,7 @@ Reasons and consequences are in the ADR named in each row.
 | Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
 | Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
 | Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
+| Widget | Built-in `static` front-end at `/bot/widget`: lazy open, strict CSP with Trusted Types, embeddable by iframe or `<script>`. | 0022 |
 | Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; from P1-04 also `disable_functions=curl_exec,curl_multi_exec` and Guzzle handler stubs. | 0018 |
 | Upstream | One `/latest/USD` call per upstream refresh; always compute `amount × rate` locally; stale fallback; stop calling after quota or key errors, and back off 1 to 60 minutes after any other failed refresh. See §3b. | 0012 |
 | Amount input | `/convert` is strict (`.` decimal only). The bot also accepts `,` as a decimal or thousands separator; unclear input gets a clarifying question. See §3c. | 0013 |
@@ -102,8 +103,9 @@ Reasons and consequences are in the ADR named in each row.
   - User input is never interpolated into an upstream URL.
 - **Response envelope** on every JSON endpoint: `{ "ok": true, "data": {...} }` or
   `{ "ok": false, "error": { "code": "...", "message_for_user": "..." } }`. Front-ends branch on
-  `ok` and display `message_for_user` verbatim. HTML pages (widget) and CSV reports are the only
-  non-envelope responses.
+  `ok` and display `message_for_user` verbatim. The widget's files (page, script, style sheet,
+  icon), the 204 `/favicon.ico` and, from P1-08, CSV reports are the only non-envelope responses
+  (ADR 0022).
 - **Every** meaningful action writes an event through the single `Metrics` class. No ad-hoc
   logging. A failed metrics write is caught and never fails the user's request.
 - **Secrets.** Only in `.env` (the owner fills it; agents never read it). The API key never appears
@@ -111,11 +113,13 @@ Reasons and consequences are in the ADR named in each row.
   never reaches the network.
 - **Admin token.** `ADMIN_TOKEN` from `.env`, sent only in the `Authorization: Bearer` header,
   compared with `hash_equals`. If the token is unset or empty, every admin request is refused.
-  Never in a URL.
-- **Output safety.** `JSON_THROW_ON_ERROR`, `Content-Type: application/json`. The widget renders
-  all text with `textContent`, never `innerHTML`, and its page sends a Content-Security-Policy and
-  `X-Content-Type-Options: nosniff`. CSV cells starting with `=`, `+`, `-`, `@`, tab or CR get a
-  leading `'`.
+  Never in a URL. The header must be `Bearer` (any case), one or more spaces, then the token and
+  nothing after it, so the token must be visible ASCII (ADR 0022).
+- **Output safety.** `JSON_THROW_ON_ERROR`, `Content-Type: application/json`. The widget renders all
+  text with `textContent`, never `innerHTML`, and its page sends a Content-Security-Policy with
+  Trusted Types and `X-Content-Type-Options: nosniff`. No response carries `X-Powered-By`
+  (ADR 0022).
+  CSV cells starting with `=`, `+`, `-`, `@`, tab or CR get a leading `'`.
 - **Abuse limits.** Per-IP limit on `/convert` and `/bot/message` (`ratelimit.per_minute`, stored in
   SQLite) → `RATE_LIMITED` (429). `X-Forwarded-For` is trusted only when `TRUSTED_PROXY` is set and
   matches the peer. CORS on `/bot/message` only for `cors.allowed_origins`.
@@ -266,7 +270,7 @@ fx-installments/
 │   ├── bin/migrate.php, report.php, bot.php, upstream.php, ip.php
 │   ├── resources/widget/       # vanilla JS, no build step
 │   ├── var/                    # git-ignored: app.db (outside public/)
-│   └── tests/Unit, tests/Acceptance
+│   └── tests/Unit, tests/Acceptance, tests/js (the widget harness, run from PHPUnit)
 └── docs/
     ├── PLAN.md, TODO.md, LOG.md, GUARDRAILS.md, adr/
     └── README.md, INSTALL_LOCAL.md, REPORTS.md
@@ -339,7 +343,7 @@ Error codes (stable strings) and HTTP status:
 |---|---|---|
 | `GET /convert?amount&cy&installments?` | 1 | Conversion, installment amount (unrounded), `display` block, `rate_as_of`, `stale`. `amount` and `cy` required; `installments` defaults to `installments.default`; a missing `amount` or `cy`, an empty value, or an array answers `format`; checked in the order amount, currency, installments; extra parameters ignored, and a repeated one keeps its last value (PHP) |
 | `POST /bot/message {session_id?, text}` → `{session_id, reply, buttons?, step, done}` | 1 | Static flow engine; the contract every channel uses. A JSON object of at most 4 KiB with `Content-Type: application/json`, else 400 `BAD_REQUEST`; `buttons` only while the waiting step has them; `done` once completed or abandoned; `reply` empty only with `done` for a double-submit on a closed session (ADR 0021) |
-| `GET /bot/widget` | 1 | Built-in chat page |
+| `GET /bot/widget` | 1 | Built-in chat page, with `/bot/widget.js`, `.css` and `.svg`; `GET /favicon.ico` answers 204 (ADR 0022) |
 | `GET /reports?from&to&format=json\|csv` (admin) | 1 | Summary, currencies/countries, funnel by step and channel, errors by code, upstream usage (calls, hits, stale, blocked) |
 | `GET /health` | 1 | Public: `status` only. Admin: quota left (cached), cache age, DB writable, breaker state |
 | `POST /normalize {text, expecting}` | 2 | LLM extraction → validated fields or `ok:false` |
@@ -365,7 +369,8 @@ rate-limited minutes, not 429 responses.
 2. **Built-in web widget** — `GET /bot/widget`, vanilla JS, buttons for shortcuts (top
    currencies, "Just one payment"), `channel=static`. Embeddable with one `<script>` (needs the
    embedding origin in `cors.allowed_origins`) or an iframe (`frame-ancestors 'self'` plus the same
-   origins).
+   origins). It opens its session lazily, on the first focus or "Start chat", and its own UI
+   strings live in `widget.js` (ADR 0022).
 3. **Raw endpoint** — `POST /bot/message`, the contract for any future channel.
 
 Plus `/convert` via curl, and reports via `/reports` and `bin/report.php` (table/csv/json).
@@ -688,6 +693,12 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `BAD_REQUEST` and 429 texts verbatim (CORS runs before the rate limiter, so the 429 is readable);
   on `done: true`, end the conversation and offer a restart. The widget checks of INV-01 aren't
   built yet: the acceptance test should also reject `Math.round`.
+  *DONE 2026-10-22 (PR #21, three rounds). Decisions in ADR 0022 (owner: favicon 204 plus an SVG
+  icon, unthrottled widget routes until P3-01, the widget harness in the suite, lazy open,
+  "Start chat"). Output safety is enforced by Trusted Types and the widget harness's DOM proxy;
+  INV-01 in the widget by the harness's verbatim-text checks and a frozen scan; INV-04 is checked
+  over the production route table. The lead's by-hand check (a typed `<script>` shows
+  as text) passed in a browser.*
 - **P1-08** `Metrics/ReportQuery`, `ReportFormatter`, `CsvWriter` → `GET /reports` (json/csv) and
   `bin/report.php` (table/csv/json); `GET /health` (public and admin views).
   *Acceptance:* `tests/Acceptance/P1_08_ReportsTest.php` — over seeded events, funnel counts per
@@ -716,6 +727,9 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   sessions that never got an answer (page views abandoned at `amount`); `bot.step` can carry
   `UPSTREAM_UNSUPPORTED_CODE` (`not_in_table`); bot conversions write no `api.request` event and
   no `rate_scaled` (ADR 0021).
+  Also (from P1-07): serve CSV through `TextResponse` (add it to the INV-04 route-table test);
+  request-log reports should separate widget asset and `/favicon.ico` hits; sessions opened by a
+  focus and never answered still count as abandoned at `amount` (ADR 0022).
 - **P1-09** `db/seed_demo.php`; `docs/README.md` (incl. a privacy note on the request log: raw
   IPs, 30-day retention, blocks; ADR 0016), `docs/INSTALL_LOCAL.md` (incl. CA bundle setup, and
   the ADR 0019 operations: run `php api/bin/migrate.php` after `composer install` and on every
@@ -729,10 +743,19 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   block events that never hold an IP. `INSTALL_LOCAL.md` says that behind a same-host proxy
   `TRUSTED_PROXY` must be set, or every client looks like loopback and is never blocked
   automatically, and that changing `ratelimit.per_minute` reinterprets the last window's counts.
+  Also (from P1-07): `INSTALL_LOCAL.md` sets `expose_php=Off` and `display_errors=Off` and uses
+  `-d display_errors=0` in the documented `php -S` command; says `ADMIN_TOKEN` must be visible
+  ASCII and gives the exact `cors.allowed_origins` form (`https://host[:port]`, lowercase, no
+  trailing slash); explains the iframe and `<script>` embeds (for the `<script>` embed, a host
+  page's CSP must allow the API origin in `script-src`, `style-src` and `connect-src`; for the
+  iframe, in `frame-src`); and says Node is optional locally (the widget harness skips without it,
+  CI runs it).
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
-  `docs/LOG.md`. **Deliver MVP.**
+  `docs/LOG.md`. **Deliver MVP.** The lead repeats the by-hand widget check (a typed `<script>`
+  shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
+  origin listed in `cors.allowed_origins` (never tried by hand in P1-07).
   *Acceptance:* owner sees one completed session per channel in `/reports`, and quota used is ≤ 3
   calls.
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
@@ -774,6 +797,11 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   `TRUSTED_PROXY` must be nginx's container address, so check that the API doesn't see the Docker
   bridge gateway for every client; add a covering index on `requests` (migration 4) if tuning
   shows the `error_responses` scan matters.
+  Also (from P1-07): in the image's `php.ini` set `expose_php=Off`; in nginx use
+  `fastcgi_hide_header X-Powered-By` and `server_tokens off`, and don't add a second CSP with
+  `add_header`; rate-limit or cache the widget's static files; answer `HEAD`,
+  `/apple-touch-icon*.png` and `/robots.txt` without a counted 404 (ADR 0016 third amendment,
+  ADR 0022).
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,
@@ -784,7 +812,10 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   `channel=typebot`; money only from `display.*` (ADR 0004 amendment). Export to
   `typebot/flows/fx_installments.json` + sub-flow templates (validate-or-retry).
 - **P3-06** Loader snippet reading `config.bot.frontend`; `/health` checks the Typebot viewer for
-  automatic fallback to the static widget.
+  automatic fallback to the static widget. The loader must load `widget.js` from the API's `/bot/`
+  path (the widget derives its endpoint from its own `src`) and can fall back through
+  `data-fx-target`; if the Typebot viewer frames anything, `frame-ancestors` needs its origin
+  (ADR 0022).
 - **P3-07** Contract test: every HTTP block in the export maps to a catalog endpoint/field. The
   `/bot/message` response fields (ADR 0021) are part of the contract.
 - **P3-08** `GET /reports/dashboard` with Chart.js vendored under `resources/dashboard/`.
@@ -860,6 +891,13 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     exists; a later `FlowLoader` / `FlowDefinition` split would shrink the loader.
   - (P1-06) "Just one payment" maps to `installments.default`; if the owner changes the default
     from 1, change the button text too.
+  - (P1-07) Add an ETag (or Last-Modified) to the widget files so views revalidate instead of
+    downloading again; log the `AllowedOrigins` warning once per bad configuration instead of per
+    request (PHP keeps no state between requests, so remember, for example, a hash of the dropped
+    list in `app_state`); re-wrap the `widget.js` lines over 100 columns (the header comment and
+    line 243). Move `EntryPointEndToEndTest` onto `BuiltInServer`, so its server gets ADR 0018's
+    gate flags and an empty `EXCHANGERATE_API_KEY`. Proposal for the owner (CI is owner-owned):
+    pin Node with `actions/setup-node` so the widget harness doesn't depend on the runner image.
 
 ## 11. Working agreements for the agent
 

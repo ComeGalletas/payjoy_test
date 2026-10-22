@@ -1,6 +1,6 @@
 # 0021 — Flow engine and bot message contract
 
-- **Status:** Accepted
+- **Status:** Accepted (note 2026-10-22: the widget opens sessions lazily, ADR 0022)
 - **Date:** 2026-10-21
 - **Deciders:** owner
 - **Relates to:** 0003 (static flow), 0004 (Typebot), 0011, 0012, 0013, 0016, 0018
@@ -117,7 +117,9 @@ which the tester and judge accepted.
   - `below_minor_unit` at 1 installment can't be fixed by re-asking installments, so it ends by
     max retries; only an amount of about a cent reaches it.
   - The first message of a session is dropped, so a user who opens with `200` retypes it, and
-    page views that never answer count as sessions abandoned at `amount` (P1-08).
+    sessions that never answer count as abandoned at `amount` (P1-08). Since P1-07 the widget
+    opens a session only on the first focus or "Start chat" (ADR 0022), so a page view alone opens
+    none; a focus still does.
   - Bot conversions write no `api.request` event and no `rate_scaled` (P1-08).
   - The busy wait before a skipped sweep can add up to the busy timeout to a message; on Postgres
     the sweep needs a savepoint per event (L-03).

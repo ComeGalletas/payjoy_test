@@ -1,6 +1,6 @@
 # 0018 — Keeping tests off the network
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-10-22: test server and widget harness, see "Amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -29,3 +29,15 @@ arrives in P1-04.
 - Contributors run tests through `make` or `composer`.
 - Raw sockets (`tcp://`, `ssl://`, `fsockopen`) stay uncovered; listed in GUARDRAILS known limits,
   with review as the backstop.
+
+## Amendment (2026-10-22): the test server and the widget harness
+
+Recorded from P1-07 (ADR 0022).
+
+- `tests/Support/BuiltInServer` is the sanctioned way for a test to run `php -S`: it always passes
+  the gate flags (`allow_url_fopen=0`, `disable_functions=curl_exec,curl_multi_exec`), and a `-d`
+  that would change one is refused. `EntryPointEndToEndTest` (P1-01) still starts its own
+  `php -S` without the gate flags; moving it onto `BuiltInServer` is an L-04 follow-up.
+- The widget harness runs in Node (`api/tests/js/widget.test.js`, owner decision). The layers above
+  don't apply to the Node process; the harness uses only Node's `fs` and `vm`, with no packages
+  and no network module, and review is the backstop.
