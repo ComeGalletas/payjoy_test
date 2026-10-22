@@ -7,7 +7,9 @@ replaces only part of an old one, the old one stays `Accepted` with a note namin
 new ADR, and the affected sentence in its body points to the new ADR. A decision that is extended
 or refined without being reversed gets a dated "Amendment" section in the same ADR; its status
 becomes `Accepted (amended YYYY-MM-DD)`, and the changed sentences in its body point to the
-amendment.
+amendment. When a later ADR changes only a consequence or known limit, with no change to the
+decision, the status becomes `Accepted (note YYYY-MM-DD)` and the changed sentence points to the
+later ADR.
 
 | ADR | Title | Status |
 |---|---|---|

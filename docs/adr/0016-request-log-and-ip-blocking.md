@@ -1,8 +1,8 @@
 # 0016 — Request log and IP blocking
 
 - **Status:** Accepted (amended 2026-10-21: retention boundaries and block rows, see "Amendment";
-  amended again 2026-10-21: what counts toward a block, events, see "Second amendment"; note
-  2026-10-22: widget routes, see "Third amendment")
+  amended again 2026-10-21: what counts toward a block, events, see "Second amendment"; amended
+  a third time 2026-10-22: widget routes, see "Third amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -191,7 +191,8 @@ and 3, is the builder's design, which the tester and judge accepted.
 
 ## Third amendment (2026-10-22): widget routes
 
-Recorded from P1-07 (ADR 0022); owner decisions.
+Recorded from P1-07 (ADR 0022). The first two items are owner decisions (2026-10-21); the third
+is a known limit recorded by the co-leads' round-3 brief.
 
 - `GET /favicon.ico` answers 204, so a browser's icon request no longer counts toward
   `block.error_responses` (a 404 there got a shared IP blocked after about 100 page views).
