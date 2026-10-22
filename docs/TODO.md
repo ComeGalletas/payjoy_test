@@ -1,8 +1,8 @@
 # TODO
 
 Checklist of the work IDs in `docs/PLAN.md` §10, which holds each task's spec and acceptance test.
-The first unchecked item is the current work. From Phase 1 on, the lead ticks an item when its PR
-is merged and adds its end status.
+The first unchecked item is the current work, except items marked DEFERRED. From Phase 1 on, the
+lead ticks an item when its PR is merged and adds its end status.
 
 **Current phase:** Phase 1 — Deterministic MVP
 **Next item:** P1-06
@@ -15,6 +15,7 @@ is merged and adds its end status.
 - [x] P0-04 Repository, Composer/PHPUnit skeleton, Makefile, hooks, branch protection — DONE (2026-10-20; PR #1, follow-ups in P0-06)
 - [x] P0-05 Owner adds API key and admin token to `.env` — DONE (2026-10-20)
 - [x] P0-06 Guard hardening follow-ups from the P0-04 review — DONE (2026-10-20; PR #3; builder's concerns settled by owner decision and L-04)
+- [ ] P0-07 Claude Code guard layer (`.env` deny rules, PreToolUse guard) — DEFERRED by the owner (2026-10-21); not the current item
 
 ## Phase 1 — Deterministic MVP
 

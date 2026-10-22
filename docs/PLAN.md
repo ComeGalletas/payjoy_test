@@ -478,6 +478,37 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `.github/workflows/check.yml` is a 40-character SHA followed by a `# <real tag>` comment.
   *DONE 2026-10-20 (PR #3). Builder reported DONE_WITH_CONCERNS; the concerns were settled by the
   owner's decision to keep "always reject a comment first line", and the rest moved to L-04.*
+- **P0-07** Claude Code guard layer for the "Brief only" rows of `docs/GUARDRAILS.md`
+  (lead proposed 2026-10-21). **Deferred by the owner:** not scheduled; the owner is reviewing the
+  settings template first. A transcript audit on 2026-10-21 found no read or edit of `.env` and no
+  owner-file edit without the owner's approval (see LOG), so the guards aren't urgent.
+  - **Step 1, `.env` deny rules** in `.claude/settings.json` (owner-owned, GR-006; the owner
+    applies them): `Read` and `Edit` denied on `//**/.env`, `//**/.env.local` and
+    `//**/.env.*.local`, leaving `.env.example` open for placeholders; optionally `Edit` denied on
+    `.claude/settings*.json` so an agent can't remove the rules. `Edit` rules also cover Write and
+    shell redirects; `Read` rules cover Grep and Glob on a best-effort basis. They don't reliably
+    stop a shell read such as `cat .env`.
+  - **Step 2, a PreToolUse guard:** a PHP script (run through a small PowerShell launcher, since
+    Git Bash has no `php` on its PATH) that blocks with exit code 2 and a message stating the
+    remedy (GR-030). It covers GR-002 shell reads of `.env`, GR-001 (once real data roots are
+    set), GR-004 writes outside the caller's worktree, GR-005/GR-006 owner files, the lead's edit
+    scope (`CLAUDE.md` Roles), GR-017 hook bypass flags and GR-018 destructive commands. Configure
+    `"onFailure": "block"` so a crash or timeout blocks instead of allowing.
+  - **Optional, same task:** a secret scan in `make check` (the GR-002 backstop), the widget half of
+    the INV-01 grep, a CI check on commit subjects, and a `CODEOWNERS` file.
+  - **Feasibility (checked 2026-10-21 against the Claude Code docs, version 2.1.303):** hooks fire
+    in the desktop Code tab and inside worktree subagents, whose calls carry `agent_id`,
+    `agent_type` and `cwd`, so roles can be told apart without a per-session variable. Desktop
+    worktree sessions read hooks from the main checkout's settings (to confirm with a logging
+    probe for `isolation: "worktree"` subagents). Settings reload without a restart. Only exit
+    code 2 blocks; other failures and timeouts allow unless `onFailure` is `block` (2.1.295+).
+  - **Open decisions before a builder starts:** how owner sessions are exempted (the desktop app
+    can't give one session its own environment, so `AGENT_GUARD_OFF=1` in a shared settings file
+    would also turn the guard off for agents); the exact role rules.
+  *Acceptance (when scheduled):* guard tests in the Guards suite feed tool-call JSON to the script
+  and check each block and allow; after merge, a live probe from the lead and from a worktree
+  subagent tries to read a decoy `.env` in a scratch folder, write outside its worktree and run a
+  `rm -rf`, and each is blocked and reported. The real `.env` is never touched.
 
 ### Phase 1 — Deterministic MVP
 

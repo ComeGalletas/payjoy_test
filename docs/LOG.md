@@ -4,6 +4,40 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-21 — Guard review, transcript audit and P0-07 (deferred)
+
+- **P1-06 builder's guard blocks (PR #18 round 1), checked against its transcript:** 2 refusals,
+  both from Claude Code's own worktree isolation ("too complex to verify that it stays inside the
+  worktree"), not from a project guard. One Python heredoc edit was redone with the Write tool; one
+  compound status check was redone as the stated remedy once, plus Grep. Of its 172 tool calls, 0
+  reached a path outside its worktree, 0 named `.env`, and 0 used a hook-bypass or destructive
+  flag. Handled within the GR-030 exceptions.
+- Owner decisions: leave the guards as they are for now; every agent brief now says "one plain
+  shell command per tool call" (no chains, loops, pipes into scripts or heredocs; Write/Edit for
+  files, Grep/Glob for searches), since every builder had hit about two such refusals.
+- **Transcript audit** (lead, all 57 transcripts on this machine: this session and 56 subagents;
+  text matching on tool inputs, plus a search of tool outputs for key or token values):
+  - `.env`: no Read, Edit, Write, Grep or Glob call on it. 15 shell commands name it, all for its
+    name only: existence and ignore checks, the `.gitignore` rules, commit and PR text, a source
+    search, the lead's scans. No real `EXCHANGERATE_API_KEY` or `ADMIN_TOKEN` value appears in any
+    output; the 8 matches are `.env.example`'s empty placeholders. The app's scripts never ran
+    against the main checkout's `.env`; two `migrate.php --dump` runs were in a worktree and a
+    scratch copy, where no `.env` exists.
+  - Owner files: `CLAUDE.md` (6 commits) and `docs/GUARDRAILS.md` (13) were edited only in docs PRs
+    the owner asked for or approved. Builders edited guard files only in their own worktrees, in
+    owner-assigned tasks (P0-04, P0-06), or with ADR 0018's approval (P1-04). The P1-01 gate-script
+    change was ratified by the owner afterwards (PR #7). No agent edited `.claude/settings*`,
+    `AGENTS.md` or a data root. The lead read the owner's user settings file once, read-only,
+    during the guard review.
+  - Refusals: 35 across 14 subagents, all the worktree-complexity check; none involved `.env` or
+    an owner file. The P0-04 and P1-01 shell switches after a refusal (before the GR-030
+    exceptions) reached no guarded target.
+  - Limits: text matching misses indirect access (the output search is the backstop), and the
+    audit covers Claude sessions on this machine only.
+- **P0-07 added and deferred** (owner decision): a Claude Code guard layer, `.env` deny rules first,
+  then a PreToolUse guard. Feasibility was checked against the Claude Code docs (version 2.1.303).
+  The owner is reviewing the settings template; nothing is applied.
+
 ## 2026-10-21 — P1-05 Convert and `GET /convert` (PR #16, head 0eda0ce)
 
 - PR #15 (P1-11 close-out) merged by the owner as `f751c91`. Owner decision: GUARDRAILS INV-08 now
