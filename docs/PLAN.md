@@ -478,27 +478,34 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   `.github/workflows/check.yml` is a 40-character SHA followed by a `# <real tag>` comment.
   *DONE 2026-10-20 (PR #3). Builder reported DONE_WITH_CONCERNS; the concerns were settled by the
   owner's decision to keep "always reject a comment first line", and the rest moved to L-04.*
-- **P0-07** Claude Code guard layer for the "Brief only" rows of `docs/GUARDRAILS.md`
-  (lead proposed 2026-10-21). **Deferred by the owner:** not scheduled; the owner is reviewing the
-  settings template first. A transcript audit on 2026-10-21 found no read or edit of `.env` and no
-  owner-file edit without the owner's approval (see LOG), so the guards aren't urgent.
+- **P0-07** Claude Code guard layer: the PreToolUse and settings layers planned in
+  `docs/GUARDRAILS.md` for GR-001, GR-002, GR-004, GR-005, GR-006, GR-017 and GR-018 (lead
+  proposed 2026-10-21). **Deferred by the owner:** not scheduled; the owner is reviewing the
+  settings template first ("the guard hooks aren't that necessary at the moment"). The lead's
+  transcript audit (LOG 2026-10-21) found no read or edit of `.env`.
   - **Step 1, `.env` deny rules** in `.claude/settings.json` (owner-owned, GR-006; the owner
-    applies them): `Read` and `Edit` denied on `//**/.env`, `//**/.env.local` and
-    `//**/.env.*.local`, leaving `.env.example` open for placeholders; optionally `Edit` denied on
-    `.claude/settings*.json` so an agent can't remove the rules. `Edit` rules also cover Write and
+    applies them): `Read(//**/.env)`, `Edit(//**/.env)`, `Read(//**/.env.local)`,
+    `Edit(//**/.env.local)`, `Read(//**/.env.*.local)` and `Edit(//**/.env.*.local)` in
+    `permissions.deny`, leaving `.env.example` open for placeholders; optionally
+    `Edit(//**/.claude/settings.json)` and `Edit(//**/.claude/settings.local.json)`, so an agent
+    can't remove the rules (a plain `.claude/…` pattern is relative to the working folder, so it
+    would miss the main checkout's copy from a worktree). `Edit` rules also cover Write and
     shell redirects; `Read` rules cover Grep and Glob on a best-effort basis. They don't reliably
     stop a shell read such as `cat .env`.
-  - **Step 2, a PreToolUse guard:** a PHP script (run through a small PowerShell launcher, since
-    Git Bash has no `php` on its PATH) that blocks with exit code 2 and a message stating the
-    remedy (GR-030). It covers GR-002 shell reads of `.env`, GR-001 (once real data roots are
+  - **Step 2, a PreToolUse guard:** a PHP script, run as `php` with `args` (the exec form), that
+    blocks with exit code 2 and a message stating the remedy (GR-030). The probe checks that the
+    hook's shell finds `php`; if not, use its full path. It covers GR-002 shell reads of `.env`, GR-001 (once real data roots are
     set), GR-004 writes outside the caller's worktree, GR-005/GR-006 owner files, the lead's edit
     scope (`CLAUDE.md` Roles), GR-017 hook bypass flags and GR-018 destructive commands. Configure
     `"onFailure": "block"` so a crash or timeout blocks instead of allowing.
-  - **Optional, same task:** a secret scan in `make check` (the GR-002 backstop), the widget half of
-    the INV-01 grep, a CI check on commit subjects, and a `CODEOWNERS` file.
+  - **Optional, same task:** a secret scan in `make check` (the GR-002 backstop), the
+    `resources/widget/` checks of INV-01, a CI check on commit subjects, and a `CODEOWNERS` file.
   - **Feasibility (checked 2026-10-21 against the Claude Code docs, version 2.1.303):** hooks fire
     in the desktop Code tab and inside worktree subagents, whose calls carry `agent_id`,
-    `agent_type` and `cwd`, so roles can be told apart without a per-session variable. Desktop
+    `agent_type` and `cwd`. So a hook can tell a subagent from the top-level session, and find its
+    worktree from `cwd`, without a per-session variable; it can't tell the owner's top-level
+    session from the lead's, and builders, testers and judges share one `agent_type` (see Open
+    decisions). Desktop
     worktree sessions read hooks from the main checkout's settings (to confirm with a logging
     probe for `isolation: "worktree"` subagents). Settings reload without a restart. Only exit
     code 2 blocks; other failures and timeouts allow unless `onFailure` is `block` (2.1.295+).
@@ -507,8 +514,10 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
     would also turn the guard off for agents); the exact role rules.
   *Acceptance (when scheduled):* guard tests in the Guards suite feed tool-call JSON to the script
   and check each block and allow; after merge, a live probe from the lead and from a worktree
-  subagent tries to read a decoy `.env` in a scratch folder, write outside its worktree and run a
-  `rm -rf`, and each is blocked and reported. The real `.env` is never touched.
+  subagent tries to read a decoy `.env` in a scratch folder, write to a scratch path outside its
+  worktree (never the main checkout) and run `rm -rf` on a nonexistent path inside the scratch
+  folder, and each is blocked and reported, so nothing is harmed if the guard fails open. The real
+  `.env` is never touched. The owner approves these probes in the brief.
 
 ### Phase 1 — Deterministic MVP
 

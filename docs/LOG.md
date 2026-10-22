@@ -14,8 +14,10 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   flag. Handled within the GR-030 exceptions.
 - Owner decisions: leave the guards as they are for now; every agent brief now says "one plain
   shell command per tool call" (no chains, loops, pipes into scripts or heredocs; Write/Edit for
-  files, Grep/Glob for searches), since every builder had hit about two such refusals.
-- **Transcript audit** (lead, all 57 transcripts on this machine: this session and 56 subagents;
+  files, Grep/Glob for searches). The lead's count: every builder so far had hit about two such
+  refusals, always on compound commands or heredocs.
+- **Transcript audit** (lead, all 57 transcripts on this machine: the lead's session and 56
+  subagents;
   text matching on tool inputs, plus a search of tool outputs for key or token values):
   - `.env`: no Read, Edit, Write, Grep or Glob call on it. 15 shell commands name it, all for its
     name only: existence and ignore checks, the `.gitignore` rules, commit and PR text, a source
@@ -23,17 +25,23 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
     output; the 8 matches are `.env.example`'s empty placeholders. The app's scripts never ran
     against the main checkout's `.env`; two `migrate.php --dump` runs were in a worktree and a
     scratch copy, where no `.env` exists.
-  - Owner files: `CLAUDE.md` (6 commits) and `docs/GUARDRAILS.md` (13) were edited only in docs PRs
-    the owner asked for or approved. Builders edited guard files only in their own worktrees, in
-    owner-assigned tasks (P0-04, P0-06), or with ADR 0018's approval (P1-04). The P1-01 gate-script
+  - Owner files: `CLAUDE.md` (6 commits) and `docs/GUARDRAILS.md` (12) were edited only in the
+    initial import (`9ec7f2f`, before PRs existed) and in docs PRs the owner asked for or approved.
+    Builders edited guard files in their own worktrees, in owner-assigned tasks (P0-04, P0-06) or
+    with ADR 0018's approval (P1-04), with one exception: in P0-04 round 1, `make init` run from
+    the worktree installed the branch's hooks into the main checkout's shared `.git/hooks`
+    (finding A, LOG 2026-10-20), which the owner accepted on record. The P1-01 gate-script
     change was ratified by the owner afterwards (PR #7). No agent edited `.claude/settings*`,
     `AGENTS.md` or a data root. The lead read the owner's user settings file once, read-only,
     during the guard review.
-  - Refusals: 35 across 14 subagents, all the worktree-complexity check; none involved `.env` or
-    an owner file. The P0-04 and P1-01 shell switches after a refusal (before the GR-030
-    exceptions) reached no guarded target.
-  - Limits: text matching misses indirect access (the output search is the backstop), and the
-    audit covers Claude sessions on this machine only.
+  - Refusals: 35 across 14 subagents, all the worktree-complexity check; none involved `.env`.
+    Two builders switched shells after a refusal, before the GR-030 exceptions: P1-01's switch
+    reached no guarded target; P0-04's refusals concerned `.git` paths, and its PowerShell re-run
+    is the hook install above (finding A).
+  - Limits: text matching misses indirect access (the output search is the backstop); the audit
+    covers Claude sessions on this machine only; and the lead audited its own session too.
+  - Correction: in chat the lead first told the owner that neither shell switch reached a guarded
+    target; the PR #19 review found the P0-04 case above, and this entry is the corrected record.
 - **P0-07 added and deferred** (owner decision): a Claude Code guard layer, `.env` deny rules first,
   then a PreToolUse guard. Feasibility was checked against the Claude Code docs (version 2.1.303).
   The owner is reviewing the settings template; nothing is applied.

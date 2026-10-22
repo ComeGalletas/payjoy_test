@@ -1,8 +1,8 @@
 # TODO
 
 Checklist of the work IDs in `docs/PLAN.md` §10, which holds each task's spec and acceptance test.
-The first unchecked item is the current work, except items marked DEFERRED. From Phase 1 on, the
-lead ticks an item when its PR is merged and adds its end status.
+The first unchecked item not marked DEFERRED is the current work; the owner removes the mark to
+schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and adds its end status.
 
 **Current phase:** Phase 1 — Deterministic MVP
 **Next item:** P1-06
