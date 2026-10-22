@@ -83,7 +83,7 @@ Reasons and consequences are in the ADR named in each row.
 | Money | Full precision in the API. Splitting and display work in the currency's **ISO 4217 minor units**; round down, the **last installment absorbs the remainder**; reject splits under one minor unit. Display strings are English-formatted. See §3a. | 0011 |
 | Storage of money | No floats in the database: USD amounts as integer cents, rates as integers scaled by 10^10. | 0017 |
 | Request log | Every request is recorded with its raw client IP (kept 30 days); abusive IPs are blocked automatically. | 0016 |
-| Demo data | `api/db/seed_demo.php` writes fixed report demo data, never rates, into a throwaway database. | 0024 |
+| Demo data | `api/db/seed_demo.php` writes fixed report demo data, with no stored rate table, into a throwaway database. | 0024 |
 | Reports | `/reports` and `bin/report.php` share one query: a cohort funnel, labels checked against label allow-lists (anything else is `other`), integer money, a formula-safe long-format CSV. | 0023 |
 | Widget | Built-in `static` front-end at `/bot/widget`: lazy open, strict CSP with Trusted Types, embeddable by iframe or `<script>`. | 0022 |
 | Test isolation | Tests can't reach the network: `-d allow_url_fopen=0` in the gate scripts plus a stream-wrapper guard; from P1-04 also `disable_functions=curl_exec,curl_multi_exec` and Guzzle handler stubs. | 0018 |
@@ -772,11 +772,12 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   *Acceptance:* following `INSTALL_LOCAL.md` on a clean checkout reaches a working `/convert` with
   demo data, without Docker.
   *DONE 2026-10-22 (PR #26, three rounds; `docs/REPORTS.md` through lead PR #25 after a harness
-  hook refused the builder's write). Decisions in ADR 0024 (owner: the builder may create the
-  three docs, P1-09 only; no demo rates; the six seed decisions and the derived session ids
-  accepted; the docs-only `variables_order=EGPCS` fix for the demo server). The walkthrough runs
-  INSTALL's commands and compares its output blocks with real output; the real-key `/convert`
-  runs in-process with the mocked upstream.*
+  hook refused the builder's write). Decisions in ADR 0024 (owner: no stored rate table; the six
+  seed decisions and the derived session ids accepted; the docs-only `variables_order=EGPCS` fix
+  for the demo server). Owner process decisions, in the LOG: the builder may create the three
+  docs, P1-09 only; `REPORTS.md` through PR #25; the scope of rounds 2 and 3. The walkthrough
+  runs INSTALL's commands and compares its output blocks with real output; INSTALL's `/convert`
+  step runs in-process with the mocked upstream.*
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
   `docs/LOG.md`. **Deliver MVP.** The lead repeats the by-hand widget check (a typed `<script>`
   shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
@@ -784,8 +785,15 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   report's `latest` endpoint row: `/quota` calls are counted apart, and whether upstream counts
   them is unverified (ADR 0012 second amendment). Check it: read the admin `/health` view twice,
   more than `health.quota_cache_minutes` apart with no rate refresh in between, compare the quota
-  left, and log the result. Run it on a database without demo rows (ADR 0024): the demo's
+  left, and log the result. Run it on a new database without demo rows (ADR 0024): start the
+  server with INSTALL section 7's real-use command and run the CLI bot, both in shells without
+  `DB_DSN` set; before the run, check that no event has `"demo": true` in its meta and that
+  `php api/bin/report.php` shows no sessions; log which database file was used. The demo's
   completed sessions on both channels would pass the acceptance below on their own.
+  Also (from P1-09): on the release checkout, follow `INSTALL_LOCAL.md` by hand where the review
+  couldn't: register and run the prune task (Windows, and cron where available), make a backup and
+  restore it, run the `sqlite3` lines where `sqlite3` is installed, and check the `git clone` URL;
+  log what didn't work as written.
   *Acceptance:* owner sees one completed session per channel in `/reports`, and quota used is ≤ 3
   calls.
   Also (from P1-04): compare `FallbackCurrencies` with the live `/latest/USD` codes (the list was
@@ -903,8 +911,10 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     `assertWindowMinutes()`); move the block settings into a small holder (or Config).
   - (P1-11) The docblock of `Http\IpBlock` still says `--prune` deletes rows with
     `expires_at <= now`; it now waits one window after the end.
-  - (P1-11) `bin/upstream.php` and `migrate.php --prune` still create a missing SQLite file before
-    refusing it (`Database::fromEnvironment`); `bin/ip.php` already refuses without creating.
+  - (P1-11, P1-09) `bin/upstream.php`, `bin/bot.php`, `public/index.php` and
+    `migrate.php --prune` still create a missing SQLite file before refusing it
+    (`Database::fromEnvironment`); `bin/ip.php`, `bin/report.php` and `seed_demo.php` already
+    refuse without creating.
   - (P1-11) The unique-clash retry in `IpBlocks` can't happen on SQLite and is untested; cover it
     in L-03's `PostgresTest`, where concurrent inserts can clash.
   - (P1-05) `InstallmentCalculator::exactTotal()` is public and accepts exponents 0..12, though
@@ -912,8 +922,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     compute the exact total (harmless, well under a microsecond per call).
   - (P1-05) The `ConvertService` and `Conversion` docblocks call the raw numbers "the nearest
     double"; they are products of the nearest doubles of the amount and rate. Fix the wording.
-  - (P1-06) `RoundingRuleTest`: add `floor(`, `ceil(` and `fdiv(`, and scan `api/bin/` and
-    `api/public/` too (`bin/report.php` arrives in P1-08). It can't see dynamic calls
+  - (P1-06, P1-09) `RoundingRuleTest`: add `floor(`, `ceil(` and `fdiv(`, and scan `api/bin/`,
+    `api/db/` and `api/public/` too (`bin/report.php` arrives in P1-08). It can't see dynamic calls
     (`array_map('round', …)`, `$f = 'round'; $f()`, `sprintf($fmt, …)`); the behaviour tests are
     the backstop.
   - (P1-06) A message in flight when expiry closes its session gets `done: true` with an empty
@@ -942,17 +952,20 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     from `RoundingRuleTest`'s allowed files, since it doesn't round (the owner may then narrow
     INV-01). Fix two stale code comments: `QuotaStatus` says `blocked` happens only during an
     auth block, and `App.php` says every request fails closed on an old schema.
-  - (P1-09) `bot.php`, `upstream.php` and `public/index.php` create a missing SQLite file, while
-    `report.php`, `ip.php` and `seed_demo.php` refuse; `Database::fromEnvironment` creates
-    `api/var` only for the exact default DSN; the CLI hints say `php bin/migrate.php` (relative
-    to `api/`), and `--prune` on a corrupt schema prints `migrate:`; the `RequestLog` docblock
-    should list `rate_limits` among the IP tables. Widen `RoundingRuleTest` to `api/db` and
-    `api/bin`. `seed_demo` should read `block.duration_minutes` and guard a long
-    `bot.session_ttl_minutes`. Tighten `P1_09_SeedAndDocsTest`: anchor the REPORTS example
-    parts and check its quoted notes against `ReportQuery`, count the demo `DB_DSN` lines per
-    section, normalise whitespace in the open-ids check, drop the duplicated DSN check, and make
-    the backup test tell `VACUUM INTO` from a plain copy. Owner's call: make `Env::get` prefer
-    the process environment, so the demo server needs no `variables_order` option (ADR 0024).
+  - (P1-09) `Database::fromEnvironment` creates `api/var` only for the exact default DSN (on
+    Windows an explicit `sqlite:api/var/app.db` doesn't match it, so `.env.example`'s comment
+    should say to leave `DB_DSN` empty); the CLI hints say `php bin/migrate.php` (relative to
+    `api/`), and `--prune` on a corrupt schema prints `migrate:`; the `RequestLog` docblock
+    should list `rate_limits` among the IP tables. `seed_demo` [judge 17]: read
+    `block.duration_minutes`, guard a long `bot.session_ttl_minutes`, and handle a daylight-saving
+    zone's change day. Tighten `P1_09_SeedAndDocsTest`: anchor the REPORTS example parts and
+    check its quoted notes against `ReportQuery` [19], count the demo `DB_DSN` lines per section
+    [E2b], normalise whitespace in the open-ids check [R2-6], drop the duplicated DSN check
+    [R3-3], and make the backup test tell `VACUUM INTO` from a plain copy [tester r2 D]. Indent
+    INSTALL's code blocks inside numbered lists, from section 5 on [round-1 nit]. Accepted as is:
+    the seed's raw session INSERT and its template choice [16]. Owner's call: make `Env::get`
+    prefer the process environment, so the demo server needs no `variables_order` option
+    (ADR 0024).
 
 ## 11. Working agreements for the agent
 

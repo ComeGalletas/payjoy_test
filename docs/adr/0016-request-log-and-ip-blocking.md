@@ -4,7 +4,7 @@
   amended again 2026-10-21: what counts toward a block, events, see "Second amendment"; amended
   a third time 2026-10-22: widget routes, see "Third amendment"; amended a fourth time
   2026-10-22: `/reports` and `/health`, see "Fourth amendment"; note 2026-10-22: `rate_limits`
-  holds IPs too)
+  holds IPs too, ADR 0024)
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -51,7 +51,7 @@ abusive IPs must be cut off instead.
   in WAL mode absorbs a few thousand writes a second, which is enough for the MVP; from P3-01 nginx
   takes the flood and the import writes in batches.
 - Raw IPs are personal data (Colombian Ley 1581): they live only in `requests`, `rate_limits`
-  (corrected 2026-10-22 from P1-09; pruned after a day) and `ip_blocks`,
+  (corrected 2026-10-22, ADR 0024; pruned after a day) and `ip_blocks`,
   `requests` is pruned after 30 days, and expired blocks are pruned too (one window after they
   end, see "Second amendment" item 4). Manual blocks without an
   expiry keep that IP until an operator removes it; `bin/ip.php list` shows them so they can be

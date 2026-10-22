@@ -45,11 +45,17 @@ openssl.cafile = "C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt"
 That path is the bundle Git for Windows installs (it is updated only when Git is). Any current
 bundle works, for example curl's `cacert.pem`. On Linux and macOS the system bundle is normally
 found without these settings; if not, set them to it (`/etc/ssl/certs/ca-certificates.crt` on
-Debian and Ubuntu). Check that HTTPS works (this checks `openssl.cafile`; the upstream client
-uses curl, which reads `curl.cainfo`, so make sure that line points at the same file):
+Debian and Ubuntu). Check that HTTPS works (this checks `openssl.cafile`):
 
 ```
 php -r "echo file_get_contents('https://example.com') ? 'ok' : 'fail';"
+```
+
+The upstream client uses curl, which reads `curl.cainfo`; this shows both settings, which should
+name the same file:
+
+```
+php -r "echo 'curl.cainfo = ', ini_get('curl.cainfo'), PHP_EOL, 'openssl.cafile = ', ini_get('openssl.cafile'), PHP_EOL;"
 ```
 
 ### `php.ini` settings for the server
@@ -168,7 +174,7 @@ plain file copy can miss them or catch them half-written. Make the backup with S
 instead: `VACUUM INTO` writes one consistent, self-contained file, and is safe while the server
 runs. This line works as typed in PowerShell and in a Linux or macOS shell, from the repository
 root; it writes `api/var/app.db.bak-<date and time>` (in `date.timezone`, or UTC when that is
-not set) and never overwrites an older backup:
+not set) and never overwrites an older backup (if that name already exists, it fails instead):
 
 <!-- command: backup -->
 ```
@@ -218,30 +224,36 @@ migrate: failed: FxInstallments\Db\SchemaCorrupt: app_state.schema_version is no
 
 1. Stop the server and back the file up as it is (the backup line above works on it).
 2. **Restore the backup** taken before the last migrate, if you have one, and run migrate again.
-3. Otherwise, check which schema the file really has, with the `sqlite3` tool (it is not one of
-   the prerequisites; where it is missing, run the same SQL through PHP, shown after the block),
-   and set the row to that version. Version 3 has the seven tables `app_state`, `events`,
-   `ip_blocks`, `rate_cache`, `rate_limits`, `requests` and `sessions`, and `events` has an
-   `amount_usd_cents` column (`api/db/schema.sql` is the full version 3 schema):
+3. Otherwise, check which schema the file really has and set the row to that version. Version 3
+   has the seven tables `app_state`, `events`, `ip_blocks`, `rate_cache`, `rate_limits`,
+   `requests` and `sessions`, and `events` has an `amount_usd_cents` column (`api/db/schema.sql`
+   is the full version 3 schema). Run these on the existing file only (opening a missing one
+   creates it empty), and if `DB_DSN` points at another file, use that path instead. With the
+   `sqlite3` tool, which is not one of the prerequisites:
 
-```
-sqlite3 api/var/app.db ".tables"
-sqlite3 api/var/app.db "PRAGMA table_info(events);"
-sqlite3 api/var/app.db "SELECT key, value FROM app_state;"
-sqlite3 api/var/app.db "UPDATE app_state SET value = '3' WHERE key = 'schema_version';"
-```
+   ```
+   sqlite3 api/var/app.db ".tables"
+   sqlite3 api/var/app.db "PRAGMA table_info(events);"
+   sqlite3 api/var/app.db "SELECT key, value FROM app_state;"
+   sqlite3 api/var/app.db "UPDATE app_state SET value = '3' WHERE key = 'schema_version';"
+   ```
 
-   Without `sqlite3`, the update as one PHP line:
+   Without `sqlite3`, the same four through PHP (each line works as typed in PowerShell and in a
+   Linux or macOS shell):
 
-```
-php -r "(new PDO('sqlite:api/var/app.db'))->exec('UPDATE app_state SET value = \'3\' WHERE key = \'schema_version\'');"
-```
+   ```
+   php -r "echo implode(PHP_EOL, (new PDO('sqlite:api/var/app.db'))->query('SELECT name FROM sqlite_master WHERE type = \'table\' ORDER BY name')->fetchAll(PDO::FETCH_COLUMN)), PHP_EOL;"
+   php -r "echo implode(PHP_EOL, (new PDO('sqlite:api/var/app.db'))->query('SELECT name FROM pragma_table_info(\'events\')')->fetchAll(PDO::FETCH_COLUMN)), PHP_EOL;"
+   php -r "print_r((new PDO('sqlite:api/var/app.db'))->query('SELECT key, value FROM app_state')->fetchAll(PDO::FETCH_KEY_PAIR));"
+   php -r "echo (new PDO('sqlite:api/var/app.db'))->exec('UPDATE app_state SET value = \'3\' WHERE key = \'schema_version\''), ' row(s) updated', PHP_EOL;"
+   ```
 
-   If the row is missing, insert it instead:
+   If the row is missing (`0 row(s) updated`), insert it instead, with `sqlite3` or with PHP:
 
-```
-sqlite3 api/var/app.db "INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', '3', CAST(strftime('%s', 'now') AS INTEGER));"
-```
+   ```
+   sqlite3 api/var/app.db "INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', '3', CAST(strftime('%s', 'now') AS INTEGER));"
+   php -r "echo (new PDO('sqlite:api/var/app.db'))->exec('INSERT INTO app_state (key, value, updated_at) VALUES (\'schema_version\', \'3\', CAST(strftime(\'%s\', \'now\') AS INTEGER))'), ' row(s) written', PHP_EOL;"
+   ```
 
    Never set a version higher than the schema shows: migrate would skip the missing parts. A
    version that is too low is safe with the current migrations (1 to 3), because the later
@@ -283,10 +295,9 @@ Register-ScheduledTask -TaskName "fx-installments prune" -Action $action -Trigge
 
 A task registered like this runs **only while you are logged on**. To run it whether you are
 logged on or not, register it with a principal instead of the first `Register-ScheduledTask`
-line (or add `-Force` to replace a task you already registered; this may need an elevated
-PowerShell);
-the `S4U` logon stores no password and gives the task no network shares, which the prune doesn't
-need:
+line (add `-Force` to replace a task you already registered). Registering with a principal may
+need an elevated PowerShell; the `S4U` logon stores no password and gives the task no network
+shares, which the prune doesn't need:
 
 ```
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U
@@ -336,7 +347,8 @@ Linux and macOS:
 export DB_DSN=sqlite:api/var/demo.db
 ```
 
-Then, in that same shell, migrate the demo file and seed it:
+Then, in that same shell, migrate the demo file and seed it (section 5's migrate created the
+`api/var` folder):
 
 ```
 php api/bin/migrate.php
@@ -586,7 +598,8 @@ loudly instead of being guessed:
   `fx-installments INTERNAL before routing: InvalidArgumentException at …`.
 - Every other key is read only by the requests that use it: a wrong type makes those answer 500
   (for example `amount.max` breaks `/convert`, the bot and the reports, and
-  `bot.session_ttl_minutes` breaks the bot and the reports' sweep).
+  `bot.session_ttl_minutes` breaks the bot and the reports, whose sweep reads it; both also stop
+  `seed_demo.php`).
 - `requests.retention_days` of the wrong type, or below 1, and a `block.window_minutes` out of
   range, make `php api/bin/migrate.php --prune` exit 1
   (`migrate: failed: InvalidArgumentException: …`). A wrong type of `requests.retention_days`

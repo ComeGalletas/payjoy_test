@@ -15,12 +15,14 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   written. The builder applied the stated remedy once (the full file in its report) and stopped
   (GR-030). The lead did not write into its worktree; by owner decision the lead added the file
   in lead PR #25, merged by the owner as `f8e5f3f`, and the builder merged main and opened
-  PR #26 (`d860a31`). Unit+Acceptance went from 1918 to 1925 tests; guards 80. Tester: PASS WITH
-  NITS, 12 of 18 mutations caught. Judge: REQUEST CHANGES, no must-fix; should-fix: the
+  PR #26 (`d860a31`). Builder: DONE_WITH_CONCERNS in every round (the concerns were its
+  follow-ups for the lead). Unit+Acceptance went from 1918 to 1925 tests; guards 80. Tester:
+  PASS WITH NITS, 12 of 18 mutations caught. Judge: REQUEST CHANGES, no must-fix; should-fix: the
   `schtasks` line fails in PowerShell, the backup advice (WAL, backups keep raw IPs), the
   `php -S` bind advice was backwards, the guide seeded the real database (P1-10 would pass on
-  demo rows), the demo-marker wording, editing `defaults.php` against `git pull`, and tests that
-  didn't read INSTALL's output blocks.
+  demo rows), the demo-marker wording, editing `defaults.php` against `git pull`, and four test
+  gaps (INSTALL's output blocks, a failed-write rollback, the write subcommands on a corrupt
+  schema, `rate_as_of` and the template).
 - Owner decisions: round 2 with those seven items only (the nits to this close-out); all six seed
   decisions accepted; the derived demo session ids kept.
 - **Round 2** (`e0b2e04`): `Register-ScheduledTask` and `schtasks --%`, a `VACUUM INTO` backup,
@@ -31,26 +33,37 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   `APP_ENV=test`, gate flags, no key): with `variables_order=GPCS` the variable is in `getenv()`
   only, with `EGPCS` also in `$_ENV`.
 - Owner decision: the docs-only fix (the demo server with `-d variables_order=EGPCS`), plus
-  explicit report dates and a test that every demo command uses the throwaway database.
+  explicit report dates and a test that every demo command uses the throwaway database (the
+  tester's A and E, part of the option the owner chose).
 - **Round 3** (`b3ae82d`): those three; 1935 tests, guards 80. Tester: PASS WITH NITS, 7 of 8
   mutations caught. Judge: APPROVE WITH NITS.
 - Co-leads: both approved. The lead posted the approval comment (18:07:19 UTC), then merged at the
   reviewed head as `84e61a2` (18:07:23 UTC).
 - **Process.** Besides the harness hook above, one guard block: the round-2 tester's
   `env -C <dir> php -r …` was refused ("cannot be shown not to be git"); its stated remedy had
-  already been done, so the tester did not retry (GR-030 followed). No other block; the builder
-  kept the one-plain-command rule in every round.
+  already been done, so the tester did not retry (GR-030 followed). No other block (the builder's
+  and testers' reports); the builder kept the one-plain-command rule in every round. The owner's
+  "no rates" decision came before the build but gets its ADR (0024) only now; CLAUDE.md
+  Deviation 3 asks for such an ADR before the builder starts.
 - Upstream: 0 real calls.
-- **For the owner (owner-owned files unchanged).** GUARDRAILS INV-01 says a check fails on
-  `round(` "outside those two files"; `RoundingRuleTest` scans `api/src` only, so `api/db` and
-  `api/bin` aren't covered (the P1-09 test has its own token scan for `seed_demo`; widening is in
-  L-04). CLAUDE.md's "Builders don't edit `docs/`" had a one-task exception here; if it should
-  become a rule for doc tasks, that is a CLAUDE.md change (GR-005, an issue).
+- **For the owner (owner-owned files unchanged).** P1-09 adds `api/db` to the INV-01 gap noted
+  2026-10-21: `RoundingRuleTest` scans `api/src` only, so `api/bin`, `api/db` and `api/public`
+  aren't covered (the P1-09 test has its own token scan for `seed_demo`; widening is in L-04).
+  Proposed wording for the enforcing layer: "`RoundingRuleTest` (a token scan of `api/src/`, in
+  `make check`) fails on `round(`, `number_format(`, `floatval(`, `(float)` and printf float
+  formats outside those two files; the widget scan in `P1_07_WidgetTest` covers `toFixed`,
+  `Intl.NumberFormat` and `Math.round`". CLAUDE.md's "Builders don't edit `docs/`" had a
+  one-task exception here; if it should become a rule for doc tasks, that is a CLAUDE.md change
+  (GR-005, an issue).
 - Lead docs: ADR 0024 (demo seed data); ADR 0016 note (`rate_limits` holds IPs); PLAN §2, §3, the
   P1-09 done note and follow-ups in P1-10 and L-04; CONTEXT "demo data"; `REPORTS.md` example
-  dates; INSTALL nits from the reviews (the HTTPS check, `DB_DSN`, the built-in server wording,
-  backup names and SQLite version, the repair without `sqlite3`, `-Force`, cron, the real-use
-  server, "current or ahead", config failures, the test-suite sentence).
+  dates; INSTALL nits from the PR #26 reviews (judge round 1: 8 `DB_DSN`, 10 "current or ahead",
+  11 the repair without `sqlite3`, 12 cron, 13 the test-suite sentence, 14 the curl CA check;
+  round 2: R2-2/R2-7 backup names and the SQLite version, R2-3 the backup time zone, R2-4
+  `-Force`, R2-5 config failures; round 3: R3-1 and R3-2 the server wording; tester round 2: C,
+  F); the rest are in L-04 with their ids.
+- Review of this docs PR (#27): tester PASS WITH NITS, judge REQUEST CHANGES (the repair had a
+  PHP form only for the update, not for the schema checks); all findings applied in round 2.
 
 ## 2026-10-22 — P1-08 Reports and health (PR #23, head 2e9b293)
 

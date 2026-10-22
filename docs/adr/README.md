@@ -33,7 +33,7 @@ later ADR.
 | [0018](0018-test-network-isolation.md) | Keeping tests off the network | Accepted (amended 2026-10-22) |
 | [0019](0019-schema-apply-policy.md) | Migrate explicitly; the app fails closed on an old schema | Accepted (amended 2026-10-22) |
 | [0020](0020-migration-versioning.md) | Append-only migration list; `schema.sql` is generated | Accepted |
-| [0021](0021-flow-engine-bot-contract.md) | Flow engine and bot message contract | Accepted (note and amendment 2026-10-22) |
+| [0021](0021-flow-engine-bot-contract.md) | Flow engine and bot message contract | Accepted (notes and amendment 2026-10-22) |
 | [0022](0022-widget-serving-and-embed.md) | Built-in widget: serving, embedding and non-JSON responses | Accepted (amended 2026-10-22) |
 | [0023](0023-reports-funnel-and-csv.md) | Reports: period, cohort funnel, allow-listed labels and CSV | Accepted |
 | [0024](0024-demo-seed-data.md) | Demo seed data | Accepted |
