@@ -1,7 +1,7 @@
 # 0012 — Upstream: one `/latest/USD` call per refresh, local math, stale fallback
 
-- **Status:** Accepted (amended 2026-10-21: breaker kinds and backoff, refresh floor, stale age; see
-  "Amendment")
+- **Status:** Accepted (amended 2026-10-21: breaker kinds and backoff, refresh floor, stale age,
+  503 during an `unsupported-code` backoff; see "Amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -94,6 +94,14 @@ in round 2.
    exists. A currency missing from a usable table (`not_in_table`,
    raised by `RateCache`) stays a 400 `UPSTREAM_UNSUPPORTED_CODE`. P1-05 applies this; its
    acceptance test covers it.
+   **Implemented in P1-05 (PR #16):** `RateCache` marks the `UpstreamError` when such a backoff is
+   in force, on the blocked path and on the refresh that opens it. `ErrorCodes::httpStatus($code,
+   $duringUnsupportedCodeBackoff)` and `messageForUser()` give 503 and "Exchange rates are
+   temporarily unavailable. Please try again later." for that case only; the flag is refused for
+   every other code. A failed breaker write, or a race that leaves another kind of trip in force,
+   stays 400 (the lead's reading). No new error code. The mechanism is the builder's design, which
+   the tester and judge accepted; restricting the flag to `UPSTREAM_UNSUPPORTED_CODE` came from the
+   round-1 judge and the co-leads' round-2 brief; the message is the lead's suggested text.
 
 **Consequences.**
 - Quota use stays bounded by time. A persistent fault that is neither quota nor auth costs at most
@@ -104,13 +112,18 @@ in round 2.
   one, gives users errors for the backoff window: 1 minute at first, longer if failures repeat.
 - **Known limits:**
   - If writing the breaker row itself fails (`meta.breaker_write_failed`), no backoff is recorded,
-    and lookups can call upstream again until the database accepts writes.
+    and lookups can call upstream again until the database accepts writes. Until P1-05, a failed
+    INSERT went unnoticed and `trip()` returned a backoff that was never stored; P1-05 fixed it
+    (found by the round-1 tester; fixed in round 2 by owner decision): `UpstreamBreaker::write()`
+    now rethrows when its fallback UPDATE changes no row. On Postgres
+    a failed INSERT aborts the transaction, so that fallback needs rework (L-03).
   - `succeeded()` reads and then deletes outside a transaction. A trip that another process writes
     in between can be erased (L-03, with the Postgres-safe breaker write).
   - Processes don't lock each other. Two lookups that miss at the same moment can both refresh:
     one extra call, same data.
   - The quota block ends on the 1st (UTC). Upstream actually refreshes the quota on
     `refresh_day_of_month` from `/quota` (P1-08).
-  - Until P1-05 applies item 9, a lookup during an `unsupported-code` backoff without a usable
-    stale table fails with a 400 `UPSTREAM_UNSUPPORTED_CODE` ("That currency is not supported
-    right now") for every currency.
+  - On a cold start (no stored table), a code upstream quotes but `FallbackCurrencies` lacks
+    answers 400 `VALIDATION_CURRENCY` (`not_allowed`) until a refresh stores the table, and that
+    400 counts toward `block.error_responses` (ADR 0016). `/convert` exposes this from P1-05;
+    P1-10's comparison of `FallbackCurrencies` with the live codes closes it.

@@ -5,7 +5,7 @@ The first unchecked item is the current work. From Phase 1 on, the lead ticks an
 is merged and adds its end status.
 
 **Current phase:** Phase 1 — Deterministic MVP
-**Next item:** P1-05
+**Next item:** P1-06
 
 ## Phase 0 — Pre-work
 
@@ -23,7 +23,7 @@ is merged and adds its end status.
 - [x] P1-03 Validation and `AmountParser` — DONE (2026-10-21; PR #10)
 - [x] P1-04 Rates: client, cache, breaker — DONE (2026-10-21; PR #12, three rounds)
 - [x] P1-11 Request log and IP blocking (runs before P1-05) — DONE (2026-10-21; PR #14, three rounds)
-- [ ] P1-05 Convert and `GET /convert`
+- [x] P1-05 Convert and `GET /convert` — DONE (2026-10-21; PR #16, two rounds)
 - [ ] P1-06 Flow engine and `POST /bot/message`
 - [ ] P1-07 Widget
 - [ ] P1-08 Reports and health

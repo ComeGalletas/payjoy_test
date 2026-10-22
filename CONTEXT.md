@@ -17,7 +17,7 @@ name, add it here in the same commit that introduces it.
 | **converted** | `amount_usd × rate`, computed locally. Full precision. | `display.converted`; upstream `conversion_result`, which is not used. |
 | **installments** / `n` | Number of monthly payments, integer 1..`installments.max`, default `installments.default`, at least one minor unit each. | |
 | **installment amount** / `installment_amount` | `converted / n`. Full precision. | `display.installment`. |
-| **display block** / `display` | English-formatted strings `/convert` returns for presentation: `amount_usd`, `rate`, `converted`, `installment`, `last_installment`, `regular_count`, `even`, `rate_as_of`. Produced only by `InstallmentCalculator::display()`. | Any rounding a front-end does itself — forbidden. |
+| **display block** / `display` | English-formatted strings `/convert` returns for presentation: `amount_usd`, `rate`, `converted`, `installment`, `last_installment`, `regular_count`, `even`, `rate_as_of`. Produced only by `InstallmentCalculator::display()`, exactly from the amount's cents and the stored `rate_scaled`; money strings are grouped, `amount_usd` included (ADR 0011 amendment). | Any rounding a front-end does itself — forbidden. The raw float numbers, whose last digits can differ. |
 | **regular payment** | Each of the first `display.regular_count` installments, all equal to `display.installment`. | |
 | **final payment** / **last installment** | `display.last_installment`: the last payment, which absorbs the remainder. | |
 | **remainder** | Minor units left after flooring `total_m / n`; always added to the final payment. | |
@@ -36,6 +36,7 @@ name, add it here in the same commit that introduces it.
 | **stored table** | The rows the last successful refresh wrote to `rate_cache` (`RateTable`): rates, `rate_as_of`, `next_update_unix`, `fetched_at`. |
 | **dropped currency** | A rate that a refresh skipped because it failed a check; listed in the `miss` event's `meta.dropped`, by code only when the key was a valid code. The rest of the table is still stored. |
 | **breaker** | `UpstreamBreaker`: stops upstream calls after any failed refresh except `no_key`. Its trip is `quota` (until the 1st of next month, UTC), `auth` (until `php api/bin/upstream.php reset`) or `backoff` (ADR 0012 amendment). |
+| **unsupported-code backoff** | A backoff opened by `unsupported-code` on `/latest/USD`. While it is open, a lookup without a usable stale table answers 503 instead of 400 (ADR 0012 amendment item 9). |
 | **backoff** | The breaker's trip after any failed refresh other than quota or auth: 1, 5, 10, 20, 40, then 60 minutes per consecutive failure, cleared by a successful refresh. |
 | **quota** | The free-tier monthly request budget (1,500), read from upstream `/quota` for the admin health view. |
 | **allow-list** | Currency codes in the latest stored rate table. Input not on it never reaches upstream. |
@@ -71,7 +72,7 @@ name, add it here in the same commit that introduces it.
 | **retry** | A re-ask after invalid input. After `bot.max_retries` the session is abandoned. |
 | **clarification** | A retry asking the user to retype an amount `AmountParser` couldn't read unambiguously, or a currency answer that was ambiguous. |
 | **ok / unclear / invalid** | The three outcomes of reading bot input (`Validation\Outcome`): read; couldn't be read unambiguously (ask again); rejected — out of range, not allowed, unknown or malformed. |
-| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`. Currency: `format`, `not_allowed`, `unknown`, `ambiguous`. Installments: `format`, `out_of_range`. |
+| **validation reason** | `meta.reason` on a validation failure. Amount: `format`, `not_positive`, `over_max`, `unclear`, `too_large` (the total reaches 2^53 minor units). Currency: `format`, `not_allowed`, `unknown`, `ambiguous`. Installments: `format`, `out_of_range`, `below_minor_unit` (fewer minor units than installments). |
 | **folding** | `TextNormalizer`: case-insensitive comparison of user text that also removes precomposed Latin accents (`México` = `mexico`), independent of locale. |
 | **completed session** | Reached the `result` step and showed a result. |
 | **abandoned session** | Ended by max retries (`BOT_MAX_RETRIES`), expiry (`BOT_SESSION_EXPIRED`) or an upstream error; the event records the step. |
@@ -84,6 +85,7 @@ name, add it here in the same commit that introduces it.
 | Term | Meaning |
 |---|---|
 | **event** | One append-only row in `events`, written only through `Metrics`. |
+| **api.request event** | The event `/convert` writes for every request its handler answers (rate-limited, blocked and INTERNAL 500 requests have none): the validated fields, status, error code, latency; meta `endpoint`, `http_status`, `stale` or `reason`, `minor_units_default`. Never upstream text, keys or IPs. |
 | **error event** | The `error` event the Kernel writes for every error response except blocked requests (ADR 0016): meta `http_status`, `method`, path without query (percent-encoded, as in the request log), exception class. |
 | **request log** | The `requests` table: one row per incoming request with the raw client IP, kept `requests.retention_days` (ADR 0016). |
 | **migration** / **migration list** | One numbered schema change in the append-only list in `Db/Migrations`; run with `bin/migrate.php` (ADR 0020). |
