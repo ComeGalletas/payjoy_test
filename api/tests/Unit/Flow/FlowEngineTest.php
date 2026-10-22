@@ -200,27 +200,105 @@ final class FlowEngineTest extends TestCase
         self::assertSame('100.00 USD is about 900,719,925.474 KWD today (rate 9,007,199.254741, as of 2026-10-21 00:00 UTC). That\'s 2 monthly payments of 450,359,962.737 KWD.', $done->reply);
     }
 
-    public function testTwoMessagesOnOneSessionAreSerialized(): void
+    /**
+     * Owner decision 2026-10-21: a message that loses the save to another message for the same
+     * session, which moved it to another step, is never read against a question the user
+     * didn't see; it gets the current question, with no event and no retry.
+     */
+    public function testALosingMessageAfterTheStepMovedGetsTheCurrentQuestion(): void
     {
-        $hooked = HookedPdo::open($this->path);
-        $engine = $this->engine(pdo: $hooked);
-        $other = $this->engine(pdo: TestEnvironment::connect($this->path));
+        [$engine, $other, $hooked] = $this->racingEngines();
         $id = $engine->handle(null, '', 'static')->sessionId;
 
-        // While this message is being handled, another one for the same session is saved first.
         $hooked->before('UPDATE sessions SET step', static function () use ($other, $id): void {
             self::assertSame('currency', $other->handle($id, '300', 'static')->step);
         });
         $reply = $engine->handle($id, '200', 'static');
 
-        // This one was handled again on the new state: "200" answered the currency question.
-        self::assertSame([self::RETRY_CURRENCY, 'currency'], [$reply->reply, $reply->step]);
-        self::assertSame('{"amount_usd_cents":30000}', $this->column($id, 'collected'));
-        self::assertSame(
-            [['amount', 'ok', 30_000], ['currency', 'error', 30_000]],
-            array_map(static fn (array $event): array => [$event['step'], $event['status'], (int) $event['amount_usd_cents']], $this->events('bot.step')),
-            'the lost attempt wrote no event',
-        );
+        self::assertSame(['Which currency or country should I convert to?', 'currency', ['BRL', 'COP', 'MXN', 'EUR'], false], [$reply->reply, $reply->step, $reply->buttons, $reply->done()]);
+        self::assertSame(['{"amount_usd_cents":30000}', '0'], [$this->column($id, 'collected'), $this->column($id, 'retries')]);
+        self::assertSame([['amount', 'ok', 30_000]], $this->stepEvents(), 'the losing message wrote no event');
+    }
+
+    public function testADuplicateCurrencyDoesNotCostAnInstallmentsRetry(): void
+    {
+        [$engine, $other, $hooked] = $this->racingEngines();
+        $id = $this->answered($engine, ['200']);
+
+        $hooked->before('UPDATE sessions SET step', static function () use ($other, $id): void {
+            self::assertSame('installments', $other->handle($id, 'BRL', 'static')->step);
+        });
+        $duplicate = $engine->handle($id, 'BRL', 'static');
+
+        self::assertSame(['How many monthly installments? (default 1)', 'installments', ['Just one payment']], [$duplicate->reply, $duplicate->step, $duplicate->buttons]);
+        self::assertSame('0', $this->column($id, 'retries'));
+        self::assertSame([['amount', 'ok', 20_000], ['currency', 'ok', 20_000]], $this->stepEvents());
+    }
+
+    public function testADuplicateFinalAnswerAfterCompletionIsDoneWithoutANewSession(): void
+    {
+        [$engine, $other, $hooked] = $this->racingEngines(new MockUpstream([MockUpstream::latest()]));
+        $id = $this->answered($engine, ['200', 'BRL']);
+
+        $hooked->before('UPDATE sessions SET step', static function () use ($other, $id): void {
+            self::assertTrue($other->handle($id, '3', 'static')->done());
+        });
+        $duplicate = $engine->handle($id, '3', 'static');
+
+        self::assertSame(['session_id' => $id, 'reply' => '', 'step' => 'result', 'done' => true], $duplicate->toArray());
+        self::assertSame(1, (int) $this->pdo->query('SELECT COUNT(*) FROM sessions')->fetchColumn());
+        self::assertCount(1, $this->events('bot.session_start'));
+        self::assertCount(1, $this->events('bot.session_completed'));
+    }
+
+    public function testALosingMessageOnTheSameStepIsReadAgain(): void
+    {
+        [$engine, $other, $hooked] = $this->racingEngines();
+        $id = $engine->handle(null, '', 'static')->sessionId;
+
+        // The winner was a retry at the same step, so this message still answers that question.
+        $hooked->before('UPDATE sessions SET step', static function () use ($other, $id): void {
+            self::assertSame('amount', $other->handle($id, 'abc', 'static')->step);
+        });
+        $reply = $engine->handle($id, '200', 'static');
+
+        self::assertSame('currency', $reply->step);
+        self::assertSame(['{"amount_usd_cents":20000}', '0'], [$this->column($id, 'collected'), $this->column($id, 'retries')]);
+        self::assertSame([['amount', 'error', 0], ['amount', 'ok', 20_000]], $this->stepEvents());
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function maxRetries(): iterable
+    {
+        yield 'bot.max_retries = 2' => [2];
+        yield 'bot.max_retries = 5' => [5];
+    }
+
+    #[DataProvider('maxRetries')]
+    public function testTheSessionIsAbandonedAtBotMaxRetries(int $max): void
+    {
+        $engine = $this->engine(config: ['bot.max_retries' => $max]);
+        $id = $engine->handle(null, '', 'static')->sessionId;
+
+        for ($failure = 1; $failure < $max; $failure++) {
+            self::assertFalse($engine->handle($id, 'x', 'static')->done(), "failure {$failure} of {$max}");
+        }
+        $last = $engine->handle($id, 'x', 'static');
+
+        self::assertSame(['amount', true], [$last->step, $last->done()]);
+        self::assertSame([['BOT_MAX_RETRIES', '{"retries":' . $max . '}']], array_map(static fn (array $event): array => [$event['error_code'], json_encode($event['meta'])], $this->events('bot.session_abandoned')));
+    }
+
+    public function testAnUnexpectedConversionErrorReasksNoStep(): void
+    {
+        $reask = new \ReflectionMethod(FlowEngine::class, 'stepToReask');
+
+        self::assertSame('currency', $reask->invoke($this->engine(), 'VALIDATION_CURRENCY')->id);
+        self::assertSame('currency', $reask->invoke($this->engine(), 'UPSTREAM_UNSUPPORTED_CODE')->id);
+        $this->expectException(\LogicException::class);
+        $reask->invoke($this->engine(), 'UPSTREAM_TIMEOUT');
     }
 
     public function testASessionAtAStepTheFlowNoLongerAsksStartsAgain(): void
@@ -251,15 +329,36 @@ final class FlowEngineTest extends TestCase
         $this->engine()->handle(null, '', 'telegram');
     }
 
-    public function testTheSweepCanRunAlone(): void
+    public function testEveryMessageSweeps(): void
     {
         $engine = $this->engine();
         $engine->handle(null, '', 'static');
         $this->clock->advance(1800);
 
-        self::assertSame(1, $engine->sweepExpired());
-        self::assertSame(0, $engine->sweepExpired());
+        $engine->handle(null, '', 'static');
+
         self::assertSame(['BOT_SESSION_EXPIRED'], array_column($this->events('bot.session_abandoned'), 'error_code'));
+    }
+
+    /**
+     * Two engines on one database file: the first on a HookedPdo whose hook runs the second's
+     * message just before the first saves.
+     *
+     * @return array{FlowEngine, FlowEngine, HookedPdo}
+     */
+    private function racingEngines(?MockUpstream $upstream = null): array
+    {
+        $hooked = HookedPdo::open($this->path);
+
+        return [$this->engine($upstream, $hooked), $this->engine(pdo: TestEnvironment::connect($this->path)), $hooked];
+    }
+
+    /**
+     * @return list<array{string, string, int}> step, status, cents of each bot.step event
+     */
+    private function stepEvents(): array
+    {
+        return array_map(static fn (array $event): array => [$event['step'], $event['status'], (int) $event['amount_usd_cents']], $this->events('bot.step'));
     }
 
     /**
@@ -275,12 +374,15 @@ final class FlowEngineTest extends TestCase
         return $id;
     }
 
-    private function engine(?MockUpstream $upstream = null, ?PDO $pdo = null): FlowEngine
+    /**
+     * @param array<string, mixed> $config
+     */
+    private function engine(?MockUpstream $upstream = null, ?PDO $pdo = null, array $config = []): FlowEngine
     {
         $log = new ArrayObject();
 
         return (new App(
-            new ConfigRepository(),
+            new ConfigRepository($config),
             Connection::wrap($pdo ?? $this->pdo),
             Closure::fromCallable($this->clock),
             static function (string $line) use ($log): void {

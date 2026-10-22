@@ -111,14 +111,14 @@ final class SessionStoreTest extends TestCase
         $done = $this->store->create('static', 'amount', self::NOW - 4000);
         $this->pdo->exec("UPDATE sessions SET status = 'completed' WHERE session_id = '{$done->id}'");
 
-        $closed = $this->store->sweepExpired(self::NOW);
+        $closed = $this->store->sweepExpired(self::NOW, self::ignore(...));
 
         self::assertSame([$due->id], array_map(static fn (Session $session): string => $session->id, $closed));
         self::assertSame(['open', 'currency'], [$closed[0]->status, $closed[0]->step], 'returned as it was');
         self::assertSame(['abandoned', 'currency', self::NOW], [$this->row($due->id)['status'], $this->row($due->id)['step'], $this->row($due->id)['updated_at']]);
         self::assertSame('open', $this->row($live->id)['status']);
         self::assertSame('completed', $this->row($done->id)['status']);
-        self::assertSame([], $this->store->sweepExpired(self::NOW), 'closed once');
+        self::assertSame([], $this->store->sweepExpired(self::NOW, self::ignore(...)), 'closed once');
         self::assertFalse($this->store->closeExpired($live->id, self::NOW));
     }
 
@@ -127,7 +127,7 @@ final class SessionStoreTest extends TestCase
         $session = $this->store->create('static', 'installments', self::NOW - 3600);
         $this->pdo->prepare('UPDATE sessions SET collected = ? WHERE session_id = ?')->execute(['not json', $session->id]);
 
-        $closed = $this->store->sweepExpired(self::NOW);
+        $closed = $this->store->sweepExpired(self::NOW, self::ignore(...));
 
         self::assertCount(1, $closed);
         self::assertSame(['installments', []], [$closed[0]->step, $closed[0]->collected->eventFields()]);
@@ -140,8 +140,8 @@ final class SessionStoreTest extends TestCase
             $insert->execute([SessionStore::newId()]);
         }
 
-        self::assertCount(SessionStore::SWEEP_LIMIT, $this->store->sweepExpired(self::NOW));
-        self::assertCount(1, $this->store->sweepExpired(self::NOW));
+        self::assertCount(SessionStore::SWEEP_LIMIT, $this->store->sweepExpired(self::NOW, self::ignore(...)));
+        self::assertCount(1, $this->store->sweepExpired(self::NOW, self::ignore(...)));
     }
 
     public function testTheTtlMustBePositive(): void
@@ -149,6 +149,10 @@ final class SessionStoreTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         new SessionStore(Connection::wrap($this->pdo), 0);
+    }
+
+    private static function ignore(Session $session): void
+    {
     }
 
     /**

@@ -16,7 +16,10 @@ use Symfony\Component\Yaml\Yaml;
  *
  * **YAML.** Parsed with `Yaml::PARSE_EXCEPTION_ON_INVALID_TYPE` and no other flag: PHP objects,
  * constants and custom tags (`!php/object`, `!php/const`, `!foo`) are refused, and so are
- * duplicate keys. The file may be at most MAX_BYTES of UTF-8.
+ * duplicate keys and YAML's built-in `!!` tags (`!!binary` could carry bytes that aren't
+ * UTF-8). The file may be at most MAX_BYTES of UTF-8, the parsed tree at most MAX_NODES nodes
+ * (an alias bomb fails here, after only the top-level keys were checked), and every string in
+ * it must be valid UTF-8, so a bad file fails at load, never mid-session.
  *
  * **Config.** Two forms, both limited to CONFIG_KEYS (all integers):
  * - `${config.<key>}` as a whole YAML value is replaced by the config value, typed, before the
@@ -30,8 +33,9 @@ use Symfony\Component\Yaml\Yaml;
  * Every key of every step is checked (unknown keys are errors), and every template may use only
  * the placeholders its slot allows (Template::compile):
  * - wording shown before a conversion: none (config values are already substituted);
- * - `reasons.too_large` (amount) and `reasons.below_minor_unit` (installments), the answers to a
- *   failed conversion: CONVERT_PLACEHOLDERS (`message_for_user`, `currency`, `installments`);
+ * - `reasons.too_large` (amount), `reasons.not_in_table` (currency) and
+ *   `reasons.below_minor_unit` (installments), the answers to a failed conversion:
+ *   CONVERT_PLACEHOLDERS (`message_for_user`, `currency`, `installments`);
  * - `say_single`, `say_even`, `say_uneven`: RESULT_PLACEHOLDERS (`display.*`, `currency`,
  *   `installments`), so money in the result comes only from the display block;
  * - `upstream_error`: `message_for_user`.
@@ -54,12 +58,16 @@ final class FlowDefinition
      */
     public const REASONS = [
         'amount' => ['format', 'not_positive', 'over_max', 'too_large'],
-        'currency' => ['format', 'unknown', 'not_allowed'],
+        'currency' => ['format', 'unknown', 'not_allowed', 'not_in_table'],
         'installments' => ['format', 'out_of_range', 'below_minor_unit'],
     ];
 
-    /** Reasons that come from the conversion, not from reading the answer. */
-    public const CONVERT_REASONS = ['too_large', 'below_minor_unit'];
+    /**
+     * Reasons that come from the conversion, not from reading the answer. `not_in_table` is
+     * UPSTREAM_UNSUPPORTED_CODE for a currency missing from a usable rate table (owner decision
+     * 2026-10-21: re-ask the currency).
+     */
+    public const CONVERT_REASONS = ['too_large', 'below_minor_unit', 'not_in_table'];
 
     public const CONVERT_PLACEHOLDERS = ['message_for_user', 'currency', 'installments'];
 
@@ -69,6 +77,9 @@ final class FlowDefinition
     ];
 
     public const UPSTREAM_PLACEHOLDERS = ['message_for_user'];
+
+    /** The default flow has about 60; aliases count once per use. */
+    public const MAX_NODES = 2_000;
 
     private const MAX_TEXT_CHARS = 600;
     private const MAX_BUTTONS = 8;
@@ -119,6 +130,11 @@ final class FlowDefinition
         if (!mb_check_encoding($yaml, 'UTF-8')) {
             throw new FlowDefinitionError("{$where}: flow file is not valid UTF-8");
         }
+        if (preg_match('/(?:^|[\s\[{,])!!/m', $yaml) === 1) {
+            // YAML's built-in tags (`!!binary`, `!!str`, `!!float`…): only plain scalars are
+            // wanted, and `!!binary` can smuggle bytes that aren't UTF-8.
+            throw new FlowDefinitionError("{$where}: YAML tags (!!…) are not allowed");
+        }
         try {
             $data = Yaml::parse($yaml, Yaml::PARSE_EXCEPTION_ON_INVALID_TYPE);
         } catch (ParseException $e) {
@@ -126,7 +142,28 @@ final class FlowDefinition
             throw new FlowDefinitionError("{$where}: invalid YAML: " . $e->getMessage());
         }
 
+        // Cheap checks first: the top-level keys, then the size of the parsed tree (aliases are
+        // expanded by the parser, so an alias bomb is a huge tree), before anything walks it.
+        self::keys(self::map($data, "{$where}: the top level"), ['name', 'max_retries', 'max_retries_reply', 'steps'], [], "{$where}: the top level");
+        $nodes = 0;
+        self::countNodes($data, $nodes, $where);
+
         return self::parse(self::substituteConfig($data, $config, $where), $where);
+    }
+
+    /**
+     * Counts the parsed tree's nodes, stopping as soon as the count passes MAX_NODES.
+     */
+    private static function countNodes(mixed $value, int &$count, string $where): void
+    {
+        if (++$count > self::MAX_NODES) {
+            throw new FlowDefinitionError("{$where}: the flow has more than " . self::MAX_NODES . ' YAML nodes (aliases included)');
+        }
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                self::countNodes($item, $count, $where);
+            }
+        }
     }
 
     /**
@@ -457,6 +494,9 @@ final class FlowDefinition
         }
 
         $at = $path === '' ? $where : "{$where}: {$path}";
+        if (!mb_check_encoding($value, 'UTF-8')) {
+            throw new FlowDefinitionError("{$at}: not valid UTF-8");
+        }
         if (preg_match('/^\$\{config\.([a-z0-9_.]+)\}$/D', $value, $match) === 1) {
             return self::configValue($match[1], $config, $at);
         }

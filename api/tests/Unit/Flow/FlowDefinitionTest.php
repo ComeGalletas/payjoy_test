@@ -221,6 +221,62 @@ final class FlowDefinitionTest extends TestCase
         yield 'too large' => [str_repeat('#', FlowDefinition::MAX_BYTES + 1), 'larger than'];
         yield 'a scalar' => ['fx', 'the top level: must be a map'];
         yield 'empty' => ['', 'the top level: must be a map'];
+        // Round 2: built-in tags, `!!binary` above all (bytes that aren't UTF-8).
+        yield 'binary value' => ["name: fx\nmax_retries: 3\nmax_retries_reply: !!binary gIGC\nsteps: []\n", 'YAML tags (!!…) are not allowed'];
+        yield 'binary in a list' => ["steps: [!!binary gIGC]\n", 'YAML tags (!!…) are not allowed'];
+        yield 'str tag' => ["name: !!str fx\n", 'YAML tags (!!…) are not allowed'];
+        // An alias bomb under unknown top-level keys fails on the keys, before any walk.
+        yield 'alias bomb, unknown keys' => [self::aliasBomb(false), 'the top level: missing name'];
+        // Under the right keys it fails on the node count.
+        yield 'alias bomb under steps' => [self::aliasBomb(true), 'more than 2000 YAML nodes'];
+    }
+
+    /**
+     * Seven levels of ten aliases each: 10^7 nodes once expanded, a few hundred bytes of YAML.
+     */
+    private static function aliasBomb(bool $validKeys): string
+    {
+        $levels = ['  - &l0 [' . implode(', ', array_fill(0, 10, 'x')) . ']'];
+        for ($level = 1; $level < 7; $level++) {
+            $levels[] = "  - &l{$level} [" . implode(', ', array_fill(0, 10, '*l' . ($level - 1))) . ']';
+        }
+        $head = $validKeys ? "name: fx\nmax_retries: 3\nmax_retries_reply: Bye\nsteps:\n" : "bomb:\n";
+
+        return $head . implode("\n", $levels) . "\n";
+    }
+
+    public function testAnAliasBombFailsFast(): void
+    {
+        $started = hrtime(true);
+        try {
+            FlowDefinition::fromYaml(self::aliasBomb(true), new ConfigRepository(), 'bomb.yaml');
+            self::fail('an alias bomb loaded');
+        } catch (FlowDefinitionError $e) {
+            self::assertStringContainsString('more than 2000 YAML nodes', $e->getMessage());
+        }
+        self::assertLessThan(2_000, intdiv(hrtime(true) - $started, 1_000_000), 'milliseconds');
+    }
+
+    public function testATextThatIsNotUtf8IsRefusedAtLoad(): void
+    {
+        // A dumped non-UTF-8 string comes out as !!binary, refused above; the tree walk checks
+        // every string as well, whatever produced it.
+        $substitute = new \ReflectionMethod(FlowDefinition::class, 'substituteConfig');
+
+        $this->expectException(FlowDefinitionError::class);
+        $this->expectExceptionMessage('flow: steps.0.say: not valid UTF-8');
+
+        $substitute->invoke(null, ['steps' => [['say' => "caf\xE9"]]], new ConfigRepository(), 'flow');
+    }
+
+    public function testADumpedNonUtf8TextIsRefused(): void
+    {
+        $this->expectException(FlowDefinitionError::class);
+        $this->expectExceptionMessage('YAML tags (!!…) are not allowed');
+
+        self::load(static function (array &$f): void {
+            $f['steps'][0]['say'] = "Hi caf\xE9";
+        });
     }
 
     #[DataProvider('badYaml')]

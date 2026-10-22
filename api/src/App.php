@@ -13,6 +13,7 @@ use FxInstallments\Db\Migrator;
 use FxInstallments\Flow\FlowDefinition;
 use FxInstallments\Flow\FlowEngine;
 use FxInstallments\Flow\SessionStore;
+use FxInstallments\Flow\SessionSweeper;
 use FxInstallments\Http\AdminAuth;
 use FxInstallments\Http\BotMessageEndpoint;
 use FxInstallments\Http\ConvertEndpoint;
@@ -58,8 +59,8 @@ final class App
      * @param (Closure(string): void)|null $errorLog where Metrics and Kernel note failures;
      *        defaults to error_log()
      * @param ExchangeRateClient|null $rateClient the upstream client; defaults to
-     *        ExchangeRateClient::fromEnvironment(), built on first use of rates(). Tests pass
-     *        one with a mocked handler.
+     *        ExchangeRateClient::fromEnvironment(), built on the first refresh (never on a
+     *        cache hit). Tests pass one with a mocked handler.
      * @param string|null $flowPath the flow file; defaults to DEFAULT_FLOW (api/flows/default.yaml)
      */
     public function __construct(
@@ -123,9 +124,12 @@ final class App
      */
     public function flowEngine(): FlowEngine
     {
+        $sessions = $this->sessionStore();
+
         return new FlowEngine(
             $this->flow(),
-            $this->sessionStore(),
+            $sessions,
+            new SessionSweeper($sessions, $this->metrics, $this->clock),
             $this->metrics,
             new AmountParser(new AmountValidator($this->config)),
             new CurrencyResolver(new CurrencyValidator($this->currencyAllowList())),
@@ -146,6 +150,14 @@ final class App
     public function sessionStore(): SessionStore
     {
         return new SessionStore($this->db, $this->config->int('bot.session_ttl_minutes'));
+    }
+
+    /**
+     * The expiry sweep without the flow file, for reports (P1-08) and the engine.
+     */
+    public function sessionSweeper(): SessionSweeper
+    {
+        return new SessionSweeper($this->sessionStore(), $this->metrics, $this->clock);
     }
 
     public function convertEndpoint(): ConvertEndpoint
@@ -237,13 +249,15 @@ final class App
     }
 
     /**
-     * The rate cache (P1-04). The upstream client is built on first use.
+     * The rate cache (P1-04). The upstream client is built on the first refresh.
      */
     public function rates(): RateCache
     {
+        // Built on the first refresh, never on a cache hit (P1-06): bin/bot.php and its test run
+        // without an HTTP transport when the stored table is fresh.
         return $this->rates ??= new RateCache(
             new RateStore($this->db),
-            $this->rateClient ??= ExchangeRateClient::fromEnvironment(),
+            fn (): ExchangeRateClient => $this->rateClient ??= ExchangeRateClient::fromEnvironment(),
             $this->upstreamBreaker(),
             $this->metrics,
             $this->config->int('rates.max_stale_hours'),

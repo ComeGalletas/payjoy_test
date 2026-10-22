@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace FxInstallments\Flow;
 
+use Closure;
 use FxInstallments\Db\Connection;
 use InvalidArgumentException;
 use PDO;
+use PDOException;
+use Throwable;
 
 /**
  * The `sessions` table (docs/PLAN.md §5, §9): server-issued ids, a sliding TTL and the expiry
@@ -17,8 +20,9 @@ use PDO;
  * - **TTL.** Every saved message moves an open session's `expires_at` to `now + ttl`
  *   (`bot.session_ttl_minutes`). An open session is live while `now < expires_at`.
  * - **Sweep.** sweepExpired() closes open sessions with `expires_at <= now` as abandoned,
- *   keeping their step, and returns those this call closed, so the caller records each
- *   `bot.session_abandoned` exactly once even when two processes sweep at the same moment.
+ *   keeping their step, in one transaction, and hands each one this call closed to the
+ *   caller, so `bot.session_abandoned` is recorded exactly once even when two processes sweep
+ *   at the same moment (SessionSweeper).
  * - **Concurrency.** save() is a compare-and-set: it updates the row only if it still holds
  *   the state the caller read. Every transition changes the step, the retry count or the
  *   status, so two messages that read the same state can't both be saved; the loser reads again.
@@ -110,23 +114,37 @@ final class SessionStore
     }
 
     /**
-     * Closes up to SWEEP_LIMIT open sessions whose `expires_at <= now` as abandoned and returns
-     * the ones this call closed, as they were (open, at their last step).
+     * Closes up to SWEEP_LIMIT open sessions whose `expires_at <= now` as abandoned, calling
+     * $onClosed for each one this call closed (as it was: open, at its last step), all in one
+     * transaction: the select, every close and whatever $onClosed writes (the
+     * `bot.session_abandoned` events) commit together, or none do.
      *
-     * @return list<Session>
+     * When another connection holds the write lock (SQLITE_BUSY or SQLITE_LOCKED, after the
+     * busy timeout), the sweep is rolled back and returns []: sweeping is housekeeping, and the
+     * next message or report sweeps again. Any other failure is rolled back and rethrown.
+     *
+     * @param Closure(Session): void $onClosed
+     * @return list<Session> the sessions this call closed
      */
-    public function sweepExpired(int $now): array
+    public function sweepExpired(int $now, Closure $onClosed): array
     {
-        $statement = $this->db->pdo()->prepare(
-            'SELECT ' . self::COLUMNS . " FROM sessions WHERE status = 'open' AND expires_at <= ? ORDER BY expires_at LIMIT " . self::SWEEP_LIMIT,
-        );
-        $statement->execute([$now]);
-        $closed = [];
-        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $session = self::fromRow($row);
-            if ($this->closeExpired((string) $row['session_id'], $now)) {
+        $pdo = $this->db->pdo();
+        $own = !$pdo->inTransaction();
+        if ($own) {
+            $pdo->beginTransaction();
+        }
+        try {
+            $statement = $pdo->prepare(
+                'SELECT ' . self::COLUMNS . " FROM sessions WHERE status = 'open' AND expires_at <= ? ORDER BY expires_at LIMIT " . self::SWEEP_LIMIT,
+            );
+            $statement->execute([$now]);
+            $closed = [];
+            foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                if (!$this->closeExpired((string) $row['session_id'], $now)) {
+                    continue;
+                }
                 // A damaged row is still closed; it is reported with nothing collected.
-                $closed[] = $session ?? new Session(
+                $session = self::fromRow($row) ?? new Session(
                     (string) $row['session_id'],
                     (string) $row['channel'],
                     (string) $row['step'],
@@ -137,10 +155,28 @@ final class SessionStore
                     (int) $row['updated_at'],
                     (int) $row['expires_at'],
                 );
+                $onClosed($session);
+                $closed[] = $session;
             }
-        }
+            if ($own) {
+                $pdo->commit();
+            }
 
-        return $closed;
+            return $closed;
+        } catch (PDOException $e) {
+            if ($own && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            if ($own && self::isBusy($e)) {
+                return [];
+            }
+            throw $e;
+        } catch (Throwable $e) {
+            if ($own && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -154,6 +190,16 @@ final class SessionStore
         $statement->execute([$now, $id, $now]);
 
         return $statement->rowCount() === 1;
+    }
+
+    /**
+     * SQLITE_BUSY (5) or SQLITE_LOCKED (6), extended codes included (BUSY_SNAPSHOT is 517).
+     */
+    private static function isBusy(PDOException $e): bool
+    {
+        $code = $e->errorInfo[1] ?? null;
+
+        return is_int($code) && in_array($code & 0xFF, [5, 6], true);
     }
 
     /**

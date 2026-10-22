@@ -29,13 +29,19 @@ use PHPUnit\Framework\TestCase;
  * - three unclear amounts → `bot.session_abandoned` with BOT_MAX_RETRIES at step `amount`;
  * - an expired session is recorded as BOT_SESSION_EXPIRED at its last step;
  * and the §9 engine rules: VALIDATION_INSTALLMENTS from the conversion re-asks installments with
- * the API's message_for_user and counts as a retry; an upstream error ends the session with the
- * API's message_for_user (503 text during an `unsupported-code` backoff); the stale note; the
- * three result templates; "Just one payment" and empty input; unknown and expired session ids.
+ * the API's message_for_user and counts as a retry; a currency missing from the rate table
+ * (`not_in_table`) re-asks the currency as a retry (owner decision 2026-10-21); any other
+ * upstream error ends the session with the API's message_for_user (503 text during an
+ * `unsupported-code` backoff); the stale note; the three result templates; "Just one payment"
+ * and empty input; unknown and expired session ids. Typed text never reaches `events`,
+ * `sessions`, `requests` or the error log.
  */
 final class P1_06_FlowTest extends TestCase
 {
     private const CLIENT = '203.0.113.7';
+
+    /** Distinctive typed text (an unclear amount) that must never be stored or logged. */
+    private const CANARY = '5$5-CANARY-q7x3';
 
     private const GREETING = "Hi! Tell me what you paid in USD and I'll show your monthly installment in your local currency.\nWhat was the total price in USD?";
 
@@ -121,7 +127,7 @@ final class P1_06_FlowTest extends TestCase
 
         $first = $this->say($app, $id, '1.500');
         $second = $this->say($app, $id, '200 3');
-        $third = $this->say($app, $id, '5$5');
+        $third = $this->say($app, $id, self::CANARY);
 
         foreach ([$first, $second] as $reply) {
             self::assertSame(['session_id' => $id, 'reply' => self::CLARIFY_AMOUNT, 'step' => 'amount', 'done' => false], $reply);
@@ -138,7 +144,7 @@ final class P1_06_FlowTest extends TestCase
             ['bot.session_abandoned', 'amount', 'error', 'BOT_MAX_RETRIES', null, null, null, null, ['retries' => 3]],
         ], $events);
         self::assertSame(['step' => 'amount', 'status' => 'abandoned', 'channel' => 'static', 'retries' => 3, 'collected' => '{}'], $this->sessionRow($id));
-        $this->assertNoTypedText(['1.500', '200 3', '5$5']);
+        $this->assertNoTypedText(['1.500', '200 3', self::CANARY]);
 
         // A message after the end starts a new session.
         $again = $this->say($app, $id, '200');
@@ -203,8 +209,45 @@ final class P1_06_FlowTest extends TestCase
             $retry(1),
             $retry(2),
             $retry(3),
-            ['bot.session_abandoned', 'installments', 'error', 'BOT_MAX_RETRIES', 50, 'USD', null, null, ['retries' => 3]],
+            // The abandonment records the installments that failed (round 2).
+            ['bot.session_abandoned', 'installments', 'error', 'BOT_MAX_RETRIES', 50, 'USD', null, 60, ['retries' => 3]],
         ], $failures);
+    }
+
+    /**
+     * Owner decision 2026-10-21: a currency missing from a usable rate table
+     * (UPSTREAM_UNSUPPORTED_CODE `not_in_table`) re-asks the currency, as a currency retry,
+     * with the flow's text around the API's message_for_user; the other answers are kept.
+     */
+    public function testACurrencyMissingFromTheTableReasksTheCurrency(): void
+    {
+        $upstream = new MockUpstream([MockUpstream::latest(['USD' => 1, 'EUR' => 0.8594])]);
+        $app = $this->app($upstream);
+        $id = $this->talk($app, ['200', 'brazil']);
+
+        $again = $this->say($app, $id, '3');
+
+        self::assertSame([
+            'session_id' => $id,
+            'reply' => 'That currency is not supported right now. Please choose another currency or country.',
+            'buttons' => ['BRL', 'COP', 'MXN', 'EUR'],
+            'step' => 'currency',
+            'done' => false,
+        ], $again);
+        self::assertSame(['step' => 'currency', 'status' => 'open', 'channel' => 'static', 'retries' => 1, 'collected' => '{"amount_usd_cents":20000,"installments":3}'], $this->sessionRow($id));
+        $events = $this->botEvents();
+        self::assertSame(
+            ['bot.step', 'currency', 'error', 'UPSTREAM_UNSUPPORTED_CODE', 20_000, 'BRL', 'Brazil', 3, ['outcome' => 'invalid', 'reason' => 'not_in_table', 'retry' => 1, 'via' => 'convert']],
+            self::summary($events[count($events) - 1]),
+        );
+
+        // The next currency goes straight to the result: amount and installments are kept.
+        $done = $this->say($app, $id, 'EUR');
+        self::assertSame(
+            "200.00 USD is about 171.88 EUR today (rate 0.8594, as of 2026-10-21 00:00 UTC). That's 2 monthly payments of 57.29 EUR and a final payment of 57.30 EUR, so the total is exactly 171.88 EUR.",
+            $done['reply'],
+        );
+        self::assertSame(1, $upstream->calls());
     }
 
     public function testAfterABelowMinorUnitRetryFewerInstallmentsComplete(): void
@@ -443,17 +486,30 @@ final class P1_06_FlowTest extends TestCase
     }
 
     /**
-     * What the user typed never reaches `events` (only validated values and fixed words do).
+     * What the user typed never reaches `events`, `sessions`, `requests` or the error log
+     * (only validated values and fixed words do), and the client IP is only in `requests`.
      *
      * @param list<string> $typed
      */
     private function assertNoTypedText(array $typed): void
     {
-        $all = json_encode($this->pdo->query('SELECT * FROM events')->fetchAll(PDO::FETCH_ASSOC), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        foreach ($typed as $text) {
-            self::assertStringNotContainsString($text, $all);
+        $flags = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+        $stores = [
+            'events' => json_encode($this->pdo->query('SELECT * FROM events')->fetchAll(PDO::FETCH_ASSOC), $flags),
+            'sessions' => json_encode($this->pdo->query('SELECT * FROM sessions')->fetchAll(PDO::FETCH_ASSOC), $flags),
+            'requests' => json_encode($this->pdo->query('SELECT * FROM requests')->fetchAll(PDO::FETCH_ASSOC), $flags),
+            'error log' => implode("\n", $this->log->getArrayCopy()),
+        ];
+        self::assertNotSame('[]', $stores['events']);
+        self::assertNotSame('[]', $stores['sessions']);
+        foreach ($stores as $where => $stored) {
+            foreach ($typed as $text) {
+                self::assertStringNotContainsString($text, $stored, "{$where} holds typed text");
+            }
         }
-        self::assertStringNotContainsString(self::CLIENT, $all);
+        foreach (['events', 'sessions', 'error log'] as $where) {
+            self::assertStringNotContainsString(self::CLIENT, $stores[$where], "{$where} holds the client IP");
+        }
     }
 
     /**

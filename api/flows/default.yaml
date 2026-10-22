@@ -36,6 +36,7 @@ steps:
     clarify: "Several currencies use that name or symbol. Please type the currency code, like MXN or COP."
     reasons:
       not_allowed: "I can't convert to that currency right now. Try a code like BRL or a country like Brazil."
+      not_in_table: "{{message_for_user}} Please choose another currency or country."
   - id: installments
     ask: "How many monthly installments? (default {{config.installments.default}})"
     expecting: installments

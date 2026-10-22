@@ -18,6 +18,7 @@ use FxInstallments\Validation\Outcome;
 use FxInstallments\Validation\TextNormalizer;
 use FxInstallments\Validation\ValidationFailed;
 use InvalidArgumentException;
+use LogicException;
 use RuntimeException;
 
 /**
@@ -30,8 +31,8 @@ use RuntimeException;
  * installment count. Nothing here does arithmetic on amounts or rates.
  *
  * **One message.**
- * 1. Sweep: open sessions with `expires_at <= now` are closed as abandoned with
- *    BOT_SESSION_EXPIRED at their last step.
+ * 1. Sweep (SessionSweeper): open sessions with `expires_at <= now` are closed as abandoned
+ *    with BOT_SESSION_EXPIRED at their last step.
  * 2. No session id, or one that is malformed, unknown, closed, expired, or at a step the flow
  *    doesn't ask: a new session starts. Its first message is never read as an answer (an
  *    answer meant for an expired session, like `3`, must not become a 3 USD amount); the reply
@@ -43,11 +44,14 @@ use RuntimeException;
  *    - unclear: the step's `clarify` text; invalid: the reason's text or `retry`. Both are a
  *      retry. When the step's retry count reaches `max_retries`, the session is abandoned with
  *      BOT_MAX_RETRIES at that step and the flow's `max_retries_reply`.
- * 4. Result: a VALIDATION_* from the conversion (`below_minor_unit`, `too_large`) re-asks the
- *    step of that field with the reason's text, which may show the API's `message_for_user`;
- *    it counts as a retry. An UpstreamError ends the session (`bot.session_abandoned` with the
- *    upstream code, at `result`) with `upstream_error`, which shows the API's
- *    `message_for_user`.
+ * 4. Result: a failed conversion that the user can fix re-asks the step of that field with the
+ *    reason's text, which may show the API's `message_for_user`, and counts as a retry there:
+ *    VALIDATION_AMOUNT (`too_large`, or `over_max` after a config change) → amount,
+ *    VALIDATION_INSTALLMENTS (`below_minor_unit`) → installments, and UPSTREAM_UNSUPPORTED_CODE
+ *    `not_in_table` (the currency is missing from a usable table; owner decision 2026-10-21)
+ *    → currency. Any other UpstreamError (timeout, quota, auth, malformed, the 503 during an
+ *    `unsupported-code` backoff) ends the session (`bot.session_abandoned` with the upstream
+ *    code, at `result`) with `upstream_error`, which shows the API's `message_for_user`.
  *    Otherwise `say_single` (1 installment), `say_even` or `say_uneven`, plus `stale_note` for a
  *    stale rate, and the session is completed.
  *
@@ -56,14 +60,20 @@ use RuntimeException;
  * a loop of conversions that fail is bounded by `max_retries` too.
  *
  * **Events** (source `bot`, with `channel` and `session_id`): `bot.session_start`, `bot.step`
- * (ok, or error with the VALIDATION_* code), `bot.session_completed`, `bot.session_abandoned`.
- * Columns hold only what the session collected (country only when a country was typed);
- * meta holds fixed words and numbers: `outcome`, `reason`, `retry`, `default`, `via`,
- * `template`, `stale`. Never the text the user typed.
+ * (ok, or error with the VALIDATION_* or upstream code), `bot.session_completed`,
+ * `bot.session_abandoned`. Columns hold only what the session collected (country only when a
+ * country was typed); meta holds fixed words and numbers: `outcome`, `reason`, `retry`,
+ * `default`, `via`, `template`, `stale`. Never the text the user typed.
  *
- * **Concurrency.** The new state is saved with SessionStore::save() (compare-and-set) and the
- * events are written after it succeeds. When another message for the same session won, this
- * one is handled again on the new state, up to MAX_ATTEMPTS times.
+ * **Concurrent messages on one session** (owner decision 2026-10-21). The new state is saved
+ * with SessionStore::save() (compare-and-set) and the events are written only after it
+ * succeeds. A message that loses the race re-reads the session:
+ * - still open at the step this message was read against: the text is read again on the new
+ *   state (a retry there may have changed the count);
+ * - open at another step (a double-submit already answered it): the reply is that step's
+ *   question and buttons, with no event and no retry spent;
+ * - closed by the winner (completed or abandoned): `done` with the closed session's id and an
+ *   empty reply, never a new session.
  */
 final class FlowEngine
 {
@@ -81,6 +91,7 @@ final class FlowEngine
     public function __construct(
         private readonly FlowDefinition $flow,
         private readonly SessionStore $sessions,
+        private readonly SessionSweeper $sweeper,
         private readonly Metrics $metrics,
         private readonly AmountParser $amounts,
         private readonly CurrencyResolver $currencies,
@@ -104,13 +115,15 @@ final class FlowEngine
             throw new InvalidArgumentException('Unknown channel');
         }
         $now = ($this->clock)();
-        $this->sweepExpired($now);
+        $this->sweeper->sweep($now);
+
+        $session = $sessionId === null ? null : $this->liveSession($sessionId, $now);
+        if ($session === null) {
+            return $this->start($channel, $now);
+        }
+        $readAt = $session->step;
 
         for ($attempt = 1; $attempt <= self::MAX_ATTEMPTS; $attempt++) {
-            $session = $sessionId === null ? null : $this->liveSession($sessionId, $now);
-            if ($session === null) {
-                return $this->start($channel, $now);
-            }
             $transition = $this->advance($session, $text, $now);
             if ($this->sessions->save($session, $transition->session)) {
                 foreach ($transition->events as [$type, $fields]) {
@@ -119,24 +132,26 @@ final class FlowEngine
 
                 return $transition->reply;
             }
+
+            // Another message for this session was saved first.
+            $fresh = $this->sessions->find($session->id);
+            if ($fresh === null) {
+                throw new RuntimeException('The session vanished under a concurrent message');
+            }
+            if (!$fresh->isOpen()) {
+                return new BotReply($fresh->id, '', [], $fresh->step, $fresh->status);
+            }
+            $step = $this->flow->step($fresh->step);
+            if ($step === null || !$step->isInput()) {
+                throw new RuntimeException('A concurrent message left the session at a step the flow does not ask');
+            }
+            if ($fresh->step !== $readAt) {
+                return self::waiting($fresh, $step, $step->askText()->render());
+            }
+            $session = $fresh;
         }
 
         throw new RuntimeException('The session changed under concurrent messages');
-    }
-
-    /**
-     * Closes expired open sessions as abandoned (BOT_SESSION_EXPIRED, at their last step) and
-     * returns how many this call closed. handle() runs it on every message; reports run it
-     * before they count (P1-08).
-     */
-    public function sweepExpired(?int $now = null): int
-    {
-        $closed = $this->sessions->sweepExpired($now ?? ($this->clock)());
-        foreach ($closed as $session) {
-            $this->recordExpired($session);
-        }
-
-        return count($closed);
     }
 
     /**
@@ -150,9 +165,7 @@ final class FlowEngine
             return null;
         }
         if ($session->isExpiredAt($now)) {
-            if ($this->sessions->closeExpired($session->id, $now)) {
-                $this->recordExpired($session);
-            }
+            $this->sweeper->closeOne($session, $now);
 
             return null;
         }
@@ -186,7 +199,7 @@ final class FlowEngine
     {
         $step = $this->flow->step($session->step);
         if ($step === null || !$step->isInput()) {
-            throw new RuntimeException('liveSession() returned a session at a step the flow does not ask');
+            throw new RuntimeException('The session is at a step the flow does not ask');
         }
 
         [$outcome, $collected, $error, $meta] = $this->read($step, $text, $session->collected);
@@ -298,8 +311,12 @@ final class FlowEngine
             $service = ($this->convertService)();
             $conversion = $service->convert($service->amount(UsdCents::toCanonical($cents)), $currency, $count);
         } catch (ValidationFailed $error) {
-            return $this->convertFailed($session, $answered, $collected, $error, $events, $now);
+            return $this->convertFailed($session, $answered, $collected, $error->errorCode, $error->reason, $error->messageForUser(), $events, $now);
         } catch (UpstreamError $error) {
+            if (self::isNotInTable($error)) {
+                return $this->convertFailed($session, $answered, $collected, $error->errorCode, $error->reason, $error->messageForUser(), $events, $now);
+            }
+
             return $this->abandon(
                 $session,
                 $call->id,
@@ -345,36 +362,59 @@ final class FlowEngine
     }
 
     /**
-     * A VALIDATION_* from the conversion: re-ask the step of that field (§9), as a retry.
+     * A currency missing from a usable rate table: the user can pick another (owner decision
+     * 2026-10-21). Not the 503 answered during an `unsupported-code` backoff.
+     */
+    private static function isNotInTable(UpstreamError $error): bool
+    {
+        return $error->errorCode === ErrorCodes::UPSTREAM_UNSUPPORTED_CODE
+            && $error->reason === 'not_in_table'
+            && !$error->duringUnsupportedCodeBackoff;
+    }
+
+    /**
+     * The input step a failed conversion re-asks, by error code.
+     *
+     * @throws LogicException for a code no step can fix (an engine bug)
+     */
+    private function stepToReask(string $errorCode): Step
+    {
+        return $this->flow->inputStepFor(match ($errorCode) {
+            ErrorCodes::VALIDATION_AMOUNT => 'amount',
+            ErrorCodes::VALIDATION_CURRENCY, ErrorCodes::UPSTREAM_UNSUPPORTED_CODE => 'currency',
+            ErrorCodes::VALIDATION_INSTALLMENTS => 'installments',
+            default => throw new LogicException("No step re-asks after {$errorCode}"),
+        });
+    }
+
+    /**
+     * A failed conversion the user can fix: re-ask the step of that field (§9), as a retry.
      *
      * @param list<array{string, array<string, mixed>}> $events
      */
-    private function convertFailed(Session $session, Step $answered, Collected $collected, ValidationFailed $error, array $events, int $now): Transition
+    private function convertFailed(Session $session, Step $answered, Collected $collected, string $errorCode, string $reason, string $messageForUser, array $events, int $now): Transition
     {
-        $target = $this->flow->inputStepFor(match ($error->errorCode) {
-            ErrorCodes::VALIDATION_AMOUNT => 'amount',
-            ErrorCodes::VALIDATION_INSTALLMENTS => 'installments',
-            default => 'currency',
-        });
+        $target = $this->stepToReask($errorCode);
         // Back to the step just answered: its count goes on, so failing conversions are
         // bounded by max_retries too. Back to an earlier step: its first retry.
         $retries = $target->id === $answered->id ? $session->retries + 1 : 1;
         $events[] = ['bot.step', [
             'step' => $target->id,
-            'error_code' => $error->errorCode,
-            'meta' => ['outcome' => Outcome::Invalid->value, 'reason' => $error->reason, 'retry' => $retries, 'via' => 'convert'],
+            'error_code' => $errorCode,
+            'meta' => ['outcome' => Outcome::Invalid->value, 'reason' => $reason, 'retry' => $retries, 'via' => 'convert'],
         ] + $collected->eventFields()];
-        $remaining = $collected->without((string) $target->expecting);
 
         if ($retries >= $this->flow->maxRetries) {
-            return $this->abandon($session, $target->id, $remaining, $retries, ErrorCodes::BOT_MAX_RETRIES, ['retries' => $retries], $this->flow->maxRetriesReply->render(), $events, $now);
+            // The abandoned session keeps the answer that failed, so the event shows it.
+            return $this->abandon($session, $target->id, $collected, $retries, ErrorCodes::BOT_MAX_RETRIES, ['retries' => $retries], $this->flow->maxRetriesReply->render(), $events, $now);
         }
 
-        $text = $target->invalidText($error->reason)->render([
-            'message_for_user' => $error->messageForUser(),
+        $text = $target->invalidText($reason)->render([
+            'message_for_user' => $messageForUser,
             'currency' => (string) $collected->currency,
             'installments' => (string) $collected->installments,
         ]);
+        $remaining = $collected->without((string) $target->expecting);
         $new = $session->next($target->id, Session::OPEN, $remaining, $retries, $now, $this->sessions->ttlSeconds);
 
         return new Transition($new, self::waiting($new, $target, $text), $events);
@@ -390,15 +430,6 @@ final class FlowEngine
         $events[] = ['bot.session_abandoned', ['step' => $stepId, 'error_code' => $errorCode, 'meta' => $meta] + $collected->eventFields()];
 
         return new Transition($new, new BotReply($new->id, $text, [], $stepId, Session::ABANDONED), $events);
-    }
-
-    private function recordExpired(Session $session): void
-    {
-        $this->record($session, 'bot.session_abandoned', [
-            'step' => $session->step,
-            'error_code' => ErrorCodes::BOT_SESSION_EXPIRED,
-            'meta' => ['expires_at' => $session->expiresAt],
-        ] + $session->collected->eventFields());
     }
 
     /**
