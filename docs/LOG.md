@@ -4,7 +4,7 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
-## 2026-10-23 — README quick start (P1-09 follow-up)
+## 2026-10-23 — README quick start (P1-09 follow-up, PR #36)
 
 - PR #35 (L-04 cleanup B) was merged by the owner as `f3d694a`. Its close-out docs PR is still
   owed. The owner then paused development to plan a Python version.
@@ -14,6 +14,15 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   - the technical choices and the folder structure;
   - how to measure success in production.
 - Filed under P1-09, the docs task that wrote the README.
+- **Review round 1.**
+  - Tester: FAIL, on two wrong lines: `abc` gets the same reply as `1.500`, and the report has no
+    breaker-trip count. The tester walked the quick start in its worktree with an empty key and a
+    temp database; the sample conversation ran up to the expected "temporarily unavailable"
+    answer.
+  - Judge: REQUEST CHANGES. The Windows `php.ini` and CA bundle setup was only a link; the curl
+    block broke the both-shells rule; and the success section claimed too much was in the report.
+  - All findings were applied in round 2. No root `README.md` was added: GitHub shows
+    `docs/README.md` on the landing page, and root files are outside the lead's scope.
 
 ## 2026-10-22 — L-04 cleanup A (PR #33, head cd9a648)
 

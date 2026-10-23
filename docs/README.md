@@ -17,15 +17,26 @@ backups, the daily prune job, demo data, proxies, monitoring and every setting.
 
 **You need:**
 - PHP 8.3, release 8.3.36 or later (not 8.4), with the extensions `pdo_sqlite`, `curl`,
-  `mbstring` and `openssl` (`php -m` lists them);
+  `mbstring`, `openssl` and `zip` (Composer needs `zip`); `php -m` lists them;
 - Composer 2 and git;
 - an ExchangeRate-API key (next section).
 
-On Windows, PHP also needs a CA bundle in `php.ini`, or every rate lookup fails
-([INSTALL_LOCAL.md](INSTALL_LOCAL.md) section 1, "The CA bundle").
+**On Windows, PHP needs two edits in its `php.ini`.** `php --ini` shows which file is loaded. If
+none is, copy `php.ini-development` next to `php.exe` as `php.ini`.
+- Uncomment `extension=curl`, `extension=mbstring`, `extension=openssl`, `extension=pdo_sqlite`
+  and `extension=zip`, then check `php -m`.
+- Point both CA settings at a CA bundle, or every rate lookup fails. Git for Windows ships one:
+
+  ```
+  curl.cainfo = "C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt"
+  openssl.cafile = "C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt"
+  ```
+
+Linux and macOS normally need neither. [INSTALL_LOCAL.md](INSTALL_LOCAL.md) section 1 has the
+details and the recommended server settings.
 
 Run every command from the repository root. They work as typed in PowerShell and in a Linux or
-macOS shell, except where a block names one shell.
+macOS shell, except where the text names one shell.
 
 1. Get the code and its dependencies:
 
@@ -54,6 +65,12 @@ macOS shell, except where a block names one shell.
    in a second terminal with `php api/bin/bot.php` (on a Windows console, run `chcp 65001` first
    if you type accented text).
 
+**If the bot's last answer is an error:**
+- "The exchange rate service is not responding" means PHP can't reach upstream over HTTPS. Fix
+  the CA bundle, restart the server, then run `php api/bin/upstream.php reset` (or wait a minute).
+- "Exchange rates are temporarily unavailable" means there is a problem with the key; see the next
+  section.
+
 ### Test the bot by hand
 
 The bot greets you, then asks for three things in order. Try this conversation:
@@ -65,16 +82,18 @@ The bot greets you, then asks for three things in order. Try this conversation:
 | `3` | 200 USD in BRL at today's rate, split into 3 monthly payments; when the total doesn't split evenly, the last payment absorbs the remainder |
 
 Things worth trying:
-- **Amounts:** `200.50`, `1,000`, `1.000,50` or `$200` are read; `abc` or `0` get a retry; an
-  ambiguous `1.500` gets a clarifying question.
+- **Amounts:** `200.50`, `1,000`, `1.000,50` or `$200` are read. `abc` and an ambiguous `1.500`
+  (a decimal, or thousands?) both get "I couldn't read that amount…", and `0` gets "The total
+  must be more than 0…". Each counts as one failed answer.
 - **Currencies:** a code (`COP`), a country (`Mexico`) or a name (`euro`). A name several
-  currencies share asks you to type the code.
+  currencies share (`peso`, `dollar`) asks you to type the code.
 - **Installments:** press **Just one payment**, or type a whole number up to the maximum (60).
-  Too many installments for a tiny total gets its own message.
+  Too many installments for a tiny total gets its own message (try `0.10`, `JPY`, `60`).
 - **Retries:** three failed answers at one step end the session. The widget then offers **Start
   a new conversation**; the terminal bot exits.
 
-The API directly, without the bot (PowerShell needs `curl.exe`, since `curl` is an alias there):
+The API directly, without the bot. In PowerShell type `curl.exe`, since `curl` is an alias there;
+in Linux and macOS, type `curl`:
 
 ```
 curl.exe "http://127.0.0.1:8080/health"
@@ -82,8 +101,11 @@ curl.exe "http://127.0.0.1:8080/convert?amount=200&cy=BRL&installments=3"
 ```
 
 `/health` answers `{"ok":true,"data":{"status":"ok"}}`. `/convert` answers the raw numbers plus a
-`display` block, the strings every front-end shows. To run the tests:
-`composer check --working-dir=api` (lint and the full suite; they never touch the network).
+`display` block, the strings every front-end shows. `php api/bin/report.php` then shows your test
+sessions and conversions, with no admin token.
+
+To run the tests: `composer check --working-dir=api` (lint plus the unit and acceptance suites;
+`make check` adds the guard tests). None of them calls ExchangeRate-API.
 
 ## The ExchangeRate-API key
 
@@ -100,24 +122,27 @@ The app gets its rates from [ExchangeRate-API](https://www.exchangerate-api.com)
    The key is letters, digits, `-` and `_`, with no quotes or spaces. `.env` is git-ignored:
    never commit it, and never put the key in a URL you share. It stays on the server, and the
    app never shows it.
-3. No restart is needed: the server and the CLIs read `.env` on every request or run.
+3. No restart is needed: the server and the CLIs read `.env` on every request or run. After an
+   invalid key, also run `php api/bin/upstream.php reset` (below).
 
 **How the app spends the quota.** One `/latest/USD` call refreshes every rate, and the app calls
-again only when upstream says the next update is due. So it makes about 30 calls a month, whatever
-the traffic, and every conversion is computed locally from the stored table. If a refresh fails,
-it serves the last table for up to `rates.max_stale_hours` (48), with `stale: true`, and the bot
-adds a note.
+again only when upstream says the next update is due. So refreshes cost about 30 calls a month,
+whatever the traffic; the admin view of `/health` adds `/quota` calls on top. Every conversion
+is computed locally from the stored table. If a refresh fails, the app serves the last table
+while its rate is at most `rates.max_stale_hours` (48) old, counted from `rate_as_of`, with
+`stale: true`, and the bot adds a note.
 
 **When the key is wrong or missing:**
-- **Empty key:** every rate lookup fails with `UPSTREAM_AUTH` without calling upstream. The bot
-  still runs up to the last step, then says "Exchange rates are temporarily unavailable. Please
-  try again later."
+- **Empty or malformed key:** every rate lookup fails with `UPSTREAM_AUTH` without calling
+  upstream, and the breaker stays closed. The bot still runs up to the last step, then says
+  "Exchange rates are temporarily unavailable. Please try again later."
 - **Invalid or inactive key:** the breaker stops all calls until you fix the key and run
   `php api/bin/upstream.php reset`.
-- **Check the state:** `php api/bin/upstream.php status` shows the breaker and the stored rate
-  table.
+- **Check the state:** `php api/bin/upstream.php status` shows the breaker, the stored rate
+  table's times, and whether a key is set (never the key itself).
 - **Quota reached:** calls stop until the 1st of the next month (UTC), and cached rates are served
-  while they are young enough (ADR 0012).
+  while they are young enough (ADR 0012). Upstream's own quota may reset on another day; the admin
+  view of `/health` shows both dates.
 
 Tests never use your key: they run with a fake key against a mocked upstream, and the network is
 switched off (ADR 0018).
@@ -209,18 +234,19 @@ to a file, that file holds IPs too, and no prune touches it.
 Each choice has an ADR in [adr/](adr/README.md); this is the short version.
 
 - **PHP 8.3, no framework** (ADR 0001). The app is small: a handful of JSON endpoints, a
-  state-machine bot and reports. Plain PHP keeps it easy for one person to read end to end, and it
-  runs both with `php -S` and in a container. There is one entry point (`api/public/index.php`)
-  and a small router. Three Composer packages do the work a framework would: Guzzle for the
-  upstream HTTP, `symfony/yaml` for the bot's flow file, `vlucas/phpdotenv` for `.env`. PHPUnit
-  is for tests only.
+  state-machine bot and reports. Plain PHP keeps it easy for one person to read end to end. It
+  runs with `php -S` today, and in a container from Phase 3 (ADR 0005). There is one entry point
+  (`api/public/index.php`) and a small router. Three Composer packages do the work a framework
+  would: Guzzle for the upstream HTTP, `symfony/yaml` for the bot's flow file and
+  `vlucas/phpdotenv` for `.env`. PHPUnit is for tests only.
 - **SQLite through PDO** (ADR 0010). Zero setup for a local install. The SQL stays portable, so
   Postgres can come later. Schema changes run only through `migrate.php`, never inside a request
   (ADR 0019).
 - **A deterministic bot, not an LLM** (ADR 0003). The conversation is a fixed pipeline: amount,
-  then currency, then installments. Strict parsers and a YAML flow make it predictable, cheap,
-  fast and testable, with no prompt injection. An LLM normalizer for free-form input is Phase 2.
-  Typebot is an optional front-end over the same `POST /bot/message` contract (ADR 0004).
+  then currency, then installments. Deterministic parsers and a YAML flow make it predictable,
+  cheap, fast and testable, with no prompt injection. Phase 2 may add an LLM normalizer for
+  free-form input, behind a flag (`llm.enabled`) and in front of the same parsers. Typebot is an
+  optional front-end over the same `POST /bot/message` contract (ADR 0004).
 - **Exact money** (ADR 0011, ADR 0017). Amounts are stored as integer cents and rates as integers
   scaled by 10^10. Only `InstallmentCalculator::display()` rounds, in each currency's minor units,
   so the installments always add up to the converted total.
@@ -233,42 +259,56 @@ Each choice has an ADR in [adr/](adr/README.md); this is the short version.
 |---|---|
 | `api/src/` | The code, one folder per area: `Convert` (the money math), `Rates` (upstream client, cache, breaker), `Flow` (the bot engine), `Validation` (the input parsers), `Http` (router, endpoints, rate limit, IP blocks), `Metrics` (events and reports), `Db` and `Config`. `App.php` wires them together. |
 | `api/public/` | The single HTTP entry point |
-| `api/bin/` | The command-line tools (bot, migrate, report, ip, upstream) |
+| `api/bin/` | The command-line tools (bot, migrate, report, ip, upstream) and the dev tools (lint, install-hooks) |
 | `api/flows/` | The bot's texts and steps (`default.yaml`); change the wording here, no PHP needed |
 | `api/resources/widget/` | The chat widget's HTML, CSS and JS |
 | `api/db/` | The generated schema and the demo seed |
+| `api/var/` | The SQLite database (`app.db`), git-ignored |
 | `api/tests/` | Unit and acceptance tests (PHPUnit), guard tests, and the widget's JS tests |
 | `docs/` | This guide, the plan, the ADRs and the journal |
 
 ## Measuring success in production
 
 Success means customers get a correct installment amount quickly, and the service stays up within
-its quota. Most of these numbers are in the report today (`GET /reports` or
-`php api/bin/report.php`, see [REPORTS.md](REPORTS.md)); the rest needs a little more work.
+its quota. Each item says where its number comes from: the report (`GET /reports` or
+`php api/bin/report.php`, see [REPORTS.md](REPORTS.md)), the stored events, or a tool outside the
+app.
 
-**Do customers get an answer?** The bot funnel, per channel.
+**Do customers get an answer?** The report's funnel, per channel:
 - **Completion rate:** completed sessions divided by started ones. This is the headline number.
-- **Drop-off per step:** where sessions are abandoned (`amount`, `currency`, `installments`) and
-  why (`BOT_MAX_RETRIES`, `BOT_SESSION_EXPIRED`, an upstream error).
+- **Drop-off per step:** where sessions are abandoned (`amount`, `currency`, `installments`, or
+  `result` when the conversion failed upstream) and why (`BOT_MAX_RETRIES`,
+  `BOT_SESSION_EXPIRED`, an upstream code).
 - **Retries per step:** high retries at `amount` or `currency` mean the parsers miss what people
-  type. That would be the case for Phase 2's LLM normalizer.
+  type. That is the evidence for Phase 2's LLM normalizer.
+- **Message quality:** sessions that retry at a step and then leave there. That step needs a
+  clearer question or retry text (`api/flows/default.yaml`).
 - **Never-answered sessions:** people who open the chat and leave. This tells you whether the
   greeting works.
+- **Currency mix:** the report's `currencies` and `countries` sections show what people ask for;
+  retries at `currency` show names the synonym table should learn.
 
 **Are the answers right?** This is a hard requirement, not a trend.
 - **Exact totals:** installments always add up to the converted total. The test suite enforces
-  this; in production, spot-check `display` against the stored `rate_scaled`.
-- **Fresh rates:** the share of conversions served with a stale rate (`stale: true`), and the age
-  of `rate_as_of`.
-- **No errors on the money path:** zero 500s on `/convert` and `/bot/message`. The report's
-  error section counts every error code.
+  this; in production, recompute a sample of conversions from the cents and `rate_scaled` their
+  events store.
+- **Rate accuracy:** compare a daily sample of stored rates with a second source. The free plan
+  updates once a day, so fast-moving currencies can drift from what the checkout charges.
+- **Fresh rates:** the share of conversions served with a stale rate, and the age of `rate_as_of`.
+  Every conversion event stores both, but the report doesn't summarize them yet; its upstream
+  `stale` and `blocked` lookups are a rough proxy.
+- **No errors on the money path:** zero `INTERNAL` errors. The report's errors section counts
+  every error code, though not by endpoint.
 
 **Is it reliable and affordable?**
-- **Availability:** an external monitor on `GET /health` (200 versus 503), with alerts.
-- **Upstream health and cost:** calls per month against the 1,500 quota (expect about 30),
-  failed calls, breaker trips, and the cache hit rate (the report's upstream section).
-- **Abuse:** rate-limited requests and automatic IP blocks. A sudden rise means an attack, or a
-  limit that is too tight for real users.
+- **Availability:** an external monitor on the public `GET /health` (200 versus 503), with alerts.
+  Leave out the admin token: the admin view calls upstream's `/quota`, which costs quota.
+- **Upstream health and cost:** calls per month against the 1,500 quota (about 30 for refreshes,
+  plus any admin `/health` calls), failed calls, lookups the breaker blocked, and the cache hit
+  rate (the report's upstream section). Breaker trips aren't counted yet;
+  `php api/bin/upstream.php status` shows the current state.
+- **Abuse:** rate-limited requests and automatic IP blocks (the report's `errors` and `ip_blocks`
+  sections). A sudden rise means an attack, or a limit that is too tight for real users.
 - **Speed:** p95 latency of `/convert` and `/bot/message`. The request log stores each request's
   latency, but the report doesn't summarize it yet; add that, or read it from the proxy's logs
   (Phase 3).
@@ -279,7 +319,8 @@ checkout's conversions, or by A/B testing the widget on a product page. The app 
 the checkout yet.
 
 Set a baseline over the first weeks, then set targets. For example: a completion rate above 70%,
-no stale rates older than a day, `/health` up 99.9%, and fewer than 50 upstream calls a month.
+stale answers under 1% of conversions, `/health` up 99.9%, p95 latency under 500 ms, and fewer
+than 50 upstream calls a month.
 
 ## Read on
 

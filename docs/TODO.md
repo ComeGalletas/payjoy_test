@@ -28,7 +28,7 @@ schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and a
 - [x] P1-06 Flow engine and `POST /bot/message` — DONE (2026-10-21; PR #18, two rounds)
 - [x] P1-07 Widget — DONE (2026-10-22; PR #21, three rounds)
 - [x] P1-08 Reports and health — DONE (2026-10-22; PR #23, three rounds)
-- [x] P1-09 Seed data and docs — DONE (2026-10-22; PR #26, three rounds; `REPORTS.md` through PR #25)
+- [x] P1-09 Seed data and docs — DONE (2026-10-22; PR #26, three rounds; `REPORTS.md` through PR #25; README quick start through PR #36, 2026-10-23)
 - [x] P1-10 End-to-end run — deliver MVP — DONE (2026-10-22; lead's real-key run, PR #28)
 
 ## Phase 2 — LLM normalizer
