@@ -9,7 +9,6 @@ use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Convert\ConvertService;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
-use FxInstallments\Db\Migrator;
 use FxInstallments\Flow\FlowDefinition;
 use FxInstallments\Flow\FlowEngine;
 use FxInstallments\Flow\SessionStore;
@@ -90,22 +89,18 @@ final class App
     /**
      * The app as configured by the environment: DB_DSN (default api/var/app.db).
      *
-     * The app never changes the schema; `php bin/migrate.php` does, at install and on every
-     * deploy. When the database is first opened, a version check (one indexed SELECT on
-     * app_state) throws SchemaOutOfDate if the database is behind the code, and nothing runs
-     * against it. public/index.php opens the database before routing, so every request then
-     * fails closed with 500 INTERNAL.
+     * The app never creates or changes the schema; `php api/bin/migrate.php` does, at install
+     * and on every deploy. When the database is first opened (Database::fromEnvironment()), a
+     * missing SQLite file throws DatabaseFileMissing without creating one, and a version check
+     * (one indexed SELECT on app_state, before WAL mode is set) throws SchemaOutOfDate if the
+     * database is behind the code, and nothing runs against it. public/index.php opens the
+     * database before routing, so every request then fails closed with 500 INTERNAL.
      */
     public static function fromEnvironment(string $apiRoot): self
     {
         return new self(
             new ConfigRepository(),
-            new Connection(static function () use ($apiRoot): PDO {
-                $pdo = Database::fromEnvironment($apiRoot);
-                (new Migrator($pdo))->assertCurrent();
-
-                return $pdo;
-            }),
+            new Connection(static fn (): PDO => Database::fromEnvironment($apiRoot)),
         );
     }
 

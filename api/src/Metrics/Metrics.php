@@ -14,8 +14,9 @@ use Throwable;
  * `events`: `ts` is a UTC epoch integer, `meta` is JSON text, and the amount is an exact
  * integer number of cents, `amount_usd_cents` (ADR 0017). No column takes a float (INV-09):
  * a float in any field, or anything but an int in an integer column, is rejected, so an amount
- * can't be stored rounded by PDO's float-to-string binding. Use UsdCents::fromCanonical() to
- * get the cents. Floats inside `meta` are fine: it is JSON text.
+ * can't be stored rounded by PDO's float-to-string binding. A bool in any field is rejected too
+ * (L-04). Use UsdCents::fromCanonical() to get the cents. Floats and bools inside `meta` are
+ * fine: it is JSON text.
  *
  * A failed write never fails the caller (INV-07): every Throwable is caught and a short note
  * goes to the fallback logger (PHP's error_log by default). The note names the event type and
@@ -127,6 +128,10 @@ final class Metrics
             $mustBeInt = in_array($column, self::INT_COLUMNS, true);
             if (is_float($value) || ($mustBeInt && $value !== null && !is_int($value))) {
                 throw new InvalidArgumentException('amount_usd_cents, installments and latency_ms must be ints; no field takes a float');
+            }
+            // L-04: PDO would bind true as 1 and false as an empty string in a text column.
+            if (is_bool($value)) {
+                throw new InvalidArgumentException('No event field takes a bool');
             }
         }
 

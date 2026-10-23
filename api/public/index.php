@@ -9,9 +9,10 @@ declare(strict_types=1);
  *     php -S 127.0.0.1:8080 api/public/index.php
  *
  * Errors are never displayed: a failure anywhere, even before the app is wired, answers with
- * the INTERNAL envelope and no detail. That includes a database that can't be opened or whose
- * schema is behind the code (Migrator::assertCurrent), except on `GET /health`, which answers
- * 503 UNHEALTHY for it (P1-08).
+ * the INTERNAL envelope and no detail. That includes a database that can't be opened, a
+ * missing SQLite file (DatabaseFileMissing: refused, never created, L-04) or a schema behind the
+ * code (Migrator::assertCurrent), except on `GET /health`, which answers 503 UNHEALTHY for it
+ * (P1-08).
  *
  * No response carries `X-Powered-By` (P1-07). PHP adds `X-Powered-By: PHP/<version>` before
  * this script runs when `expose_php` is on; that setting can only be changed in php.ini, so the
@@ -31,8 +32,8 @@ try {
     FxInstallments\Bootstrap::init($apiRoot);
     $app = FxInstallments\App::fromEnvironment($apiRoot);
     $request = FxInstallments\Http\Request::fromGlobals();
-    // Open the database and check its schema version before routing: a database behind the
-    // code (run php bin/migrate.php) fails closed with INTERNAL below. `GET /health` is the one
+    // Open the database and check its schema version before routing: a missing SQLite file or
+    // a database behind the code (run php api/bin/migrate.php) fails closed with INTERNAL below. `GET /health` is the one
     // exception (P1-08): it reports an unusable database itself, as 503 UNHEALTHY. Any other
     // method on /health fails closed too, instead of reaching the router's counted 404.
     if ($request->method() !== 'GET' || $request->path() !== FxInstallments\Http\HealthEndpoint::PATH) {

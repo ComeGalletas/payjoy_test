@@ -19,7 +19,12 @@ use Throwable;
  *
  * The count is written before it is read, inside one transaction: the UPDATE takes SQLite's
  * write lock up front (no lock upgrade, so busy_timeout applies), and the SQL stays portable
- * (ADR 0010). A concurrent first INSERT for the same key is retried once as an UPDATE.
+ * (ADR 0010). A concurrent first INSERT for the same key is retried once as an UPDATE; any
+ * other constraint failure is not (isUniqueViolation()).
+ *
+ * The request's time is the Kernel's one clock reading (Request::receivedAt(), L-04), so a
+ * 429 is counted in the minute the Kernel's block check reads; a request that didn't come
+ * through the Kernel uses this limiter's own clock.
  */
 final class RateLimiter implements Middleware
 {
@@ -72,7 +77,7 @@ final class RateLimiter implements Middleware
 
     public function process(Request $request, callable $next): Response
     {
-        $now = ($this->clock)();
+        $now = $request->receivedAt() ?? ($this->clock)();
         $windowStart = self::windowStart($now);
         $count = $this->increment(ClientIp::resolve($request, $this->trustedProxy), $windowStart);
 
@@ -126,9 +131,32 @@ final class RateLimiter implements Middleware
         }
     }
 
+    /**
+     * Only a real unique-constraint clash on the key (L-04). SQLSTATE 23000 also covers CHECK,
+     * NOT NULL, foreign-key and trigger failures, which a second attempt can't fix, so for it
+     * the driver error decides: SQLite's SQLITE_CONSTRAINT (19) with its "UNIQUE constraint
+     * failed" text (or the extended UNIQUE / PRIMARYKEY codes 2067 / 1555, and the old
+     * "PRIMARY KEY must be unique" text), or MySQL's ER_DUP_ENTRY (1062). Postgres reports
+     * unique_violation as its own SQLSTATE, 23505.
+     */
     private static function isUniqueViolation(PDOException $e): bool
     {
-        // SQLSTATE 23000 (SQLite, MySQL) or 23505 (Postgres).
-        return in_array((string) $e->getCode(), ['23000', '23505'], true);
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+        if ($sqlState === '23505') {
+            return true;
+        }
+        if ($sqlState !== '23000') {
+            return false;
+        }
+        $driverCode = $e->errorInfo[1] ?? null;
+        $message = (string) ($e->errorInfo[2] ?? '');
+        if ($driverCode === 2067 || $driverCode === 1555) {
+            return true;
+        }
+        if ($driverCode === 19) {
+            return preg_match('/^(UNIQUE constraint failed:|PRIMARY KEY must be unique)/', $message) === 1;
+        }
+
+        return $driverCode === 1062;
     }
 }

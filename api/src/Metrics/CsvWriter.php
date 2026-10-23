@@ -14,6 +14,12 @@ namespace FxInstallments\Metrics;
  *   becomes `'=CMD()`). Segments matter because a spreadsheet opened in a semicolon locale
  *   (es-CO Excel) splits `X;=cmd|' /C calc'!A0` at the `;` (round 2). It applies to every
  *   cell, numbers included (report numbers are never negative).
+ * - **Also guarded (L-04):** a segment that starts with `"` (a split segment such as `"=cmd"`
+ *   can be read as a quoted field holding a formula), and whitespace that isn't ASCII before
+ *   `= + - @`: any Unicode space or separator, a zero-width space or a byte order mark
+ *   (` =1`). Text that isn't UTF-8 is checked byte-wise, with Latin-1's no-break space (0xA0)
+ *   and next-line (0x85) counted as spaces. Reports can't produce any of these; the writer is
+ *   safe on its own.
  * - **Quoting:** a cell holding `"`, `,`, `;`, CR or LF is quoted, with each `"` doubled, so
  *   neither separator splits it. Other cells are written as they are.
  * - Cells are strings or ints; null is an empty cell. Nothing here formats numbers.
@@ -67,6 +73,18 @@ final class CsvWriter
 
     private static function looksLikeAFormula(string $text): bool
     {
-        return $text !== '' && ($text[0] === "\t" || $text[0] === "\r" || preg_match('/^\s*[=+\-@]/', $text) === 1);
+        if ($text === '') {
+            return false;
+        }
+        if ($text[0] === "\t" || $text[0] === "\r" || $text[0] === '"') {
+            return true;
+        }
+        $unicode = preg_match('/^[\s\p{Z}\x{200B}\x{FEFF}]*["=+\-@]/u', $text);
+        if ($unicode !== false) {
+            return $unicode === 1;
+        }
+
+        // Not UTF-8: byte-wise, with Latin-1's no-break space and next-line as spaces.
+        return preg_match('/^[\s\xA0\x85]*["=+\-@]/', $text) === 1;
     }
 }

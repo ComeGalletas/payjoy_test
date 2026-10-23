@@ -4,7 +4,7 @@
     "type": "project",
     "license": "proprietary",
     "require": {
-        "php": "^8.3",
+        "php": "^8.3.36",
         "ext-curl": "*",
         "ext-mbstring": "*",
         "ext-openssl": "*",
@@ -28,7 +28,7 @@
     },
     "config": {
         "platform": {
-            "php": "8.3.33"
+            "php": "8.3.36"
         },
         "sort-packages": true
     },

@@ -6,12 +6,15 @@ namespace FxInstallments\Http;
 
 /**
  * An incoming HTTP request: method, path (no query string), query parameters, headers
- * (lowercase names), raw body and the peer address (REMOTE_ADDR).
+ * (lowercase names), raw body and the peer address (REMOTE_ADDR). The Kernel stamps it with
+ * its one clock reading (receivedAt()), so the middleware it runs sees the same time (L-04).
  */
 final class Request
 {
     /** @var array<string, string> */
     private readonly array $headers;
+
+    private ?int $receivedAt = null;
 
     /**
      * @param array<string, mixed> $query
@@ -120,5 +123,25 @@ final class Request
     public function remoteAddr(): string
     {
         return $this->remoteAddr;
+    }
+
+    /**
+     * When the Kernel received the request (UTC epoch seconds), or null for a request that
+     * didn't come through it.
+     */
+    public function receivedAt(): ?int
+    {
+        return $this->receivedAt;
+    }
+
+    /**
+     * A copy stamped with the time it was received; this request is unchanged.
+     */
+    public function withReceivedAt(int $now): self
+    {
+        $copy = clone $this;
+        $copy->receivedAt = $now;
+
+        return $copy;
     }
 }

@@ -251,6 +251,71 @@ final class FlowEngineTest extends TestCase
         self::assertCount(1, $this->events('bot.session_completed'));
     }
 
+    /**
+     * @return iterable<string, array{bool}>
+     */
+    public static function sweepEventWrites(): iterable
+    {
+        yield 'the sweep records the expiry' => [false];
+        yield 'the sweep\'s event write fails' => [true];
+    }
+
+    /**
+     * L-04 (ADR 0021's known limit): a message read against a live session, whose session
+     * another process's sweep closed as expired before the save, is answered like an expired
+     * id: a new session and the greeting, not `done: true` with an empty reply.
+     */
+    #[DataProvider('sweepEventWrites')]
+    public function testAMessageInFlightWhenExpiryClosesItsSessionStartsANewOne(bool $sweepEventFails): void
+    {
+        [$engine, , $hooked] = $this->racingEngines();
+        $id = $this->answered($engine, ['200']);
+        $greeting = $engine->handle(null, '', 'cli')->reply;
+        if ($sweepEventFails) {
+            // INV-07: the sweep's event write can fail; the case is told from the session row.
+            $this->pdo->exec("CREATE TRIGGER l04_no_expiry_event BEFORE INSERT ON events WHEN NEW.error_code = 'BOT_SESSION_EXPIRED' BEGIN SELECT RAISE(ABORT, 'l-04 test'); END");
+        }
+
+        // Another process, whose clock is past the session's expiry, sweeps just before the save.
+        $later = new FakeClock($this->clock->now + 1800);
+        $sweeper = TestEnvironment::app($later, pdo: TestEnvironment::connect($this->path))->sessionSweeper();
+        $hooked->before('UPDATE sessions SET step', static function () use ($sweeper): void {
+            self::assertSame(2, $sweeper->sweep());
+        });
+        $reply = $engine->handle($id, 'BRL', 'static');
+
+        self::assertNotSame($id, $reply->sessionId);
+        self::assertSame(['reply' => $greeting, 'step' => 'amount', 'done' => false], array_diff_key($reply->toArray(), ['session_id' => true]));
+        self::assertStringContainsString("\n", $greeting, 'the greeting and the first question');
+        self::assertSame('abandoned', $this->column($id, 'status'));
+        self::assertSame('open', $this->column($reply->sessionId, 'status'));
+        self::assertSame('static', $this->column($reply->sessionId, 'channel'));
+        // The sweep wrote the expiry (unless its write failed); the losing message wrote only
+        // its new session's start.
+        self::assertSame($sweepEventFails ? [] : ['BOT_SESSION_EXPIRED', 'BOT_SESSION_EXPIRED'], array_column($this->events('bot.session_abandoned'), 'error_code'));
+        self::assertSame([['amount', 'ok', 20_000]], $this->stepEvents(), 'the losing message wrote no bot.step');
+        self::assertCount(3, $this->events('bot.session_start'));
+    }
+
+    /**
+     * The other closed cases keep ADR 0021 item 6: a session the winning message closed is
+     * `done` with an empty reply, even when its row shows an expiry in the past.
+     */
+    public function testASessionAbandonedByTheWinnerIsStillDone(): void
+    {
+        [$engine, $other, $hooked] = $this->racingEngines(config: ['bot.max_retries' => 1]);
+        $id = $engine->handle(null, '', 'static')->sessionId;
+
+        $hooked->before('UPDATE sessions SET step', static function () use ($other, $id): void {
+            self::assertTrue($other->handle($id, 'abc', 'static')->done());
+        });
+        $duplicate = $engine->handle($id, 'abc', 'static');
+
+        self::assertSame(['session_id' => $id, 'reply' => '', 'step' => 'amount', 'done' => true], $duplicate->toArray());
+        self::assertCount(1, $this->events('bot.session_start'));
+        self::assertSame(['BOT_MAX_RETRIES'], array_column($this->events('bot.session_abandoned'), 'error_code'));
+    }
+
     public function testALosingMessageOnTheSameStepIsReadAgain(): void
     {
         [$engine, $other, $hooked] = $this->racingEngines();
@@ -344,13 +409,14 @@ final class FlowEngineTest extends TestCase
      * Two engines on one database file: the first on a HookedPdo whose hook runs the second's
      * message just before the first saves.
      *
+     * @param array<string, mixed> $config
      * @return array{FlowEngine, FlowEngine, HookedPdo}
      */
-    private function racingEngines(?MockUpstream $upstream = null): array
+    private function racingEngines(?MockUpstream $upstream = null, array $config = []): array
     {
         $hooked = HookedPdo::open($this->path);
 
-        return [$this->engine($upstream, $hooked), $this->engine(pdo: TestEnvironment::connect($this->path)), $hooked];
+        return [$this->engine($upstream, $hooked, $config), $this->engine(pdo: TestEnvironment::connect($this->path), config: $config), $hooked];
     }
 
     /**

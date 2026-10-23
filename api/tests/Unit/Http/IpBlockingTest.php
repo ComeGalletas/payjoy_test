@@ -324,6 +324,8 @@ final class IpBlockingTest extends TestCase
         yield 'IPv6 loopback' => ['::1', null];
         yield 'IPv4-mapped loopback' => ['::ffff:127.0.0.1', null];
         yield 'the trusted proxy' => ['10.0.0.5', '10.0.0.5'];
+        // L-04: compared as parsed addresses, like ClientIp.
+        yield 'the trusted proxy, spelled another way' => ['2001:db8::5', '2001:DB8:0:0:0:0:0:5'];
         yield 'empty' => ['', null];
         yield 'not an IP' => ['unknown', null];
     }

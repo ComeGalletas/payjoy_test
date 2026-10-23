@@ -6,6 +6,7 @@ namespace FxInstallments\Tests\Unit\Config;
 
 use FxInstallments\Config\ConfigRepository;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
@@ -58,6 +59,37 @@ final class ConfigRepositoryTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         new ConfigRepository(['no.such.key' => 1]);
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function nonPositiveAmountMaxima(): iterable
+    {
+        yield 'zero' => [0];
+        yield 'negative' => [-1];
+    }
+
+    /**
+     * L-04: every amount would fail `over_max`, so the config is refused when it loads.
+     */
+    #[DataProvider('nonPositiveAmountMaxima')]
+    public function testANonPositiveAmountMaxIsRefusedWhenTheConfigLoads(int $max): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('amount.max must be at least 1');
+
+        new ConfigRepository(['amount.max' => $max]);
+    }
+
+    public function testTheSmallestAmountMaxLoadsAndAWrongTypeStillFailsOnlyWhenRead(): void
+    {
+        self::assertSame(1, (new ConfigRepository(['amount.max' => 1]))->int('amount.max'));
+
+        // A wrong type is a read-time error (INSTALL_LOCAL.md: the key is read only on use).
+        $config = new ConfigRepository(['amount.max' => '1000000']);
+        $this->expectException(InvalidArgumentException::class);
+        $config->int('amount.max');
     }
 
     public function testAStringListMustHoldOnlyStrings(): void

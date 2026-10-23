@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Db;
 
 use FxInstallments\App;
+use FxInstallments\Db\DatabaseFileMissing;
 use FxInstallments\Db\SchemaCorrupt;
 use FxInstallments\Db\SchemaOutOfDate;
 use FxInstallments\Tests\Support\OverridesEnvironment;
@@ -25,6 +26,7 @@ final class SchemaPolicyTest extends TestCase
     public function testTheAppRefusesAnEmptyDatabaseAndCreatesNothing(): void
     {
         $path = TestEnvironment::tempDir('policy') . '/empty.db';
+        touch($path);
         $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
 
         try {
@@ -33,10 +35,31 @@ final class SchemaPolicyTest extends TestCase
         } catch (SchemaOutOfDate $e) {
             self::assertSame(0, $e->current);
             self::assertSame(3, $e->required);
-            self::assertSame('Database schema is at version 0, the code needs 3: run php bin/migrate.php', $e->getMessage());
+            // L-04: the hint has the form the docs use, from the repository root.
+            self::assertSame('Database schema is at version 0, the code needs 3: run php api/bin/migrate.php', $e->getMessage());
         }
 
+        // L-04: the version is checked before WAL mode is set, so the file is still empty.
+        clearstatcache();
+        self::assertSame(0, filesize($path));
         self::assertSame([], TestEnvironment::connect($path)->query('SELECT name FROM sqlite_master')->fetchAll());
+    }
+
+    public function testTheAppRefusesAMissingDatabaseFileAndCreatesNone(): void
+    {
+        $path = TestEnvironment::tempDir('policy') . '/missing.db';
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
+        $app = App::fromEnvironment(dirname(__DIR__, 3));
+
+        foreach ([1, 2] as $attempt) {
+            try {
+                $app->db->pdo();
+                self::fail('a missing database file must be refused');
+            } catch (DatabaseFileMissing) {
+                $this->addToAssertionCount(1);
+            }
+            self::assertFileDoesNotExist($path, "attempt {$attempt}");
+        }
     }
 
     public function testTheAppRefusesAP1_01DatabaseAndLeavesItAsItWas(): void

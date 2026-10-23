@@ -10,13 +10,17 @@ declare(strict_types=1);
  *     php bin/migrate.php --dump    regenerate api/db/schema.sql from the migration list
  *
  * Run it at install and on every deploy: the app never migrates, and answers 500 INTERNAL while
- * the database is behind the code. Run --prune from a daily job. Exit codes: 0 done, 1 failed,
- * 2 usage.
+ * the database is behind the code. Run --prune from a daily job. Plain migrate is the only
+ * command that creates the database: a missing SQLite file, and its folder, whatever DB_DSN's
+ * path. `--prune` refuses a missing file without creating it, like every other CLI (L-04).
+ * Failures print `migrate:`, or `prune:` for `--prune`, on stderr. Exit codes: 0 done,
+ * 1 failed, 2 usage.
  */
 
 use FxInstallments\Bootstrap;
 use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Db\Database;
+use FxInstallments\Db\DatabaseFileMissing;
 use FxInstallments\Db\Migrator;
 use FxInstallments\Db\Retention;
 use FxInstallments\Db\Schema;
@@ -47,10 +51,8 @@ try {
 
     Bootstrap::init($apiRoot);
 
-    $pdo = Database::fromEnvironment($apiRoot);
-    $migrator = new Migrator($pdo);
-
     if ($mode === 'migrate') {
+        $migrator = new Migrator(Database::fromEnvironment($apiRoot, create: true));
         $from = $migrator->currentVersion();
         $applied = $migrator->migrate();
         foreach ($applied as $migration) {
@@ -62,7 +64,8 @@ try {
         exit(0);
     }
 
-    $migrator->assertCurrent();
+    // Refuses a missing file, and a schema behind the code or corrupt, before writing anything.
+    $pdo = Database::fromEnvironment($apiRoot);
     $config = new ConfigRepository();
     $retention = new Retention($pdo, $config->int('requests.retention_days'), $config->int('block.window_minutes'));
     foreach ($retention->prune(time()) as $table => $count) {
@@ -72,7 +75,10 @@ try {
 } catch (SchemaOutOfDate $e) {
     fwrite(STDERR, 'prune: ' . $e->getMessage() . "\n");
     exit(1);
+} catch (DatabaseFileMissing $e) {
+    fwrite(STDERR, "{$mode}: failed: " . $e->getMessage() . "\n");
+    exit(1);
 } catch (Throwable $e) {
-    fwrite(STDERR, sprintf("migrate: failed: %s: %s\n", $e::class, $e->getMessage()));
+    fwrite(STDERR, sprintf("%s: failed: %s: %s\n", $mode === 'prune' ? 'prune' : 'migrate', $e::class, $e->getMessage()));
     exit(1);
 }
