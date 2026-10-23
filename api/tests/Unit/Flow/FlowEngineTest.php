@@ -361,6 +361,37 @@ final class FlowEngineTest extends TestCase
         self::assertSame([['amount', 'ok', 20_000]], $this->stepEvents(), 'the losing message wrote no bot.step');
     }
 
+    /**
+     * Round 1 of the cleanup B review: a save in the same second as the one that set the expiry
+     * this message read leaves `expires_at` as it was (ADR 0021 second amendment). Message A
+     * reads the session; another message answers the currency in that same second (the step
+     * moves, `expires_at` doesn't); then, past the expiry, another process's sweep closes the
+     * row. A's save loses, and the row's step tells it wasn't the sweep's close of what A read:
+     * the known limit's `done` with an empty reply, not a new session.
+     */
+    public function testASameSecondSaveThenTheSweepIsNotTakenForTheSweepAlone(): void
+    {
+        [$engine, $other, $hooked] = $this->racingEngines();
+        $id = $this->answered($engine, ['200']);
+        $expiry = (int) $this->column($id, 'expires_at');
+
+        $later = new FakeClock($this->clock->now + 1800);
+        $sweeper = TestEnvironment::app($later, pdo: TestEnvironment::connect($this->path))->sessionSweeper();
+        $hooked->before('UPDATE sessions SET step', function () use ($other, $id, $expiry, $sweeper): void {
+            // The same second as A's read: the step moves, the expiry stays.
+            self::assertSame('installments', $other->handle($id, 'BRL', 'static')->step);
+            self::assertSame($expiry, (int) $this->column($id, 'expires_at'), 'a same-second save leaves expires_at');
+            // Past the expiry, the sweep closes the row.
+            self::assertSame(1, $sweeper->sweep());
+        });
+        $reply = $engine->handle($id, 'COP', 'static');
+
+        self::assertSame(['session_id' => $id, 'reply' => '', 'step' => 'installments', 'done' => true], $reply->toArray());
+        self::assertSame(['abandoned', 'installments'], [$this->column($id, 'status'), $this->column($id, 'step')]);
+        self::assertCount(1, $this->events('bot.session_start'), 'no new session');
+        self::assertSame([['amount', 'ok', 20_000], ['currency', 'ok', 20_000]], $this->stepEvents(), 'A wrote no bot.step');
+    }
+
     public function testALosingMessageOnTheSameStepIsReadAgain(): void
     {
         [$engine, $other, $hooked] = $this->racingEngines();

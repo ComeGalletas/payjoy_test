@@ -38,9 +38,9 @@ final class InstallmentCalculator
     public const RATE_DECIMALS = 6;
 
     /**
-     * The largest minor-unit exponent exactTotal() accepts: the largest in MinorUnits (CLF,
-     * UYW). L-04 cleanup B narrowed it from 12, so no exponent outside the ones in use can
-     * reach the arithmetic; a currency with more decimals needs this raised, with its tests.
+     * The largest minor-unit exponent exactTotal() accepts: the largest in MinorUnits (CLF).
+     * L-04 cleanup B narrowed it from 12, so no exponent outside the ones in use can reach the
+     * arithmetic; a currency with more decimals needs this raised, with its tests.
      */
     public const MAX_EXPONENT = 4;
 

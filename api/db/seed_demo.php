@@ -88,7 +88,10 @@ const SEED_MESSAGE_GAP = 40;
 /** Seconds after its expiry at which a later sweep closes a demo session declared to expire. */
 const SEED_SWEEP_DELAY = 75;
 
-/** The demo unblock: this many minutes after the first 429's minute, unless the block ends first. */
+/**
+ * The demo unblock: this many minutes after the first 429's minute, unless the block ends
+ * first.
+ */
 const SEED_UNBLOCK_MINUTES = 25;
 
 /**
@@ -133,7 +136,10 @@ const SEED_CONVERSIONS = [
     [1, '09:58', '198.51.100.14', 9_999, 'BRL', 4, null, null],
 ];
 
-/** Other error responses (each an `error` event and a request-log row): days, time, IP, method, path, code. */
+/**
+ * Other error responses (each an `error` event and a request-log row): days, time, IP,
+ * method, path, code.
+ */
 const SEED_ERRORS = [
     [5, '03:12', '203.0.113.40', 'GET', '/robots.txt', ErrorCodes::NOT_FOUND],
     [5, '03:13', '203.0.113.41', 'GET', '/robots.txt', ErrorCodes::NOT_FOUND],

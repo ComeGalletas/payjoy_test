@@ -642,7 +642,7 @@ final class ReportQuery
         }
 
         // Steps outside the flow's order keep a row for their retries; the sessions that ended
-        // there are placed at a known step (knownStep()), so these rows reach nobody.
+        // or wait there are placed at a known step (knownStep()), so these rows reach nobody.
         $others = array_map('strval', array_keys($funnel['retries'] + $funnel['abandoned_at'] + $funnel['open_at']));
         $others = array_values(array_diff(array_unique($others), self::STEPS));
         sort($others, SORT_STRING);

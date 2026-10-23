@@ -638,8 +638,14 @@ final class P1_09_SeedAndDocsTest extends TestCase
 
     /**
      * The notes ReportQuery can print, as written in its source, sprintf's `%d` kept: the first
-     * string literal of each `$notes[] = …`, and of each `return [<string>` or
-     * `return [sprintf(<string>` that is a list item, not an array key (sweepFirst()).
+     * string literal of each `$notes[] = …`, and, inside sweepFirst() only, of each
+     * `return [<string>` or `return [sprintf(<string>` that is a list item, not an array key.
+     *
+     * The limit of this source scan: it sees only a note written as one single-quoted literal
+     * in those two places. A note built from a variable, a constant, a helper method or a
+     * concatenation, or returned as a note list from another method, is missed. The test's
+     * count of eleven notes is the backstop: a missed note fails it, and then this scan, or
+     * ReportQuery, needs changing.
      *
      * @return list<string>
      */
@@ -652,7 +658,11 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $text = static fn (array|string $token): string => is_array($token) ? $token[1] : $token;
         $isString = static fn (array|string|null $token): bool => is_array($token) && $token[0] === T_CONSTANT_ENCAPSED_STRING;
         $notes = [];
+        $function = null;
         foreach ($tokens as $i => $token) {
+            if (is_array($token) && $token[0] === T_FUNCTION && is_array($tokens[$i + 1] ?? null) && $tokens[$i + 1][0] === T_STRING) {
+                $function = $tokens[$i + 1][1]; // the named method the tokens are in
+            }
             $literal = null;
             if ($text($token) === '$notes' && array_map($text, array_slice($tokens, $i + 1, 3)) === ['[', ']', '=']) {
                 for ($j = $i + 4; isset($tokens[$j]) && $text($tokens[$j]) !== ';'; $j++) {
@@ -661,7 +671,7 @@ final class P1_09_SeedAndDocsTest extends TestCase
                         break;
                     }
                 }
-            } elseif (is_array($token) && $token[0] === T_RETURN && $text($tokens[$i + 1] ?? '') === '[') {
+            } elseif ($function === 'sweepFirst' && is_array($token) && $token[0] === T_RETURN && $text($tokens[$i + 1] ?? '') === '[') {
                 $k = $text($tokens[$i + 2] ?? '') === 'sprintf' && $text($tokens[$i + 3] ?? '') === '(' ? $i + 4 : $i + 2;
                 if ($isString($tokens[$k] ?? null) && $text($tokens[$k + 1] ?? '') !== '=>') {
                     $literal = $k;

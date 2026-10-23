@@ -11,6 +11,9 @@ final class SmokeTest extends TestCase
 {
     private const FAKE_KEY = 'test-fake-key-not-real';
 
+    /** PHP_VERSION_ID of 8.4.0: the first unsupported release (ADR 0001 fourth amendment). */
+    private const CEILING_ID = 80400;
+
     /**
      * The PHP floor is composer.json's `config.platform.php` (ADR 0001 third amendment: 8.3.36,
      * owner decision 2026-10-22), so a release moves it with one edit. Older releases have
@@ -19,7 +22,9 @@ final class SmokeTest extends TestCase
      * The app supports PHP 8.3 only (ADR 0001 fourth amendment): `require.php` is `~` and the pin,
      * and the running PHP must be at least the pin and below 8.4.0. Composer's platform check
      * reads only the lower bound, so this test is what refuses 8.4 or later. composer/semver
-     * isn't installed, so the range is checked by hand with version_compare.
+     * isn't installed, so the range is checked by hand, on numbers: PHP_VERSION_ID against the
+     * pin's ID and 80400. (version_compare ranks unknown suffixes below `dev`, so a string
+     * check let `8.4.0-foo` and `8.4.0+deb12u1` through; round 1 of the cleanup B review.)
      */
     public function testPhpIsAPatchedEightThreeRelease(): void
     {
@@ -34,8 +39,10 @@ final class SmokeTest extends TestCase
             . ' floor moves, change both values together and run composer update --lock.',
         );
 
+        $minimumId = self::versionId($minimum);
+        self::assertNotNull($minimumId);
         self::assertTrue(
-            self::isSupported(PHP_VERSION, $minimum),
+            PHP_VERSION_ID >= $minimumId && PHP_VERSION_ID < self::CEILING_ID,
             self::unsupportedMessage(PHP_VERSION, $minimum),
         );
     }
@@ -55,6 +62,12 @@ final class SmokeTest extends TestCase
         yield 'a fixed 8.4 release' => ['8.4.27', false];
         yield '8.5' => ['8.5.12', false];
         yield '9.0' => ['9.0.0', false];
+        // Round 1 of the cleanup B review: suffixes don't move the numbers.
+        yield '8.4.0 with an unknown suffix' => ['8.4.0-foo', false];
+        yield '8.4.0 with a Debian build suffix' => ['8.4.0+deb12u1', false];
+        yield 'the pin with an Ubuntu build suffix' => ['8.3.36-1ubuntu1', true];
+        yield 'no major.minor.patch prefix' => ['8.3', false];
+        yield 'not a version' => ['latest', false];
     }
 
     /**
@@ -78,13 +91,29 @@ final class SmokeTest extends TestCase
     }
 
     /**
-     * At least $minimum and below 8.4.0. The upper bound is 8.4.0-dev, the lowest version string
-     * version_compare orders at 8.4.0, so 8.4.0's own pre-releases (8.4.0RC1 sorts before 8.4.0)
-     * are refused too.
+     * At least $minimum and below 8.4.0, comparing only the numeric `major.minor.patch` prefix
+     * of each, as PHP_VERSION_ID does: any suffix (RC1, -dev, -foo, +deb12u1, -1ubuntu1) is
+     * ignored, so every 8.4.0 build is refused. A string without that prefix is refused.
      */
     private static function isSupported(string $version, string $minimum): bool
     {
-        return version_compare($version, $minimum, '>=') && version_compare($version, '8.4.0-dev', '<');
+        $id = self::versionId($version);
+        $minimumId = self::versionId($minimum);
+
+        return $id !== null && $minimumId !== null && $id >= $minimumId && $id < self::CEILING_ID;
+    }
+
+    /**
+     * The PHP_VERSION_ID of a version string's `major.minor.patch` prefix (8.3.36 → 80336), or
+     * null when it has none.
+     */
+    private static function versionId(string $version): ?int
+    {
+        if (preg_match('/^(\d+)\.(\d+)\.(\d+)(?!\d)/', $version, $match) !== 1) {
+            return null;
+        }
+
+        return (int) $match[1] * 10_000 + (int) $match[2] * 100 + (int) $match[3];
     }
 
     private static function unsupportedMessage(string $version, string $minimum): string

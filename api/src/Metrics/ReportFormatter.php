@@ -9,9 +9,10 @@ use InvalidArgumentException;
 /**
  * Turns a ReportQuery result into the JSON data of `/reports`, CSV, or the table of
  * `bin/report.php` (P1-08). The only file besides InstallmentCalculator that may format money
- * (INV-01, docs/PLAN.md §3): it formats report aggregates, and only from integers. USD totals are
- * integer sums of `amount_usd_cents`, written with integer arithmetic (`104582` → `1,045.82`
- * in JSON and the table, `1045.82` in CSV); no float is ever made. Converted amounts are never
+ * (INV-01, docs/PLAN.md §3): it formats report aggregates. It never rounds: it formats integer
+ * aggregates with integer arithmetic only, so RoundingRuleTest needs no exception for it (L-04
+ * cleanup B). USD totals are integer sums of `amount_usd_cents` (`104582` → `1,045.82` in
+ * JSON and the table, `1045.82` in CSV); no float is ever made. Converted amounts are never
  * shown: Phase 1 reports don't recompute them.
  *
  * - **JSON** (json()): the query's sections as they are, epoch times as ISO 8601 UTC, and an

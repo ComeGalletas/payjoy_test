@@ -115,7 +115,7 @@ final class ConfigRepositoryTest extends TestCase
 
     public function testAWrongTypeOfAnotherKeyStillFailsOnlyWhenRead(): void
     {
-        // INSTALL_LOCAL.md section 10: a key other than amount.max is type-checked when read.
+        // INSTALL_LOCAL.md section 11: a key other than amount.max is type-checked when read.
         $config = new ConfigRepository(['bot.session_ttl_minutes' => '30']);
         $this->expectException(InvalidArgumentException::class);
         $config->int('bot.session_ttl_minutes');
