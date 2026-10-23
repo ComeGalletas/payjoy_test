@@ -45,7 +45,7 @@ php api/bin/report.php --from=2026-10-01 --to=2026-10-31 --format=csv
   the `/reports?format=csv` text; `json` is the `/reports` data, pretty-printed, without the
   envelope. `--help` (or `-h`) prints the usage.
 - Exit codes: 0 done; 1 failed, with only the exception class on stderr (or
-  `report: failed: no database file (run php bin/migrate.php first)`); 2 usage errors (an
+  `report: failed: no database file (run php api/bin/migrate.php first)`); 2 usage errors (an
   unknown or repeated option, a bad date or format, `from` after `to`, more than 366 days).
 - It refuses a database behind the code or with a corrupt schema version, and a missing SQLite
   file, which it never creates.
@@ -225,7 +225,7 @@ The others appear only when they apply (`N` is a count):
 | "Converted amounts are not recomputed; N conversion(s) in this period have no stored rate_scaled (recorded before P1-08)." | **No stored rate:** conversions from before P1-08, which didn't store their rate. |
 | "N conversion(s) have an amount that is not whole cents from 0.01 to amount.max; they are counted with no USD." | **Unreadable amounts:** rows whose cents aren't valid (damaged, or above a lowered `amount.max`). |
 | "N value(s) outside the known codes, currencies, countries, steps or words are counted as "other"." | **`other`:** labels outside their lists (see above). |
-| "N session(s) ended at a step outside the flow's order; the funnel places each at the known step after its last answer." | **Outside the flow:** a renamed or unknown step (it also counts sessions still open at such a step). |
+| "N session(s) ended at, or wait on, a step outside the flow's order; the funnel places each at the known step after its last answer." | **Outside the flow:** a renamed or unknown step, where a session ended or still waits. |
 | "N session(s) were closed without an end event (its write failed); the funnel counts them by their sessions row." | **Closed without an end event:** an end-event write failed; a report that runs in the instant between a session's save and its event can show this once. |
 | "Request-log counts cover only the last 30 days (requests.retention_days); older rows are pruned." | **Request-log retention:** the period starts more than 30 days ago. |
 

@@ -1,6 +1,7 @@
 # 0019 — Migrate explicitly; the app fails closed on an old schema
 
-- **Status:** Accepted (amended 2026-10-22: `GET /health`, see "Amendment")
+- **Status:** Accepted (amended 2026-10-22: `GET /health`, see "Amendment"; amended again
+  2026-10-22: a missing database file, see "Second amendment")
 - **Date:** 2026-10-21
 - **Deciders:** owner
 
@@ -67,3 +68,20 @@ builder's design.
     unhealthy.
   - On a healthy database `HEAD /health` gets the router's 404, which counts toward
     `block.error_responses` (on an unusable one it gets 500), so monitors must use `GET` (P1-09).
+
+## Second amendment (2026-10-22): a missing database file
+
+Recorded from L-04 cleanup A (PR #33): the owner scheduled the item, and this is the builder's
+design, which the tester and judge accepted.
+
+- Only `php api/bin/migrate.php` in apply mode creates a missing SQLite file, and its folder, for
+  any SQLite path (`Database::fromEnvironment(create: true)`). Every other entry point
+  (`--prune`, `bin/bot.php`, `bin/upstream.php`, `bin/ip.php`, `bin/report.php`, `seed_demo.php`,
+  `public/index.php`) refuses with `Db\DatabaseFileMissing` ("no database file (run php
+  api/bin/migrate.php first)") and creates neither the file nor its folder. It opens SQLite
+  without the create flag, so a file deleted between the check and the open isn't recreated.
+- The schema check runs before `PRAGMA journal_mode=WAL`, so a refused empty or old file is left
+  byte for byte as it was, with no `-wal` or `-shm` file.
+- Over HTTP a missing file is an unusable database: `GET /health` answers 503 `UNHEALTHY` (its
+  admin view shows `database.open` false), every other request 500 `INTERNAL`, and the error log
+  names `DatabaseFileMissing`.

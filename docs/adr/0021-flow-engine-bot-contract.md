@@ -118,8 +118,6 @@ which the tester and judge accepted.
 - **Known limits:**
   - A duplicate *invalid* message on the same step spends two retries; a race-losing different
     answer is dropped silently; a race loser may add one `upstream.call` event.
-  - A message in flight when expiry closes its session gets `done: true` with an empty reply
-    (L-04). L-04 cleanup A changes this (see "Second amendment"); the limit goes when it merges.
   - `below_minor_unit` at 1 installment can't be fixed by re-asking installments, so it ends by
     max retries; only an amount of about a cent reaches it.
   - The first message of a session is dropped, so a user who opens with `200` retypes it, and
@@ -161,3 +159,11 @@ Owner decision 2026-10-22 (L-04 cleanup A).
   (INV-07).
 - Item 6's `done: true` with an empty `reply` stays for a message that lost the race to another
   message that closed the session.
+- Built in L-04 cleanup A (PR #33). The message re-reads the row, and an abandoned row whose
+  `expires_at`, step, retries and collected values all still equal what the message read was
+  closed without a message's save: every save by a message moves `expires_at` (to now plus the
+  TTL, or to now on close). A session another message found expired and closed (`liveSession()`)
+  uses the sweep's own close, so it is answered the same way.
+- Known limit: if, while one message is in flight, another message saves an answer and the sweep
+  then closes that row, the in-flight message gets item 6's `done: true` and empty `reply`. It
+  needs a message in flight for longer than the TTL.

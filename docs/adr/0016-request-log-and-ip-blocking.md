@@ -4,7 +4,8 @@
   amended again 2026-10-21: what counts toward a block, events, see "Second amendment"; amended
   a third time 2026-10-22: widget routes, see "Third amendment"; amended a fourth time
   2026-10-22: `/reports` and `/health`, see "Fourth amendment"; note 2026-10-22: `rate_limits`
-  holds IPs too, ADR 0024)
+  holds IPs too, ADR 0024; amended a fifth time 2026-10-22: one clock reading and parsed
+  addresses, see "Fifth amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -126,7 +127,8 @@ and 3, is the builder's design, which the tester and judge accepted.
    - **Prune boundary (owner decision):** `--prune` deletes an `ip_blocks` row only when
      `expires_at <= now − block.window_minutes × 60`, so the clean slate survives a prune. This
      replaces the first amendment's `expires_at <= now`. Manual blocks without an expiry are kept.
-5. **Exemptions (ratified):** loopback addresses, the `TRUSTED_PROXY` address itself, and anything
+5. **Exemptions (ratified):** loopback addresses, the `TRUSTED_PROXY` address itself (compared as
+   a parsed address since L-04 cleanup A, see "Fifth amendment"), and anything
    that isn't a valid IP are never blocked automatically. They can still be blocked by hand.
 6. **Fail open (ratified):** if the block check can't read `ip_blocks`, the request is let through
    and the error log gets the exception class. A failed request-log, event or automatic-block write
@@ -179,10 +181,9 @@ and 3, is the builder's design, which the tester and judge accepted.
 - **Known limits:**
   - One global `ratelimit.per_minute` is assumed. A route with its own limit would make the
     rate-limited-minute count wrong (P1-05, P1-06).
-  - The Kernel and `RateLimiter` read the clock separately. At a minute boundary a 429 can land in
-    the next minute, which delays a block by at most one request (L-04).
-  - Requests that fail before the Kernel (a database that can't be opened, or a schema behind the
-    code) write no `requests` row, and a failed request-log write (item 6) leaves none either.
+  - Requests that fail before the Kernel (a database that is missing or can't be opened, or a
+    schema behind the code) write no `requests` row, and a failed request-log write (item 6)
+    leaves none either.
   - `ClientIp` doesn't canonicalize addresses, so a manual block typed in another form than the
     proxy's `X-Forwarded-For` hop doesn't match it (P3-01).
   - A blocked cross-origin request gets no CORS headers, so a browser sees a network error, not
@@ -219,3 +220,18 @@ other two are consequences and the builder's design.
 - Reports split the request log by kind (`api`, `widget_asset`, `favicon`), status class and
   blocked, and count `ip.block` events by source and reason and `ip.unblock` events by source.
   No report shows an IP or a path.
+
+## Fifth amendment (2026-10-22): one clock reading and parsed addresses
+
+Recorded from L-04 cleanup A (PR #33); the last item is an owner decision (2026-10-22).
+
+- The Kernel stamps each request with one clock reading (`Request::withReceivedAt`), and
+  `RateLimiter` uses it, so a 429 and the block check always read the same minute. The known limit
+  about two clock readings is gone.
+- `ClientIp` and `IpBlocking::isExempt` compare `TRUSTED_PROXY` and `REMOTE_ADDR` as parsed
+  addresses (`inet_pton`), so two spellings of one IPv6 address match. A value that isn't a valid
+  IP never matches, and neither does one with a zone index, brackets or a port.
+- An IPv4-mapped address (`::ffff:10.0.0.2`) doesn't yet match its IPv4 form (`10.0.0.2`), so a
+  proxy reached over a dual-stack socket isn't trusted; that fails closed. Owner decision:
+  `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` before comparing, as `isLoopback` already does
+  (L-04 cleanup B).

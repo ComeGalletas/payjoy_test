@@ -126,7 +126,7 @@ Edit `.env` with any editor and save it as UTF-8 without a BOM. The keys:
 |---|---|
 | `EXCHANGERATE_API_KEY` | Your ExchangeRate-API key. Server-side only: it sits in the upstream URL path, and the app never shows it. Letters, digits, `-` and `_`; empty means every rate lookup fails with `UPSTREAM_AUTH` (reason `no_key`) without calling upstream. |
 | `ADMIN_TOKEN` | The bearer token for `/reports` and the admin view of `/health`. **Visible ASCII only** (characters `!` to `~`, no spaces), because the `Authorization: Bearer <token>` header is parsed strictly. Empty means every admin request is refused (401). |
-| `DB_DSN` | The PDO DSN. **Leave it empty for the default**, the SQLite file `api/var/app.db`. A relative SQLite path is read from the repository root, but the app creates the `api/var` folder only for the default, so with any other value create the folder first. |
+| `DB_DSN` | The PDO DSN. **Leave it empty for the default**, the SQLite file `api/var/app.db`. A relative SQLite path is read from the repository root. Only `php api/bin/migrate.php` creates a missing SQLite file and its folder; every other command and the server refuse it (section 5). |
 | `DB_USER`, `DB_PASS` | Database credentials; leave them empty for SQLite. |
 | `TRUSTED_PROXY` | The one peer address whose `X-Forwarded-For` is believed. Empty when no proxy is in front (section 9). |
 | `DATA_ROOT`, `BACKUP_ROOT` | Placeholders for protected folders; Phase 1 doesn't use them. |
@@ -154,7 +154,7 @@ On a machine that won't run the tests you may add `--no-dev`.
 ## 5. Create the database: `migrate.php`
 
 The app **never changes the schema itself** (ADR 0019). `bin/migrate.php` creates the database
-and applies every pending migration:
+file and its folder if they are missing, and applies every pending migration:
 
 ```
 php api/bin/migrate.php
@@ -171,8 +171,8 @@ migrate: schema version 0 -> 3
 ```
 
 and on a database that is already current, `migrate: schema is current (version 3)`. It exits 0
-when done, 1 on failure (`migrate: failed: <exception class>: <message>` on stderr) and 2 for
-usage errors.
+when done, 1 on failure (`migrate: failed: <exception class>: <message>` on stderr, `prune:` with
+`--prune`) and 2 for usage errors.
 
 **Run it after `composer install` and after every `git pull`**, before starting the server:
 
@@ -211,6 +211,10 @@ of the way (a leftover write-ahead log must not meet the restored file), then co
 `api/var/app.db`. Backups hold the request log's raw IPs, and nothing prunes them: see the privacy
 note in [README.md](README.md).
 
+- **A missing database file is refused, never created.** Every command but `migrate.php` exits 1
+  with `<name>: failed: no database file (run php api/bin/migrate.php first)`, and the server
+  answers 500 `INTERNAL` (`GET /health` 503); no file or folder is made (ADR 0019 second
+  amendment).
 - **A database behind the code fails closed.** Until migrate runs, every request answers 500
   `INTERNAL`, and the server's error log (the `php -S` terminal) shows
   `fx-installments INTERNAL before routing: FxInstallments\Db\SchemaOutOfDate at …`. That line
@@ -570,9 +574,9 @@ Monitors must use **`GET /health`**:
 
 - 200 `{"ok":true,"data":{"status":"ok"}}` when the database opens, its schema is current (or
   ahead of the code) and it accepts a write;
-- 503 `UNHEALTHY` otherwise. `GET /health` is the one request that answers on a database behind
-  the code, a corrupt schema version or a database that can't be opened; every other request
-  then gets 500 `INTERNAL`.
+- 503 `UNHEALTHY` otherwise. `GET /health` is the one request that answers on a missing database
+  file, a database behind the code, a corrupt schema version or a database that can't be opened;
+  every other request then gets 500 `INTERNAL`.
 
 **Don't use `HEAD`.** On a healthy database `HEAD /health` is a 404, and every 404 counts toward
 the IP's automatic block (`block.error_responses`); on a broken one it is a 500. The public view
@@ -612,13 +616,15 @@ loudly instead of being guessed:
   a `block.*` value out of its range (below) makes **every request answer 500 `INTERNAL`**,
   `GET /health` included, and the error log shows
   `fx-installments INTERNAL before routing: InvalidArgumentException at …`.
+- `amount.max` must be an integer of at least 1. One below 1 fails when the config loads, so
+  every request (`GET /health` included) answers 500 and every command fails.
 - Every other key is read only by the requests that use it: a wrong type makes those answer 500
   (for example `amount.max` breaks `/convert`, the bot and the reports, and
   `bot.session_ttl_minutes` breaks the bot and the reports, whose sweep reads it; both also stop
   `seed_demo.php`).
 - `requests.retention_days` of the wrong type, or below 1, and a `block.window_minutes` out of
   range, make `php api/bin/migrate.php --prune` exit 1
-  (`migrate: failed: InvalidArgumentException: …`). A wrong type of `requests.retention_days`
+  (`prune: failed: InvalidArgumentException: …`). A wrong type of `requests.retention_days`
   also breaks `/reports` and `bin/report.php`.
 - A `reports.timezone` that is a string but not a known zone breaks only the reports (and
   `seed_demo.php`).

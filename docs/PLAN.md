@@ -839,7 +839,7 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   imported into `requests` with `blocked = 1`, so INV-08 still holds (ADR 0016).
   Also (from P1-11): canonicalize addresses in `ClientIp` (`inet_ntop(inet_pton())`, deciding on
   `::ffff:a.b.c.d` from dual-stack sockets), so manual blocks and `rate_limits` keys match the
-  proxy's `X-Forwarded-For` hop (merge with the L-04 `inet_pton` item for `TRUSTED_PROXY`); exempt
+  proxy's `X-Forwarded-For` hop (`TRUSTED_PROXY` is compared parsed since L-04 cleanup A); exempt
   the Typebot host from automatic blocking (a config list) or retune `block.error_responses`, since
   all bot traffic comes from it and it doesn't forward users' IPs; with nginx in front,
   `TRUSTED_PROXY` must be nginx's container address, so check that the API doesn't see the Docker
@@ -896,33 +896,22 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   (P1-05). The session sweep is one transaction; on Postgres a failed event INSERT aborts it, so it
   needs a savepoint per event, and its busy check reads SQLite codes 5/6 only, so on Postgres a
   lock error would fail the message instead of skipping the sweep (P1-06).
-- **L-04** Tooling backlog from the P0-06 review. Triaged 2026-10-22; the owner scheduled two
-  cleanup tasks under this ID, run one after the other, each with a builder, tester and judge
-  (LOG 2026-10-22):
-  - **Cleanup A, correctness and safety:**
-    - only `migrate.php` in apply mode creates a missing SQLite file and its folder, for any
-      SQLite path; every other entry point (`--prune`, `bin/bot.php`, `bin/upstream.php`,
-      `bin/ip.php`, `bin/report.php`, `seed_demo.php`, `public/index.php`) refuses a missing file
-      and creates neither; `Database::connect` checks the schema before setting WAL mode;
-      `.env.example` says to leave `DB_DSN` empty for the default;
-    - `ConfigRepository` rejects `amount.max` ≤ 0; `ClientIp` compares `TRUSTED_PROXY` and
-      `REMOTE_ADDR` as parsed addresses; `RateLimiter` retries only on a unique violation;
-      `Metrics` rejects a bool in a text column;
-    - a message in flight when the expiry sweep closes its session gets a new session and the
-      greeting (ADR 0021 second amendment);
-    - the Kernel and `RateLimiter` share one clock reading;
-    - `seed_demo` reads `block.duration_minutes`, refuses a `bot.session_ttl_minutes` that would
-      place a row in the future (exit 1, with a clear message), and handles a daylight-saving
-      change day;
-    - the CLI hints say `php api/bin/migrate.php`, and `--prune` on a corrupt schema says
-      `prune:`;
-    - `CsvWriter` also guards a segment that starts with `"` or a non-ASCII space before `=`;
-    - PHP 8.3.36 at least (ADR 0001 third amendment): `require.php` `^8.3.36` and
-      `config.platform.php` `8.3.36`, the lock refreshed with `composer update --lock` (only
-      `platform`, `platform-overrides` and the content-hash change, no packages), `SmokeTest`'s
-      version check reading the pin and checking that `require.php` matches it; `composer.json`
-      `scripts` untouched (GR-006).
+- **L-04** Tooling backlog from the P0-06 review. Triaged 2026-10-22 (LOG 2026-10-22). Cleanup A
+  (correctness and safety) is done (PR #33, LOG); the owner scheduled cleanup B next, with a
+  builder, tester and judge:
   - **Cleanup B, tests, comments and small code tidy-ups:**
+    - owner decisions from cleanup A's review (2026-10-22): `require.php` becomes `~8.3.36`, 8.3
+      only, and `SmokeTest` checks that constraint (ADR 0001 fourth amendment);
+      `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` before comparing, as `isLoopback` does
+      (ADR 0016 fifth amendment); `ConfigRepository` rejects a non-integer `amount.max` when the
+      config loads;
+    - cleanup A's review nits: a test for the no-create open flag in
+      `Database::fromEnvironment`; a test that tells the sweep's close from a message's by
+      `expires_at` alone; the orphaned `kernel()` docblock and the misnamed test in
+      `KernelBlockingTest`; one prefix variable in `migrate.php`; the lines over 100 columns in
+      `public/index.php`, `seed_demo.php` and `L_04_CleanupATest`; U+0085 in `CsvWriter`'s UTF-8
+      branch; the docblocks and `usage:` lines that say `php bin/<script>.php` become
+      `php api/bin/<script>.php`, with their pinned tests;
     - `RoundingRuleTest` adds `floor(`, `ceil(` and `fdiv(`, scans `api/bin`, `api/db` and
       `api/public`, and drops `ReportFormatter` from the allowed files;
     - `EntryPointEndToEndTest` moves onto `BuiltInServer`;
@@ -932,17 +921,16 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     - the `P1_10_LiveCodesTest` sha256 assertion gets a failure message; `ScaledRateTest` and
       `InstallmentCalculatorTest` reseed `mt_srand` in `tearDown`;
       `InstallmentCalculator::exactTotal()` becomes private or narrower;
-    - the report's "outside the flow" note also covers open sessions (the brief fixes the new
-      wording, and a lead docs PR puts it in `REPORTS.md` before the builder starts);
+    - the report's "outside the flow" note reads "N session(s) ended at, or wait on, a step
+      outside the flow's order; the funnel places each at the known step after its last answer."
+      (already in `REPORTS.md`);
     - stale comments: `IpBlock`, `QuotaStatus`, `App.php`, `RequestLog`, `ConvertService` and
       `Conversion`, the `P1_10_LiveCodesTest` docblock ("owner decision"), and the `widget.js`
       lines over 100 columns.
-  - Docs that a cleanup changes are the lead's: for cleanup A, `REPORTS.md`'s hint line and
-    INSTALL's migrate output, at its close-out.
   - **Owner-owned items** (CI, hooks, the Makefile, GUARDRAILS wording, `CLAUDE.md`) are in issue
     #31, and the GR-030 precedent in issue #30; they leave this list when the owner settles them.
-  - Each cleanup replaces the matching parts of the items below, and the lead deletes those parts
-    at that cleanup's close-out. Everything else below stays, for the reason in LOG 2026-10-22.
+  - Cleanup B replaces the matching parts of the items below, and the lead deletes those parts at
+    its close-out. Everything else below stays, for the reason in LOG 2026-10-22.
   - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
   - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
     leave a truncated hook.
@@ -950,33 +938,17 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   - Decide how `git merge --squash` commits get a valid subject (git's default "Squashed commit of
     the following:" is rejected by `commit-msg`).
   - Optionally prune managed hook backups (those carrying the marker).
-  - Compare `TRUSTED_PROXY` and `REMOTE_ADDR` as parsed addresses (`inet_pton`), so two spellings
-    of the same IPv6 address match.
   - Optionally compare admin tokens through HMACs, so the comparison doesn't reveal token length.
-  - `Metrics` lets a bool through in a text column; reject it.
-  - `RateLimiter::isUniqueViolation` treats any SQLSTATE 23000 (CHECK, NOT NULL) as a key clash,
-    costing one wasted retry; match the unique-violation error only.
-  - `Database::connect` sets `PRAGMA journal_mode=WAL` before the schema check, so opening an empty
-    file writes to it (no tables are created); check the schema before changing the journal mode.
   - The `ScaledRate` sweep calls `mt_srand` with a fixed seed; reseed in `tearDown` so later tests
     don't inherit the RNG state.
-  - (P1-03) `ConfigRepository` accepts `amount.max` ≤ 0 (every amount then fails `over_max`);
-    reject it at load time.
   - (P1-03) The `AmountParser` sweep checks values but not swaps of one accepted input for another;
     the pinned `SWEEP_*_READ` counts must change only with a rule change, explained in the commit.
   - (P1-03) `TextNormalizer` folds only precomposed Latin accents; decomposed forms (a letter plus
     U+0301) fall through to `unknown`. Normalize to NFC if intl becomes available.
-  - (P1-11) The Kernel and `RateLimiter` read the clock separately, so at a minute boundary a 429
-    can land in a minute the block check doesn't read yet (delays a block by one request). Pass
-    one clock reading through, or read up to the next minute.
   - (P1-11) `Http\IpBlocking` and `Db\Retention` depend on each other (`RATE_LIMIT_DAYS`,
     `assertWindowMinutes()`); move the block settings into a small holder (or Config).
   - (P1-11) The docblock of `Http\IpBlock` still says `--prune` deletes rows with
     `expires_at <= now`; it now waits one window after the end.
-  - (P1-11, P1-09) `bin/upstream.php`, `bin/bot.php`, `public/index.php` and
-    `migrate.php --prune` still create a missing SQLite file before refusing it
-    (`Database::fromEnvironment`); `bin/ip.php`, `bin/report.php` and `seed_demo.php` already
-    refuse without creating.
   - (P1-11) The unique-clash retry in `IpBlocks` can't happen on SQLite and is untested; cover it
     in L-03's `PostgresTest`, where concurrent inserts can clash.
   - (P1-05) `InstallmentCalculator::exactTotal()` is public and accepts exponents 0..12, though
@@ -988,8 +960,6 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     `api/db/` and `api/public/` too (`bin/report.php` arrives in P1-08). It can't see dynamic calls
     (`array_map('round', …)`, `$f = 'round'; $f()`, `sprintf($fmt, …)`); the behaviour tests are
     the backstop.
-  - (P1-06) A message in flight when expiry closes its session gets `done: true` with an empty
-    reply; answer it like an expired id instead (a new session and the greeting).
   - (P1-06) The loader's `!!` error could name the line; `FlowDefinition::steps()` is used only by
     tests; `Step` is a bag of nullable fields; `abandon()` takes 9 parameters; `read()` returns a
     4-tuple although `InstallmentsReading` exists; a later `FlowLoader` / `FlowDefinition` split
@@ -1009,27 +979,20 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     `SessionSweeper::sweepAll()` instead of the batch size wired in `App::reportQuery()`; read
     `bin/report.php`'s timezone from `App`'s config once config is editable (P3); add an
     `AppState` helper for the three `app_state` upserts (`Migrator`, `UpstreamBreaker`,
-    `QuotaCache`) before L-03. `CsvWriter` doesn't guard a segment that starts with `"` or with a
-    non-ASCII space before `=`; reports can't produce either. Drop `Metrics/ReportFormatter.php`
-    from `RoundingRuleTest`'s allowed files, since it doesn't round (the owner may then narrow
-    INV-01). Fix two stale code comments: `QuotaStatus` says `blocked` happens only during an
-    auth block, and `App.php` says every request fails closed on an old schema.
-  - (P1-09) `Database::fromEnvironment` creates `api/var` only for the exact default DSN (on
-    Windows an explicit `sqlite:api/var/app.db` doesn't match it, so `.env.example`'s comment
-    should say to leave `DB_DSN` empty); the CLI hints say `php bin/migrate.php` (relative to
-    `api/`), and `--prune` on a corrupt schema prints `migrate:`; the `RequestLog` docblock
-    should list `rate_limits` among the IP tables. `seed_demo` [judge 17]: read
-    `block.duration_minutes`, guard a long `bot.session_ttl_minutes`, and handle a daylight-saving
-    zone's change day. Tighten `P1_09_SeedAndDocsTest`: anchor the REPORTS example parts and
-    check its quoted notes against `ReportQuery` [19], count the demo `DB_DSN` lines per section
-    [E2b], normalise whitespace in the open-ids check [R2-6], drop the duplicated DSN check
-    [R3-3], make the backup test tell `VACUUM INTO` from a plain copy [tester r2 D], and call
-    `Bootstrap` itself in the dotenv test instead of phpdotenv directly [tester r2 G]. Indent the
-    code blocks under INSTALL section 8's "The report:" bullet (the marker regex in
-    `P1_09_SeedAndDocsTest` must then allow leading spaces) [round-1 nit]. Lead: accepted as a
-    known limit (ADR 0024), not fixed: the seed's raw session INSERT and its template choice [16].
-    Owner's call: make `Env::get` prefer the process environment, so the demo server needs no
-    `variables_order` option (ADR 0024).
+    `QuotaCache`) before L-03. Drop `Metrics/ReportFormatter.php` from `RoundingRuleTest`'s
+    allowed files, since it doesn't round (the owner may then narrow INV-01). Fix two stale code
+    comments: `QuotaStatus` says `blocked` happens only during an auth block, and `App.php` says
+    every request fails closed on an old schema.
+  - (P1-09) The `RequestLog` docblock should list `rate_limits` among the IP tables. Tighten
+    `P1_09_SeedAndDocsTest`: anchor the REPORTS example parts and check its quoted notes against
+    `ReportQuery` [19], count the demo `DB_DSN` lines per section [E2b], normalise whitespace in
+    the open-ids check [R2-6], drop the duplicated DSN check [R3-3], make the backup test tell
+    `VACUUM INTO` from a plain copy [tester r2 D], and call `Bootstrap` itself in the dotenv test
+    instead of phpdotenv directly [tester r2 G]. Indent the code blocks under INSTALL section 8's
+    "The report:" bullet (the marker regex in `P1_09_SeedAndDocsTest` must then allow leading
+    spaces) [round-1 nit]. Lead: accepted as a known limit (ADR 0024), not fixed: the seed's raw
+    session INSERT and its template choice [16]. Owner's call: make `Env::get` prefer the process
+    environment, so the demo server needs no `variables_order` option (ADR 0024).
   - (P1-10) At each release, recapture the live codes (update the fixture, its count, date and
     sha256) with the dependency check, since nothing detects a code upstream adds. The capture
     needs a real `/latest/USD` call, so the owner makes it or authorizes it each time; P1-10's

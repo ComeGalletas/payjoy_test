@@ -4,6 +4,39 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — L-04 cleanup A (PR #33, head cd9a648)
+
+- PR #32 (the PHP2Shell and cleanup-scope docs) merged by the owner as `4cb1921`.
+- **Build.** The builder started in parallel with #32 (the recorded Deviation 3 departure), got
+  the review's scope corrections the same day, and merged `origin/main` once #32 had merged (head
+  `cd9a648`). Builder: DONE_WITH_CONCERNS (the `usage:` lines, its stricter in-flight rule, and
+  `^8.3.36` letting older 8.4 and 8.5 releases through). Unit+Acceptance went from 1956 to 2057
+  tests; guards 80. All cleanup A items are in (PLAN L-04 history in git): a missing SQLite file
+  refused everywhere but plain migrate, the schema check before WAL, `amount.max` below 1 refused
+  at load, parsed-address comparison, the unique-violation retry, the `Metrics` bool, the in-flight
+  expiry answer, one clock reading, the `seed_demo` fixes, the hints, the `CsvWriter` guard, and
+  `require.php` `^8.3.36` with `SmokeTest` reading the pin.
+- **Review.** Tester: PASS WITH NITS, 19 of 22 mutations caught (the survivors: the no-create
+  open flag untested, the `expires_at` equality untested on its own, and one equivalent). Judge:
+  APPROVE WITH NITS; the code follows the merged ADR 0001 third amendment and ADR 0021 second
+  amendment (the owner's condition), and the builder's stricter in-flight rule is redundant but
+  safe.
+- **Owner decisions** (2026-10-22): merge as is; three items go to cleanup B: `require.php`
+  `~8.3.36`, 8.3 only (ADR 0001 fourth amendment); unmap IPv4-mapped addresses before comparing
+  (ADR 0016 fifth amendment); a non-integer `amount.max` refused at load. The review nits go to
+  cleanup B too.
+- Co-leads: the owner and the lead approved (ADR 0015); the lead posted the approvals comment
+  (02:23:17 UTC on 2026-10-23) and merged at the reviewed head as `f95dafe` (02:23:20 UTC). The
+  lead then ran `composer install` in the main checkout: `platform_check.php` requires 80336.
+- **Process.** No guard blocks. The tester and judge for #32 each broke the one-command rule once
+  with a chained `cd` inside their own worktree (#32's entry).
+- Lead docs: ADR 0001 fourth amendment (8.3 only), ADR 0016 fifth amendment (one clock reading,
+  parsed addresses, the IPv4-mapped decision), ADR 0019 second amendment (a missing database
+  file), ADR 0021 second amendment as built (the row rule, the `liveSession()` close, a known
+  limit), ADR 0024 amendment (the seed fixes); INSTALL (`DB_DSN`, migrate's prefixes, a missing
+  file, `amount.max`, `/health`), REPORTS (the hint and cleanup B's note wording), CONTEXT
+  (unhealthy, client IP), PLAN L-04 (cleanup A done, cleanup B's list, the backlog trimmed).
+
 ## 2026-10-22 — PHP2Shell review and L-04 triage
 
 - **CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell").** At the owner's request the lead reviewed
