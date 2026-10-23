@@ -86,8 +86,9 @@ of rounds 2 and 3) are process decisions, recorded in `docs/LOG.md`.
     database.
   - The numbers in the docs hold over the dates the seed prints (or on the day you seed).
   - Each of the demo block's five rate-limited minutes has a single 429 and no `rate_limits` row,
-    not the 31 or more requests that would cause it. The fixed block duration, the long TTL and
-    the daylight-saving change day were fixed in L-04 cleanup A (see "Amendment").
+    not the 31 or more requests that would cause it. The fixed block duration and the
+    daylight-saving change day were fixed, and a TTL too long for the demo is refused, in L-04
+    cleanup A (see "Amendment").
   - Under `php -S`, a shell `DB_DSN` loses to a `DB_DSN` line in `.env` (the template's empty one
     included) unless `E` is in `variables_order` (`-d` or `php.ini`; PHP without a `php.ini`
     defaults to `EGPCS`). Making `Env::get` prefer
@@ -97,14 +98,14 @@ of rounds 2 and 3) are process decisions, recorded in `docs/LOG.md`.
 
 ## Amendment (2026-10-22): L-04 cleanup A
 
-Recorded from L-04 cleanup A (PR #33); the owner decided the refusal, and the rest is the
-builder's design.
+Recorded from L-04 cleanup A (PR #33): the owner scheduled the items and decided the refusal
+earlier; how each is built is the builder's design, which the tester and judge accepted.
 
 - The demo `ip.block` event records `block.duration_minutes`. The unblock comes 25 minutes in, or
   30 seconds before the block ends if that is sooner, and the demo's blocked requests are written
   only before it.
 - `seed_demo` refuses (exit 1, nothing written) a `bot.session_ttl_minutes` that would close a
-  demo session after now, and names the longest TTL that works (owner decision).
+  demo session after now, and names the longest TTL that works.
 - Local times hold on a daylight-saving change day: they are built with `DateTimeImmutable` in
   `reports.timezone`.
 - Tests load the script with `require_once` for `DemoWriter::fromConfig()`; it runs only when it

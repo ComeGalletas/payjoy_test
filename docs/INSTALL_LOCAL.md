@@ -12,10 +12,10 @@ repository path may contain spaces, so keep the quotes around paths.
 
 ## 1. Prerequisites
 
-- **PHP 8.3.36 or later** with the extensions `pdo_sqlite`, `curl`, `mbstring` and `openssl`
-  (`api/composer.json` requires all four). Enable `zip` too, so Composer can unpack packages.
-  Older 8.3 releases have CVE-2026-109618 and CVE-2026-109619, which can allow remote code
-  execution (ADR 0001 third amendment).
+- **PHP 8.3, release 8.3.36 or later** (not 8.4 or 8.5; ADR 0001 fourth amendment) with the
+  extensions `pdo_sqlite`, `curl`, `mbstring` and `openssl` (`api/composer.json` requires all four).
+  Enable `zip` too, so Composer can unpack packages. Older 8.3 releases have CVE-2026-109618 and
+  CVE-2026-109619, which can allow remote code execution (ADR 0001 third amendment).
 - **Composer 2.**
 - **git.**
 - Optional: **GNU Make** and **Node**, for contributors (section 13).
@@ -82,7 +82,7 @@ post_max_size = 64K
   server. `file_uploads = Off` and `post_max_size = 64K` cut the multipart work PHP does before
   the app runs (the app takes no uploads, and its largest request body is 4 KiB,
   `/bot/message`); `post_max_size` bounds only a request that declares its length. None of these
-  fixes either CVE; only PHP 8.3.36 or later does.
+  fixes either CVE; only PHP 8.3.36 or a later 8.3 release does.
 
 **Don't disable `ini_set`.** Some hardened hosts list it in `disable_functions`. The app calls
 `ini_set()` at startup (`serialize_precision = -1`) and when it sends an answer without a body,
@@ -126,7 +126,7 @@ Edit `.env` with any editor and save it as UTF-8 without a BOM. The keys:
 |---|---|
 | `EXCHANGERATE_API_KEY` | Your ExchangeRate-API key. Server-side only: it sits in the upstream URL path, and the app never shows it. Letters, digits, `-` and `_`; empty means every rate lookup fails with `UPSTREAM_AUTH` (reason `no_key`) without calling upstream. |
 | `ADMIN_TOKEN` | The bearer token for `/reports` and the admin view of `/health`. **Visible ASCII only** (characters `!` to `~`, no spaces), because the `Authorization: Bearer <token>` header is parsed strictly. Empty means every admin request is refused (401). |
-| `DB_DSN` | The PDO DSN. **Leave it empty for the default**, the SQLite file `api/var/app.db`. A relative SQLite path is read from the repository root. Only `php api/bin/migrate.php` creates a missing SQLite file and its folder; every other command and the server refuse it (section 5). |
+| `DB_DSN` | The PDO DSN. **Leave it empty for the default**, the SQLite file `api/var/app.db`. A relative SQLite path is read from the repository root. Only `php api/bin/migrate.php` (without `--prune`) creates a missing SQLite file and its folder; every other command and the server refuse it (section 5). |
 | `DB_USER`, `DB_PASS` | Database credentials; leave them empty for SQLite. |
 | `TRUSTED_PROXY` | The one peer address whose `X-Forwarded-For` is believed. Empty when no proxy is in front (section 9). |
 | `DATA_ROOT`, `BACKUP_ROOT` | Placeholders for protected folders; Phase 1 doesn't use them. |
@@ -172,7 +172,8 @@ migrate: schema version 0 -> 3
 
 and on a database that is already current, `migrate: schema is current (version 3)`. It exits 0
 when done, 1 on failure (`migrate: failed: <exception class>: <message>` on stderr, `prune:` with
-`--prune`) and 2 for usage errors.
+`--prune`; a missing file and, for `--prune`, a schema behind the code print their fixed text
+instead) and 2 for usage errors.
 
 **Run it after `composer install` and after every `git pull`**, before starting the server:
 
@@ -211,10 +212,10 @@ of the way (a leftover write-ahead log must not meet the restored file), then co
 `api/var/app.db`. Backups hold the request log's raw IPs, and nothing prunes them: see the privacy
 note in [README.md](README.md).
 
-- **A missing database file is refused, never created.** Every command but `migrate.php` exits 1
-  with `<name>: failed: no database file (run php api/bin/migrate.php first)`, and the server
-  answers 500 `INTERNAL` (`GET /health` 503); no file or folder is made (ADR 0019 second
-  amendment).
+- **A missing database file is refused, never created.** Every command but plain
+  `php api/bin/migrate.php` (`--prune` included, as `prune:`) exits 1 with
+  `<name>: failed: no database file (run php api/bin/migrate.php first)`, and the server answers
+  500 `INTERNAL` (`GET /health` 503); no file or folder is made (ADR 0019 second amendment).
 - **A database behind the code fails closed.** Until migrate runs, every request answers 500
   `INTERNAL`, and the server's error log (the `php -S` terminal) shows
   `fx-installments INTERNAL before routing: FxInstallments\Db\SchemaOutOfDate at …`. That line
@@ -366,8 +367,7 @@ Linux and macOS:
 export DB_DSN=sqlite:api/var/demo.db
 ```
 
-Then, in that same shell, migrate the demo file and seed it (section 5's migrate created the
-`api/var` folder):
+Then, in that same shell, migrate the demo file and seed it:
 
 ```
 php api/bin/migrate.php
@@ -617,7 +617,9 @@ loudly instead of being guessed:
   `GET /health` included, and the error log shows
   `fx-installments INTERNAL before routing: InvalidArgumentException at …`.
 - `amount.max` must be an integer of at least 1. One below 1 fails when the config loads, so
-  every request (`GET /health` included) answers 500 and every command fails.
+  every request (`GET /health` included) answers 500, and `bin/bot.php`, `bin/report.php`,
+  `migrate.php --prune` and `seed_demo.php` fail; `bin/ip.php`, `bin/upstream.php` and plain
+  migrate don't read the config.
 - Every other key is read only by the requests that use it: a wrong type makes those answer 500
   (for example `amount.max` breaks `/convert`, the bot and the reports, and
   `bot.session_ttl_minutes` breaks the bot and the reports, whose sweep reads it; both also stop

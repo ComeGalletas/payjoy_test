@@ -123,6 +123,10 @@ Owner decision 2026-10-22, from the review of L-04 cleanup A (PR #33).
   (their fixed releases are 8.4.27 and 8.5.12), and both Composer's generated platform check and
   `SmokeTest` check only the lower bound. `require.php` becomes `~8.3.36` (8.3.36 up to, not
   including, 8.4), and `SmokeTest` checks the running PHP against that constraint (L-04 cleanup
-  B). Moving to 8.4 or later stays a new ADR (see the second amendment).
-- Until cleanup B merges, a PHP 8.4 or 8.5 older than its fixed release passes the gate and the
-  platform check; CI and the dev host run 8.3.36.
+  B; the `SmokeTest` check follows the third amendment's rule that the gate and the pin agree).
+  Moving to 8.4 or later stays a new ADR (see the second amendment).
+- Composer's generated platform check reads only the constraint's lower bound, also for
+  `~8.3.36`, and `config.platform.php` makes `composer install` resolve against 8.3.36. So after
+  cleanup B only the gate (`SmokeTest`) refuses PHP 8.4 or later; the app itself still starts on
+  it. Until cleanup B merges, the gate also passes a PHP 8.4 or 8.5 older than its fixed release.
+  CI (`php-version: '8.3'`) and the dev host run 8.3.

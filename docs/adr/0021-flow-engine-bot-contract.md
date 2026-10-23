@@ -39,7 +39,8 @@ which the tester and judge accepted.
      `result` when completed, or the step where the session was abandoned.
    - Reply parts are joined with `\n` (greeting plus first question; result plus stale note).
    - `reply` is empty only with `done: true`, for a message that lost the race to another message
-     that closed the session (item 6).
+     that closed the session (item 6), or, rarely, one the sweep closed after another message's
+     save (see "Second amendment").
    - CORS runs before the rate limiter on `/bot/message`, so a 429 still carries CORS headers.
    - HTTP sessions are `static` and the body can't choose a channel; `bin/bot.php` uses `cli`.
 3. **Sessions.** Ids are `bin2hex(random_bytes(16))`, issued by the server (the rows `seed_demo`
@@ -159,11 +160,13 @@ Owner decision 2026-10-22 (L-04 cleanup A).
   (INV-07).
 - Item 6's `done: true` with an empty `reply` stays for a message that lost the race to another
   message that closed the session.
-- Built in L-04 cleanup A (PR #33). The message re-reads the row, and an abandoned row whose
-  `expires_at`, step, retries and collected values all still equal what the message read was
-  closed without a message's save: every save by a message moves `expires_at` (to now plus the
-  TTL, or to now on close). A session another message found expired and closed (`liveSession()`)
-  uses the sweep's own close, so it is answered the same way.
+- Built in L-04 cleanup A (PR #33); the row rule is the builder's design, which the tester and judge
+  accepted. The message re-reads the row, and an abandoned row whose `expires_at`, step, retries and
+  collected values all still equal what the message read was closed without a message's save: every
+  save by a message changes the step, the retries or the collected values, and moves `expires_at`
+  (to now plus the TTL, or to now on close) unless it falls in the same second. A session another
+  message found expired and closed (`liveSession()`) uses the sweep's own close, so it is answered
+  the same way.
 - Known limit: if, while one message is in flight, another message saves an answer and the sweep
   then closes that row, the in-flight message gets item 6's `done: true` and empty `reply`. It
   needs a message in flight for longer than the TTL.

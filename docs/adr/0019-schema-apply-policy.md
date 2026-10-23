@@ -80,8 +80,8 @@ design, which the tester and judge accepted.
   `public/index.php`) refuses with `Db\DatabaseFileMissing` ("no database file (run php
   api/bin/migrate.php first)") and creates neither the file nor its folder. It opens SQLite
   without the create flag, so a file deleted between the check and the open isn't recreated.
-- The schema check runs before `PRAGMA journal_mode=WAL`, so a refused empty or old file is left
-  byte for byte as it was, with no `-wal` or `-shm` file.
+- The schema check runs before `PRAGMA journal_mode=WAL`, so the refusing command writes nothing
+  to an empty or old file, and an empty file gets no `-wal` or `-shm` file.
 - Over HTTP a missing file is an unusable database: `GET /health` answers 503 `UNHEALTHY` (its
   admin view shows `database.open` false), every other request 500 `INTERNAL`, and the error log
   names `DatabaseFileMissing`.

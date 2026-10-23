@@ -837,9 +837,10 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   `docs/INSTALL_DOCKER.md`. nginx reads a deny list exported from `ip_blocks` and returns 444 to
   blocked IPs, closing the connection without a response; nginx's access log for those requests is
   imported into `requests` with `blocked = 1`, so INV-08 still holds (ADR 0016).
-  Also (from P1-11): canonicalize addresses in `ClientIp` (`inet_ntop(inet_pton())`, deciding on
-  `::ffff:a.b.c.d` from dual-stack sockets), so manual blocks and `rate_limits` keys match the
-  proxy's `X-Forwarded-For` hop (`TRUSTED_PROXY` is compared parsed since L-04 cleanup A); exempt
+  Also (from P1-11): canonicalize addresses in `ClientIp` (`inet_ntop(inet_pton())`, deciding
+  whether the stored address unmaps `::ffff:a.b.c.d`, as `sameAddress` does since L-04 cleanup B),
+  so manual blocks and `rate_limits` keys match the proxy's `X-Forwarded-For` hop (`TRUSTED_PROXY`
+  is compared parsed since L-04 cleanup A); exempt
   the Typebot host from automatic blocking (a config list) or retune `block.error_responses`, since
   all bot traffic comes from it and it doesn't forward users' IPs; with nginx in front,
   `TRUSTED_PROXY` must be nginx's container address, so check that the API doesn't see the Docker
@@ -901,17 +902,22 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   builder, tester and judge:
   - **Cleanup B, tests, comments and small code tidy-ups:**
     - owner decisions from cleanup A's review (2026-10-22): `require.php` becomes `~8.3.36`, 8.3
-      only, and `SmokeTest` checks that constraint (ADR 0001 fourth amendment);
-      `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` before comparing, as `isLoopback` does
-      (ADR 0016 fifth amendment); `ConfigRepository` rejects a non-integer `amount.max` when the
-      config loads;
+      only (ADR 0001 fourth amendment), and the lock is refreshed with `composer update --lock`
+      (only `platform` and the content-hash change, no packages); `composer.json` `scripts`
+      untouched (GR-006); `SmokeTest` asserts that `require.php` is `'~' .` the
+      `config.platform.php` pin (its failure message updated) and that `PHP_VERSION` is at
+      least the pin and below 8.4.0; `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` in either
+      argument before comparing, as `isLoopback` does (ADR 0016 fifth amendment);
+      `ConfigRepository` rejects a non-integer `amount.max` when the config loads, and its class
+      docblock (which says a wrong type is reported only when read) says so;
     - cleanup A's review nits: a test for the no-create open flag in
       `Database::fromEnvironment`; a test that tells the sweep's close from a message's by
       `expires_at` alone; the orphaned `kernel()` docblock and the misnamed test in
       `KernelBlockingTest`; one prefix variable in `migrate.php`; the lines over 100 columns in
-      `public/index.php`, `seed_demo.php` and `L_04_CleanupATest`; U+0085 in `CsvWriter`'s UTF-8
-      branch; the docblocks and `usage:` lines that say `php bin/<script>.php` become
-      `php api/bin/<script>.php`, with their pinned tests;
+      `public/index.php`, `seed_demo.php` and `L_04_CleanupATest`; `CsvWriter`'s UTF-8 branch
+      also skips U+0085 before `=`, as its byte branch does; the docblocks (`Migrations.php`,
+      `Migrator.php`, `Retention.php`, `migrate.php`) and the `usage:` lines that say
+      `php bin/<script>.php` become `php api/bin/<script>.php`, with their pinned tests;
     - `RoundingRuleTest` adds `floor(`, `ceil(` and `fdiv(`, scans `api/bin`, `api/db` and
       `api/public`, and drops `ReportFormatter` from the allowed files;
     - `EntryPointEndToEndTest` moves onto `BuiltInServer`;
@@ -923,10 +929,14 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
       `InstallmentCalculator::exactTotal()` becomes private or narrower;
     - the report's "outside the flow" note reads "N session(s) ended at, or wait on, a step
       outside the flow's order; the funnel places each at the known step after its last answer."
-      (already in `REPORTS.md`);
+      (already in `REPORTS.md`; `ReportQuery` and the two `ReportQueryTest` assertions that pin
+      the old wording change with it);
     - stale comments: `IpBlock`, `QuotaStatus`, `App.php`, `RequestLog`, `ConvertService` and
       `Conversion`, the `P1_10_LiveCodesTest` docblock ("owner decision"), and the `widget.js`
       lines over 100 columns.
+  - Docs that cleanup B changes are the lead's, at its close-out: INSTALL section 10's
+    `amount.max` bullets, and the "until cleanup B" sentences in ADR 0001's fourth and ADR 0016's
+    fifth amendments.
   - **Owner-owned items** (CI, hooks, the Makefile, GUARDRAILS wording, `CLAUDE.md`) are in issue
     #31, and the GR-030 precedent in issue #30; they leave this list when the owner settles them.
   - Cleanup B replaces the matching parts of the items below, and the lead deletes those parts at

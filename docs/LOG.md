@@ -28,14 +28,21 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 - Co-leads: the owner and the lead approved (ADR 0015); the lead posted the approvals comment
   (02:23:17 UTC on 2026-10-23) and merged at the reviewed head as `f95dafe` (02:23:20 UTC). The
   lead then ran `composer install` in the main checkout: `platform_check.php` requires 80336.
-- **Process.** No guard blocks. The tester and judge for #32 each broke the one-command rule once
-  with a chained `cd` inside their own worktree (#32's entry).
+- **Process.** No guard blocks in the build or its review.
 - Lead docs: ADR 0001 fourth amendment (8.3 only), ADR 0016 fifth amendment (one clock reading,
   parsed addresses, the IPv4-mapped decision), ADR 0019 second amendment (a missing database
   file), ADR 0021 second amendment as built (the row rule, the `liveSession()` close, a known
   limit), ADR 0024 amendment (the seed fixes); INSTALL (`DB_DSN`, migrate's prefixes, a missing
   file, `amount.max`, `/health`), REPORTS (the hint and cleanup B's note wording), CONTEXT
-  (unhealthy, client IP), PLAN L-04 (cleanup A done, cleanup B's list, the backlog trimmed).
+  (unhealthy, client IP), PLAN L-04 (cleanup A done, cleanup B's list, the backlog trimmed),
+  TODO.
+- Review of this docs PR (#34): tester FAIL (INSTALL said every command fails on an `amount.max`
+  below 1; nits on credits and wording), judge REQUEST CHANGES (ADR 0001 promised a runtime
+  refusal of 8.4 that Composer's lower-bound platform check doesn't give; INSTALL still said
+  "8.3.36 or later"; the `~8.3.36` PLAN item lacked the lock refresh and the exact check; ADR
+  0021 credited the builder's row rule to the owner); all findings applied in round 2, except
+  ADR 0010, left as is (its `api/var/` line is still the default). The tester hit one guard block
+  on an optional inline `php -r` probe, reported it and dropped the probe (GR-030).
 
 ## 2026-10-22 — PHP2Shell review and L-04 triage
 

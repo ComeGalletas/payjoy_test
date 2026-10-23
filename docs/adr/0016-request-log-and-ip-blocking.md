@@ -184,7 +184,8 @@ and 3, is the builder's design, which the tester and judge accepted.
   - Requests that fail before the Kernel (a database that is missing or can't be opened, or a
     schema behind the code) write no `requests` row, and a failed request-log write (item 6)
     leaves none either.
-  - `ClientIp` doesn't canonicalize addresses, so a manual block typed in another form than the
+  - `ClientIp` returns the address as sent, not in canonical form (only the `TRUSTED_PROXY`
+    comparison is parsed, fifth amendment), so a manual block typed in another form than the
     proxy's `X-Forwarded-For` hop doesn't match it (P3-01).
   - A blocked cross-origin request gets no CORS headers, so a browser sees a network error, not
     the 403 text; the widget shows its generic failure text for it (ADR 0022).
@@ -223,15 +224,19 @@ other two are consequences and the builder's design.
 
 ## Fifth amendment (2026-10-22): one clock reading and parsed addresses
 
-Recorded from L-04 cleanup A (PR #33); the last item is an owner decision (2026-10-22).
+Recorded from L-04 cleanup A (PR #33): the owner scheduled the first two items, and how they are
+built is the builder's design, which the tester and judge accepted; the last item is an owner
+decision (2026-10-22).
 
 - The Kernel stamps each request with one clock reading (`Request::withReceivedAt`), and
   `RateLimiter` uses it, so a 429 and the block check always read the same minute. The known limit
   about two clock readings is gone.
-- `ClientIp` and `IpBlocking::isExempt` compare `TRUSTED_PROXY` and `REMOTE_ADDR` as parsed
-  addresses (`inet_pton`), so two spellings of one IPv6 address match. A value that isn't a valid
-  IP never matches, and neither does one with a zone index, brackets or a port.
+- `ClientIp` (`TRUSTED_PROXY` against `REMOTE_ADDR`) and `IpBlocking::isExempt` (`TRUSTED_PROXY`
+  against the client IP) compare parsed addresses (`inet_pton`), so two spellings of one IPv6
+  address match. A value that isn't a valid IP never matches, and neither does one with a zone
+  index, brackets or a port.
 - An IPv4-mapped address (`::ffff:10.0.0.2`) doesn't yet match its IPv4 form (`10.0.0.2`), so a
-  proxy reached over a dual-stack socket isn't trusted; that fails closed. Owner decision:
-  `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` before comparing, as `isLoopback` already does
-  (L-04 cleanup B).
+  proxy reached over a dual-stack socket isn't trusted: its `X-Forwarded-For` is ignored, every
+  client is counted under the proxy's address, and that address can be blocked automatically.
+  Owner decision: `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` in either argument before
+  comparing, as `isLoopback` already does (L-04 cleanup B).

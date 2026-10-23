@@ -58,4 +58,4 @@ schedule it. From Phase 1 on, the lead ticks an item when its PR is merged and a
 - [ ] L-01 `bin/export-typebot.php`
 - [ ] L-02 Telegram / WhatsApp channel
 - [ ] L-03 Postgres metrics
-- [ ] L-04 Tooling backlog (cache v5, atomic hook write, `FORCE=0`, squash-merge subjects, backup pruning)
+- [ ] L-04 Tooling backlog (cache v5, atomic hook write, `FORCE=0`, squash-merge subjects, backup pruning); cleanup A done (2026-10-22; PR #33), cleanup B next
