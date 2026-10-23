@@ -30,7 +30,8 @@ composer --version
 
 `php -m` must list `curl`, `mbstring`, `openssl` and `pdo_sqlite`. `php --ini` shows which
 `php.ini` is loaded; on Windows the PHP package usually needs a `php.ini` copied from
-`php.ini-development` with those `extension=` lines uncommented.
+`php.ini-development`, with `extension_dir` set to the full path of the `ext` folder next to
+`php.exe` (PHP's own default is `C:\php\ext`) and those `extension=` lines uncommented.
 
 ### The CA bundle
 

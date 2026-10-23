@@ -23,8 +23,9 @@ backups, the daily prune job, demo data, proxies, monitoring and every setting.
 
 **On Windows, PHP needs two edits in its `php.ini`.** `php --ini` shows which file is loaded. If
 none is, copy `php.ini-development` next to `php.exe` as `php.ini`.
-- Uncomment `extension=curl`, `extension=mbstring`, `extension=openssl`, `extension=pdo_sqlite`
-  and `extension=zip`, then check `php -m`.
+- Set `extension_dir` to the full path of the `ext` folder next to `php.exe` (for example
+  `extension_dir = "C:\php\ext"`), and uncomment `extension=curl`, `extension=mbstring`,
+  `extension=openssl`, `extension=pdo_sqlite` and `extension=zip`. Then check `php -m`.
 - Point both CA settings at a CA bundle, or every rate lookup fails. Git for Windows ships one:
 
   ```
@@ -67,9 +68,11 @@ macOS shell, except where the text names one shell.
 
 **If the bot's last answer is an error:**
 - "The exchange rate service is not responding" means PHP can't reach upstream over HTTPS. Fix
-  the CA bundle, restart the server, then run `php api/bin/upstream.php reset` (or wait a minute).
-- "Exchange rates are temporarily unavailable" means there is a problem with the key; see the next
-  section.
+  the CA bundle, restart the server, then run `php api/bin/upstream.php reset` (or wait for the
+  backoff: 1 minute after the first failure, up to an hour after repeated ones).
+- "Exchange rates are temporarily unavailable" usually means a problem with the key (see the next
+  section). A reached quota or a malformed upstream answer gives the same text;
+  `php api/bin/upstream.php status` shows which.
 
 ### Test the bot by hand
 
@@ -129,7 +132,7 @@ The app gets its rates from [ExchangeRate-API](https://www.exchangerate-api.com)
 again only when upstream says the next update is due. So refreshes cost about 30 calls a month,
 whatever the traffic; the admin view of `/health` adds `/quota` calls on top. Every conversion
 is computed locally from the stored table. If a refresh fails, the app serves the last table
-while its rate is at most `rates.max_stale_hours` (48) old, counted from `rate_as_of`, with
+while its rate is less than `rates.max_stale_hours` (48) old, counted from `rate_as_of`, with
 `stale: true`, and the bot adds a note.
 
 **When the key is wrong or missing:**
@@ -139,7 +142,7 @@ while its rate is at most `rates.max_stale_hours` (48) old, counted from `rate_a
 - **Invalid or inactive key:** the breaker stops all calls until you fix the key and run
   `php api/bin/upstream.php reset`.
 - **Check the state:** `php api/bin/upstream.php status` shows the breaker, the stored rate
-  table's times, and whether a key is set (never the key itself).
+  table's times, and whether a key is set (not whether it is valid; never the key itself).
 - **Quota reached:** calls stop until the 1st of the next month (UTC), and cached rates are served
   while they are young enough (ADR 0012). Upstream's own quota may reset on another day; the admin
   view of `/health` shows both dates.
@@ -274,19 +277,20 @@ its quota. Each item says where its number comes from: the report (`GET /reports
 `php api/bin/report.php`, see [REPORTS.md](REPORTS.md)), the stored events, or a tool outside the
 app.
 
-**Do customers get an answer?** The report's funnel, per channel:
+**Do customers get an answer?** Mostly the report's funnel, per channel:
 - **Completion rate:** completed sessions divided by started ones. This is the headline number.
 - **Drop-off per step:** where sessions are abandoned (`amount`, `currency`, `installments`, or
   `result` when the conversion failed upstream) and why (`BOT_MAX_RETRIES`,
   `BOT_SESSION_EXPIRED`, an upstream code).
 - **Retries per step:** high retries at `amount` or `currency` mean the parsers miss what people
   type. That is the evidence for Phase 2's LLM normalizer.
-- **Message quality:** sessions that retry at a step and then leave there. That step needs a
+- **Message quality:** a step with high `retries` and high `abandoned` in the funnel needs a
   clearer question or retry text (`api/flows/default.yaml`).
 - **Never-answered sessions:** people who open the chat and leave. This tells you whether the
   greeting works.
-- **Currency mix:** the report's `currencies` and `countries` sections show what people ask for;
-  retries at `currency` show names the synonym table should learn.
+- **Currency mix:** the report's `currencies` and `countries` sections show what people ask for.
+  High retries at `currency` mean the synonym table misses names people use; the bot never
+  stores what was typed, so find them by trying likely names by hand.
 
 **Are the answers right?** This is a hard requirement, not a trend.
 - **Exact totals:** installments always add up to the converted total. The test suite enforces

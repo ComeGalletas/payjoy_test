@@ -23,6 +23,22 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
     block broke the both-shells rule; and the success section claimed too much was in the report.
   - All findings were applied in round 2. No root `README.md` was added: GitHub shows
     `docs/README.md` on the landing page, and root files are outside the lead's scope.
+- **Review round 2.**
+  - Tester: FAIL, on two lines.
+    - The Windows `php.ini` step needs `extension_dir`, since PHP defaults to `C:\php\ext`;
+      INSTALL section 1 had the same gap and is fixed too.
+    - The report can't show which currency names were missed: the bot never stores input.
+  - Judge: APPROVE WITH NITS.
+  - Both reviews' nits were applied without a third review:
+    - the stale boundary;
+    - what the "temporarily unavailable" text covers;
+    - the backoff wait;
+    - `status` doesn't validate the key;
+    - the funnel heading;
+    - the message-quality metric.
+  - The tester drove the `0.10` / `JPY` / `60` and `peso` / `dollar` examples on the CLI against
+    a seeded rate table, with no upstream call. It also found that `say_uneven` says "1 monthly
+    payments"; that is now a PLAN L-04 backlog item.
 
 ## 2026-10-22 — L-04 cleanup A (PR #33, head cd9a648)
 
