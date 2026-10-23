@@ -4,6 +4,70 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — PHP2Shell review and L-04 triage
+
+- **CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell").** At the owner's request the lead reviewed
+  them against this project. PHP published both on 2026-10-21 (GHSA-w8hw-w9fx-j79w,
+  GHSA-6wmf-4rv5-p3rp); news of them leaked on 2026-10-20 (Huntress), and after publication public
+  proofs of concept and exploitation attempts were reported (Rapid7, watchTowr). CVE-2026-109618:
+  PHP's out-of-memory exit can leave request memory invalid (a crafted multipart body or any input
+  that exhausts `memory_limit`; on mod_php before any application code runs). CVE-2026-109619: a
+  use-after-free across requests on one worker (memory disclosure also reported). Both CVSS 4.0 9.2;
+  remote code execution confirmed on mod_php, PHP-FPM affected too. Fixed in 8.3.36 (and 8.2.35,
+  8.4.27, 8.5.12); the upgrade is the only complete fix.
+- **Exposure.** The dev host ran 8.3.33 (vulnerable). CI was already on 8.3.36 (`setup-php`
+  resolves `8.3` to the latest patch). Nothing is deployed, and `php -S` binds `127.0.0.1`, so
+  the exposure was low; but the app keeps the API key and admin token in process memory once it
+  has read `.env`, so a memory leak would matter. The app takes no uploads and no PHP sessions,
+  but the known triggers are in PHP's request handling, before the app runs.
+- **Upgrade.** The owner ran `winget upgrade --id PHP.PHP.8.3`. The first attempt failed ("Access
+  is denied" on `brotlicommon.dll`) because a `php -S` the owner had started from the Terminal
+  panel still held the DLL; after stopping it the upgrade went through. `php -v`: 8.3.36;
+  `curl.cainfo` and `openssl.cafile` kept their values; `make check` passed (1956 tests, 80
+  guards). The dev host's `php.ini` still has the PHP defaults `file_uploads=1` and
+  `session.upload_progress.enabled=1` (INSTALL section 1 now says to turn them off on the
+  server) and `display_errors=1` and `expose_php=1` (already in INSTALL); it is the owner's
+  machine configuration.
+- **Decisions** (owner): PHP 8.3.36 at least, with `require.php` `^8.3.36`, the platform pin,
+  the lock refresh and `SmokeTest`'s version check in cleanup A; the `php.ini` hardening in
+  INSTALL; the P3-01 image notes (ADR 0001 third amendment). A message in flight when the expiry
+  sweep closes its session gets a new session and the greeting (ADR 0021 second amendment).
+- **L-04 triage.** The lead sorted the 29 backlog items and the open owner notes. The owner
+  scheduled cleanup A (correctness and safety) and then cleanup B (tests, comments and small
+  tidy-ups), each with a builder, tester and judge; the lists are in PLAN L-04. Owner-owned items
+  went to issue #31. Left in the backlog, with the reason:
+  - the `ReportQuery` split, the `STEPS` derivation and `SessionSweeper::sweepAll()` (with the
+    P3 rollups); `report.php`'s timezone (once config is editable, P3-02);
+  - the `AppState` helper and the `IpBlocks` retry test (L-03 Postgres);
+  - widget ETags (P3-01 nginx; the rate limits on `/reports` and `/health` and `HEAD` are already
+    P3-01 items);
+  - the `IpBlocking`/`Retention` and `FlowDefinition`/`Step` refactors, `abandon()`'s nine
+    parameters and `read()`'s 4-tuple (no bug behind them);
+  - the `AmountParser` sweep note (a review rule for the pinned `SWEEP_*_READ` counts, not code
+    to change) and naming the line in the flow loader's `!!` error (a small nicety; with the
+    `FlowDefinition` refactor);
+  - documenting the busy wait before a skipped sweep: already in ADR 0021's known limits, so it is
+    dropped from L-04;
+  - two notes with no action: `ConvertService` and `display()` both compute the exact total
+    (harmless), and `RoundingRuleTest` can't see dynamic calls (the behaviour tests are the
+    backstop);
+  - logging the `AllowedOrigins` warning once (needs stored state); NFC in `TextNormalizer`
+    (needs `intl`); the "Just one payment" text (only if `installments.default` changes);
+  - the INSTALL section 8 indent (needs a docs and test change together);
+  - the live-code recapture (a release step) and the untried prune-task forms (manual checks);
+  - the owner's calls: the withdrawn currencies, `Env::get` precedence, HMAC token comparison.
+- **Process: a recorded departure from CLAUDE.md Deviation 3.** The cleanup A builder started
+  before this docs PR (#32) merged, which carries the ADR decisions it depends on. The owner
+  approved it with conditions (2026-10-22): the cleanup A PR merges only after #32; the builder
+  runs `git merge --no-edit origin/main` once #32 is merged; and the cleanup A judge checks the
+  code against the merged ADR 0001 third amendment and ADR 0021 second amendment. The builder got
+  the review's scope corrections the same day. This is the second departure after P1-09's; issue
+  #31 proposes rewording Deviation 3 to "merged before the builder's PR merges".
+- Review of this docs PR (#32): tester PASS WITH NITS (it ran `make init` with a chained `cd`
+  inside its own worktree, against the one-command rule), judge REQUEST CHANGES (no ADR 0021
+  amendment for the in-flight change; security wording beyond the advisories; three backlog
+  items without a reason; the parallel start not recorded); all findings applied in round 2.
+
 ## 2026-10-22 — P1-10 End-to-end run and live codes (MVP delivered; PR #28, head fbe4d59)
 
 - PR #27 (P1-09 close-out) merged by the owner as `e761e7e`, the build this run used.
