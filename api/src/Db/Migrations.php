@@ -6,7 +6,7 @@ namespace FxInstallments\Db;
 
 /**
  * The ordered migration list: the one place the schema is defined (docs/PLAN.md §5). Migrator
- * applies it, and api/db/schema.sql is generated from it (`php bin/migrate.php --dump`).
+ * applies it, and api/db/schema.sql is generated from it (`php api/bin/migrate.php --dump`).
  *
  * Rules for this list:
  * - Append only. A migration that has shipped is never edited; a change is a new migration.

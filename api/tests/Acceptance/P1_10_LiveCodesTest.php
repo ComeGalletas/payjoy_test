@@ -33,7 +33,8 @@ use PHPUnit\Framework\TestCase;
  *   quotes answers VALIDATION_CURRENCY (ADR 0012 amendment, the cold-start known limit);
  * - every captured code has an explicit `MinorUnits` exponent, so none falls back to DEFAULT;
  * - `MinorUnits` lists exactly the fallback codes, and the fallback list holds exactly three
- *   codes upstream didn't quote, KPW, SVC and VED (owner decision: kept);
+ *   codes upstream didn't quote, KPW, SVC and VED (kept: the builder's choice, which the owner
+ *   accepted);
  * - the codes P1-10 put in `UPSTREAM_ONLY` (BGN included, moved there in round 2) convert
  *   through `/convert` on a cold start and with a stored table, with the mocked upstream;
  * - a kept code the stored table lacks answers `not_in_table` on the refreshing request, then
@@ -50,7 +51,7 @@ final class P1_10_LiveCodesTest extends TestCase
     /** sha256 of the captured codes, each followed by "\n" (the header left out) */
     private const CAPTURED_CODES_SHA256 = '9df483d9ad14fea1118e0f1e803655572ed58c49846d038cfdcde8f430354429';
 
-    /** Fallback codes upstream didn't quote on 2026-10-22, kept by owner decision. */
+    /** Fallback codes upstream didn't quote on 2026-10-22, kept (builder's choice, accepted). */
     private const KEPT_UNQUOTED = ['KPW', 'SVC', 'VED'];
 
     private const WHEN_UPSTREAM_ADDS_A_CODE = 'When upstream starts quoting a new code: add it to'
@@ -99,14 +100,21 @@ final class P1_10_LiveCodesTest extends TestCase
         self::assertContains('USD', $codes, 'the base currency quotes itself');
         self::assertContains('BGN', $codes, 'upstream still quoted BGN on 2026-10-22');
         // Pins the list itself, so removing a code and editing the count together still fails.
-        self::assertSame(self::CAPTURED_CODES_SHA256, hash('sha256', implode('', array_map(static fn (string $code): string => $code . "\n", $codes))));
+        self::assertSame(
+            self::CAPTURED_CODES_SHA256,
+            hash('sha256', implode('', array_map(static fn (string $code): string => $code . "\n", $codes))),
+            'tests/Fixtures/upstream_latest_usd_codes.txt is not the 2026-10-22 capture. Don\'t edit'
+            . ' it by hand: recapture the live codes from one real /latest/USD answer, a call only the'
+            . ' owner makes or authorizes (ADR 0011), then update the header\'s date and count, and'
+            . ' CAPTURED_ON, CAPTURED_COUNT and CAPTURED_CODES_SHA256 here.',
+        );
     }
 
     public function testTheListsMatchEachOtherAndTheCapture(): void
     {
         // Both are sorted by code (SORT_STRING), so they are compared in order.
         self::assertSame(FallbackCurrencies::all(), array_keys(MinorUnits::all()), 'MinorUnits lists exactly the fallback codes');
-        self::assertSame(self::KEPT_UNQUOTED, array_values(array_diff(FallbackCurrencies::all(), self::capturedCodes())), 'the only fallback codes upstream did not quote are the ones the owner kept');
+        self::assertSame(self::KEPT_UNQUOTED, array_values(array_diff(FallbackCurrencies::all(), self::capturedCodes())), 'the only fallback codes upstream did not quote are the three kept ones');
     }
 
     public function testEveryCapturedCodeIsOnTheFallbackList(): void

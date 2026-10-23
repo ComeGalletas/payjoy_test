@@ -18,8 +18,8 @@ use Throwable;
  * runs as a no-op on the second kind. Each migration runs in its own transaction, together with
  * its schema_version update, so a failed migration leaves the database at the previous version.
  *
- * Schema policy: the schema is applied only by `php bin/migrate.php`, at install and on every
- * deploy. The app never migrates; on its first connection it calls assertCurrent(), one
+ * Schema policy: the schema is applied only by `php api/bin/migrate.php`, at install and on
+ * every deploy. The app never migrates; on its first connection it calls assertCurrent(), one
  * indexed SELECT, and fails closed when the database is behind the code.
  *
  * Run one migrate at a time: two concurrent runs are not coordinated.

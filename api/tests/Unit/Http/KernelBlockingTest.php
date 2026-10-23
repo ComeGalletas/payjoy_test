@@ -10,6 +10,7 @@ use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Db\Connection;
 use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\Kernel;
+use FxInstallments\Http\RateLimiter;
 use FxInstallments\Http\Request;
 use FxInstallments\Http\Router;
 use FxInstallments\Tests\Support\FakeClock;
@@ -213,9 +214,6 @@ final class KernelBlockingTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $config
-     */
-    /**
      * L-04: the Kernel reads the clock once per request and hands that reading to RateLimiter,
      * so a 429 always lands in the minute the block check reads, even when the clock crosses a
      * minute boundary while the request runs. The clock here moves one second on every read.
@@ -253,7 +251,8 @@ final class KernelBlockingTest extends TestCase
 
     /**
      * A request that doesn't come through the Kernel (RateLimiter used alone) still reads the
-     * limiter's own clock.
+     * limiter's own clock; a stamped one is counted in its stamp's minute (L-04 cleanup B: the
+     * process() calls the name promises).
      */
     public function testARequestWithoutAKernelReadingUsesTheLimitersClock(): void
     {
@@ -264,8 +263,26 @@ final class KernelBlockingTest extends TestCase
         self::assertSame(self::NOW, $stamped->receivedAt());
         self::assertNull($request->receivedAt(), 'the original request is unchanged');
         self::assertSame([self::IP, '/limited', 'GET'], [$stamped->remoteAddr(), $stamped->path(), $stamped->method()]);
+
+        // The limiter's clock is ten minutes after the stamp, so the two land in different rows.
+        $limiterNow = self::NOW + 600;
+        $limiter = new RateLimiter(Connection::wrap($this->pdo), 5, null, static fn (): int => $limiterNow);
+        $next = static fn (Request $request): JsonResponse => JsonResponse::ok(['ok' => true]);
+        self::assertSame(200, $limiter->process($request, $next)->status());
+        self::assertSame(200, $limiter->process($stamped, $next)->status());
+
+        self::assertSame(
+            [
+                ['window_start' => RateLimiter::windowStart(self::NOW), 'count' => 1],
+                ['window_start' => RateLimiter::windowStart($limiterNow), 'count' => 1],
+            ],
+            array_map(static fn (array $row): array => array_map('intval', $row), $this->pdo->query('SELECT window_start, count FROM rate_limits ORDER BY window_start')->fetchAll()),
+        );
     }
 
+    /**
+     * @param array<string, mixed> $config
+     */
     private function kernel(array $config = []): Kernel
     {
         $app = TestEnvironment::app($this->clock, $config, $this->pdo, $this->log);

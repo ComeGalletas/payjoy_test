@@ -316,6 +316,51 @@ final class FlowEngineTest extends TestCase
         self::assertSame(['BOT_MAX_RETRIES'], array_column($this->events('bot.session_abandoned'), 'error_code'));
     }
 
+    /**
+     * @return iterable<string, array{bool}>
+     */
+    public static function expiriesAtClose(): iterable
+    {
+        yield 'expires_at moved to now: a message closed it' => [true];
+        yield 'expires_at as this message read it: the sweep closed it' => [false];
+    }
+
+    /**
+     * L-04 cleanup B (mutation M13): the sweep's close is told from a message's by `expires_at`
+     * alone too. The other process here closes the row as abandoned and leaves the step, the
+     * retries and the collected values as this message read them; only `expires_at` tells a
+     * message's close (it sets `expires_at` to now) from the sweep's (it leaves it). The first
+     * is item 6's `done` with an empty reply, the second a new session (ADR 0021 second
+     * amendment).
+     */
+    #[DataProvider('expiriesAtClose')]
+    public function testOnlyExpiresAtTellsAMessagesCloseFromTheSweeps(bool $expiryMoved): void
+    {
+        [$engine, , $hooked] = $this->racingEngines();
+        $id = $this->answered($engine, ['200']);
+        $now = $this->clock->now;
+        self::assertNotSame($now, (int) $this->column($id, 'expires_at'), 'the session expires after now');
+
+        $close = $expiryMoved
+            ? "UPDATE sessions SET status = 'abandoned', updated_at = {$now}, expires_at = {$now} WHERE session_id = '{$id}'"
+            : "UPDATE sessions SET status = 'abandoned', updated_at = {$now} WHERE session_id = '{$id}'";
+        $pdo = TestEnvironment::connect($this->path);
+        $hooked->before('UPDATE sessions SET step', static function () use ($pdo, $close): void {
+            self::assertSame(1, $pdo->exec($close));
+        });
+        $reply = $engine->handle($id, 'BRL', 'static');
+
+        if ($expiryMoved) {
+            self::assertSame(['session_id' => $id, 'reply' => '', 'step' => 'currency', 'done' => true], $reply->toArray());
+            self::assertCount(1, $this->events('bot.session_start'));
+        } else {
+            self::assertNotSame($id, $reply->sessionId);
+            self::assertSame(['amount', false], [$reply->step, $reply->done()]);
+            self::assertCount(2, $this->events('bot.session_start'));
+        }
+        self::assertSame([['amount', 'ok', 20_000]], $this->stepEvents(), 'the losing message wrote no bot.step');
+    }
+
     public function testALosingMessageOnTheSameStepIsReadAgain(): void
     {
         [$engine, $other, $hooked] = $this->racingEngines();

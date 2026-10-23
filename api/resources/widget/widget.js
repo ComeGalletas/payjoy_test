@@ -10,9 +10,9 @@
  *
  * It talks to bot/message next to its own URL (POST /bot/message, ADR 0021). Nothing is sent
  * when the page loads: the session opens with an empty text when the user first focuses the
- * message box or presses Start chat. Every text, the server's and the user's, is shown as plain text
- * through textContent; nothing is parsed as markup. The widget shows the bot's reply exactly as
- * sent: it never computes, rounds or formats money (INV-01).
+ * message box or presses Start chat. Every text, the server's and the user's, is shown as plain
+ * text through textContent; nothing is parsed as markup. The widget shows the bot's reply
+ * exactly as sent: it never computes, rounds or formats money (INV-01).
  */
 (function () {
   'use strict';
@@ -240,7 +240,8 @@
       }
 
       var error = envelope && envelope.ok === false ? envelope.error : null;
-      say('error', error && typeof error.message_for_user === 'string' ? error.message_for_user : TEXT.unreachable);
+      var hasMessage = error && typeof error.message_for_user === 'string';
+      say('error', hasMessage ? error.message_for_user : TEXT.unreachable);
       if (sessionId === null) {
         // The conversation never opened: offer to try again.
         close(TEXT.retry, false);

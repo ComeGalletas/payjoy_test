@@ -10,18 +10,26 @@ use RecursiveIteratorIterator;
 use SplFileInfo;
 
 /**
- * INV-01 (docs/GUARDRAILS.md): only `InstallmentCalculator::display()` rounds money or rates;
- * `Metrics/ReportFormatter` may format report aggregates (P1-08). This scans the PHP code of
- * `api/src/` (comments, docblocks and string contents ignored, so SQL text doesn't count) for
- * `round(`, `number_format(`, `floatval(`, `(float)` casts and printf-family calls with a float
- * conversion (`%f`, `%F`, `%e`, `%E`, `%g`, `%G`), and fails on any hit outside those two files
- * that isn't listed in KNOWN with its reason. A new hit must be removed, not added to KNOWN,
- * unless it doesn't touch money or a rate.
+ * INV-01 (docs/GUARDRAILS.md): only `InstallmentCalculator::display()` rounds money or rates.
+ * This scans the PHP code of `api/src/`, `api/bin/`, `api/db/` and `api/public/` (comments,
+ * docblocks and string contents ignored, so SQL text doesn't count) for `round(`, `floor(`,
+ * `ceil(`, `fdiv(`, `number_format(`, `floatval(`, `(float)` casts and printf-family calls with
+ * a float conversion (`%f`, `%F`, `%e`, `%E`, `%g`, `%G`), and fails on any hit outside that
+ * file that isn't listed in KNOWN with its reason. A new hit must be removed, not added to
+ * KNOWN, unless it doesn't touch money or a rate. (L-04 cleanup B added floor, ceil, fdiv and
+ * the three folders, and removed `Metrics/ReportFormatter.php` from the allowed files: it
+ * formats integers only, so it needs no exception.)
+ *
+ * It can't see dynamic calls (`array_map('round', …)`, `$f = 'round'; $f()`, a format string
+ * in a variable); the behaviour tests are the backstop.
  */
 final class RoundingRuleTest extends TestCase
 {
-    /** Files that may round or format money (INV-01). */
-    private const ALLOWED_FILES = ['Convert/InstallmentCalculator.php', 'Metrics/ReportFormatter.php'];
+    /** The folders under api/ that are scanned. */
+    private const ROOTS = ['src', 'bin', 'db', 'public'];
+
+    /** Files that may round or format money (INV-01), relative to api/. */
+    private const ALLOWED_FILES = ['src/Convert/InstallmentCalculator.php'];
 
     /**
      * Hits that don't round or format money or rates, file => kind => count.
@@ -32,34 +40,41 @@ final class RoundingRuleTest extends TestCase
      *   agree before ScaledRate reads the text; nothing is rounded or stored from the float.
      */
     private const KNOWN = [
-        'Config/ConfigRepository.php' => ['(float)' => 1],
-        'Convert/ScaledRate.php' => ['(float)' => 1],
-        'Rates/ExchangeRateClient.php' => ['(float)' => 3],
+        'src/Config/ConfigRepository.php' => ['(float)' => 1],
+        'src/Convert/ScaledRate.php' => ['(float)' => 1],
+        'src/Rates/ExchangeRateClient.php' => ['(float)' => 3],
     ];
 
-    private const ROUNDING_FUNCTIONS = ['round', 'number_format', 'floatval'];
+    private const ROUNDING_FUNCTIONS = ['round', 'floor', 'ceil', 'fdiv', 'number_format', 'floatval'];
     private const PRINTF_FUNCTIONS = ['printf', 'sprintf', 'vprintf', 'vsprintf', 'fprintf', 'vfprintf'];
 
     public function testOnlyTheCalculatorRoundsOrFormatsMoney(): void
     {
-        $src = dirname(__DIR__, 2) . '/src';
+        $api = dirname(__DIR__, 2);
         $found = [];
-        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($src, \FilesystemIterator::SKIP_DOTS)) as $file) {
-            if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
-                continue;
-            }
-            $relative = str_replace('\\', '/', substr($file->getPathname(), strlen($src) + 1));
-            if (in_array($relative, self::ALLOWED_FILES, true)) {
-                continue;
-            }
-            $hits = self::scan((string) file_get_contents($file->getPathname()));
-            if ($hits !== []) {
-                ksort($hits);
-                $found[$relative] = $hits;
+        $scanned = [];
+        foreach (self::ROOTS as $root) {
+            foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($api . '/' . $root, \FilesystemIterator::SKIP_DOTS)) as $file) {
+                if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
+                    continue;
+                }
+                $relative = str_replace('\\', '/', substr($file->getPathname(), strlen($api) + 1));
+                $scanned[$root] = ($scanned[$root] ?? 0) + 1;
+                if (in_array($relative, self::ALLOWED_FILES, true)) {
+                    continue;
+                }
+                $hits = self::scan((string) file_get_contents($file->getPathname()));
+                if ($hits !== []) {
+                    ksort($hits);
+                    $found[$relative] = $hits;
+                }
             }
         }
         ksort($found);
 
+        self::assertSame(self::ROOTS, array_keys($scanned), 'every folder holds PHP that was scanned');
+        self::assertContains('src/Convert/InstallmentCalculator.php', self::ALLOWED_FILES);
+        self::assertFileExists($api . '/' . self::ALLOWED_FILES[0]);
         self::assertSame(self::KNOWN, $found, 'rounding or float formatting outside InstallmentCalculator (INV-01)');
     }
 
@@ -79,10 +94,16 @@ final class RoundingRuleTest extends TestCase
             $g = printf('%e', 7);
             $h = sprintf('%d items, 100%%f off', 8);
             $i = floatval('9');
+            $j = floor(10.5);
+            $k = \CEIL(11.5);
+            $l = fdiv(12, 5);
+            $m = $object->floor(13);
             PHP;
 
+        // A method named floor() is a hit too: the scan reads names, not types, so a method
+        // that shares a rounding function's name would need a KNOWN entry.
         self::assertSame(
-            ['(float)' => 1, 'floatval(' => 1, 'number_format(' => 1, 'printf float' => 3, 'round(' => 2],
+            ['(float)' => 1, 'ceil(' => 1, 'fdiv(' => 1, 'floatval(' => 1, 'floor(' => 2, 'number_format(' => 1, 'printf float' => 3, 'round(' => 2],
             (static function (array $hits): array { ksort($hits); return $hits; })(self::scan($code)),
         );
     }

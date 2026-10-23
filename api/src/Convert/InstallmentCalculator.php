@@ -37,6 +37,13 @@ final class InstallmentCalculator
     /** display.rate keeps at most this many decimals. */
     public const RATE_DECIMALS = 6;
 
+    /**
+     * The largest minor-unit exponent exactTotal() accepts: the largest in MinorUnits (CLF,
+     * UYW). L-04 cleanup B narrowed it from 12, so no exponent outside the ones in use can
+     * reach the arithmetic; a currency with more decimals needs this raised, with its tests.
+     */
+    public const MAX_EXPONENT = 4;
+
     /** cents (10^2) × rate_scaled (10^10): the product's scale is 10^12. */
     private const PRODUCT_DECIMALS = 12;
 
@@ -48,7 +55,7 @@ final class InstallmentCalculator
      * limbed arithmetic, which is far above that).
      *
      * @throws InvalidArgumentException for negative cents, a rate outside ScaledRate's range,
-     *         or an exponent outside 0..12
+     *         or an exponent outside 0..MAX_EXPONENT (4)
      */
     public static function minorUnitTotal(int $cents, int $rateScaled, string $currency): ?int
     {
@@ -64,8 +71,8 @@ final class InstallmentCalculator
         if ($cents < 0 || $cents >= self::LIMB || $rateScaled < 1 || $rateScaled >= ScaledRate::MAX_SCALED) {
             throw new InvalidArgumentException('Cents are in 0..10^9 − 1 and a scaled rate is in range');
         }
-        if ($exponent < 0 || $exponent > self::PRODUCT_DECIMALS) {
-            throw new InvalidArgumentException('An exponent is between 0 and 12');
+        if ($exponent < 0 || $exponent > self::MAX_EXPONENT) {
+            throw new InvalidArgumentException('An exponent is between 0 and ' . self::MAX_EXPONENT);
         }
 
         // rate_scaled = hi × 10^9 + lo, so cents × rate_scaled = high × 10^9 + low, low < 10^9.

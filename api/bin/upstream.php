@@ -5,9 +5,10 @@ declare(strict_types=1);
 /*
  * Upstream breaker and rate cache, for operators (docs/PLAN.md §3b).
  *
- *     php bin/upstream.php status   print the breaker state and the stored rate table's times
- *     php bin/upstream.php reset    clear the breaker (after fixing the key, or to retry early);
- *                                   records an `upstream.breaker_reset` event
+ *     php api/bin/upstream.php status   print the breaker state and the stored rate table's
+ *                                       times
+ *     php api/bin/upstream.php reset    clear the breaker (after fixing the key, or to retry
+ *                                       early); records an `upstream.breaker_reset` event
  *
  * Never calls upstream and never prints the API key (only whether one is set). Refuses to run
  * while the database is behind the code or its SQLite file is missing, which it never creates
@@ -34,7 +35,7 @@ $mode = match ($args) {
     default => null,
 };
 if ($mode === null) {
-    fwrite(STDERR, "usage: php bin/upstream.php status | reset\n");
+    fwrite(STDERR, "usage: php api/bin/upstream.php status | reset\n");
     exit(2);
 }
 

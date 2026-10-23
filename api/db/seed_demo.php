@@ -48,9 +48,8 @@ declare(strict_types=1);
  *
  * Exit codes: 0 done; 1 failed (no database file, a schema behind the code or corrupt, a
  * database that already has events or sessions, a TTL too long for the demo, a failed write;
- * stderr names the exception
- * class only, or gives a fixed text); 2 usage. `--help` prints the usage and exits 0. Like
- * bin/report.php, a missing SQLite file is refused and never created.
+ * stderr names the exception class only, or gives a fixed text); 2 usage. `--help` prints the
+ * usage and exits 0. Like bin/report.php, a missing SQLite file is refused and never created.
  *
  * A test may `require_once` this file for DemoWriter and the SEED_* lists: the script part runs
  * only when this file is the one PHP was started with.

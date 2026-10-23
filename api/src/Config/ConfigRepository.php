@@ -13,9 +13,10 @@ use InvalidArgumentException;
  * Each getter checks the key exists and has the expected type, so a typo or a wrong default
  * fails loudly instead of returning a surprising value.
  *
- * Ranges that no reader can work around are checked when the config loads (L-04):
- * `amount.max` must be at least 1, or every amount would fail `over_max`. A wrong type is still
- * reported only when the key is read, so a key no request uses can't break the others.
+ * `amount.max` is checked when the config loads, since no reader can work around it: it must be
+ * an integer (L-04 cleanup B, owner decision 2026-10-22) of at least 1 (cleanup A), or every
+ * amount would fail `over_max`. Every other key's type is reported only when the key is read,
+ * so a key no request uses can't break the others.
  */
 final class ConfigRepository
 {
@@ -35,7 +36,10 @@ final class ConfigRepository
         $this->values = $overrides + $defaults;
 
         $amountMax = $this->values['amount.max'] ?? null;
-        if (is_int($amountMax) && $amountMax < 1) {
+        if (!is_int($amountMax)) {
+            throw new InvalidArgumentException('amount.max must be an integer');
+        }
+        if ($amountMax < 1) {
             throw new InvalidArgumentException('amount.max must be at least 1');
         }
     }

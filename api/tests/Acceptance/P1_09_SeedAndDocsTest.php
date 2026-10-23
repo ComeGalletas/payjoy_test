@@ -140,8 +140,9 @@ final class P1_09_SeedAndDocsTest extends TestCase
         // carry no demo marker.
         $open = TestEnvironment::connect($path)->query("SELECT session_id FROM sessions WHERE status = 'open' ORDER BY channel DESC")->fetchAll(PDO::FETCH_COLUMN);
         self::assertCount(2, $open);
-        $install = (string) file_get_contents(self::repoRoot() . '/docs/INSTALL_LOCAL.md');
-        self::assertStringContainsString("`{$open[0]}` (static) and\n`{$open[1]}` (cli)", $install);
+        // L-04 cleanup B: whitespace normalised, so rewrapping the paragraph can't break it.
+        $install = (string) preg_replace('/\s+/', ' ', (string) file_get_contents(self::repoRoot() . '/docs/INSTALL_LOCAL.md'));
+        self::assertStringContainsString("`{$open[0]}` (static) and `{$open[1]}` (cli)", $install);
 
         [$exit, $table, $err] = self::runDocCommand(self::datedReportCommand($from, $to), $path);
         self::assertSame([0, ''], [$exit, $err]);
@@ -241,10 +242,52 @@ final class P1_09_SeedAndDocsTest extends TestCase
             'csv' => str_replace("\r\n", "\n", self::runScript('bin/report.php', [...$period, '--format=csv'], $path)[1]),
         ];
         foreach ($blocks as [, $format, $block]) {
+            // L-04 cleanup B: each part is whole lines of the output (it starts at a line
+            // start, not partway through a line), and the parts come in the output's order.
+            $output = "\n" . $outputs[$format];
+            $offset = 0;
             foreach (preg_split('/\n\n+/', $block) ?: [] as $part) {
-                self::assertStringContainsString($part . "\n", $outputs[$format], "REPORTS.md {$format} example");
+                $at = strpos($output, "\n" . $part . "\n", $offset);
+                self::assertNotFalse($at, "REPORTS.md {$format} example, whole lines in order:\n{$part}");
+                $offset = $at + strlen($part) + 1;
             }
         }
+    }
+
+    /**
+     * L-04 cleanup B: every note REPORTS.md quotes (the three fixed ones and the notes table) is
+     * a note ReportQuery can print, word for word with `N` (or the default 30 days) for each
+     * number, and every note ReportQuery can print is quoted there once.
+     */
+    public function testEveryQuotedNoteInReportsMdIsAReportQueryNote(): void
+    {
+        $doc = (string) file_get_contents(self::repoRoot() . '/docs/REPORTS.md');
+        self::assertSame(1, preg_match('/^## Notes\n(.*?)(?=^## )/ms', $doc, $section), 'REPORTS.md has a Notes section');
+        preg_match_all('/^- "(.+?)"(?=\s|$)/ms', $section[1], $fixed);
+        preg_match_all('/^\| "(.+?)" \| /m', $section[1], $table);
+        $quoted = array_map(
+            static fn (string $note): string => (string) preg_replace('/\s+/', ' ', $note),
+            [...$fixed[1], ...$table[1]],
+        );
+        self::assertCount(3, $fixed[1], 'the three notes that are always there');
+        self::assertSame(self::FIXED_NOTES, array_slice($quoted, 0, 3));
+
+        $patterns = [];
+        foreach (self::reportQueryNotes() as $note) {
+            $patterns[$note] = '/^' . implode('(?:N|\d+)', array_map(static fn (string $text): string => preg_quote($text, '/'), explode('%d', $note))) . '$/D';
+        }
+        self::assertCount(11, $patterns, 'ReportQuery has eleven notes');
+
+        $matched = [];
+        foreach ($quoted as $text) {
+            $hits = array_keys(array_filter($patterns, static fn (string $pattern): bool => preg_match($pattern, $text) === 1));
+            self::assertCount(1, $hits, "REPORTS.md quotes a note ReportQuery prints: {$text}");
+            $matched[] = $hits[0];
+        }
+        sort($matched);
+        $all = array_keys($patterns);
+        sort($all);
+        self::assertSame($all, $matched, 'every ReportQuery note is quoted in REPORTS.md once');
     }
 
     public function testSeedDemoWritesOnlyDemoRowsWithDocumentationIpsAndIntegers(): void
@@ -406,6 +449,18 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $path = $root . '/api/var/app.db';
         self::assertSame(0, self::runScript('bin/migrate.php', [], $path)[0]);
         self::assertSame(0, self::runScript('db/seed_demo.php', [], $path)[0]);
+
+        // L-04 cleanup B: a write that is still only in app.db-wal, as while the server runs.
+        // This connection stays open and never checkpoints, so app.db itself lacks the row: a
+        // plain file copy would miss it, and VACUUM INTO, which reads through SQLite, has it.
+        $live = TestEnvironment::connect($path);
+        $live->exec('PRAGMA wal_autocheckpoint = 0');
+        $live->exec("INSERT INTO app_state (key, value, updated_at) VALUES ('p1_09_backup_marker', 'only in the WAL', 1)");
+        self::assertGreaterThan(0, filesize($path . '-wal'), 'the marker is in the WAL file');
+        $plain = TestEnvironment::tempDir('backup-plain') . '/plain-copy.db';
+        self::assertTrue(copy($path, $plain));
+        self::assertSame([], TestEnvironment::connect($plain)->query("SELECT key FROM app_state WHERE key = 'p1_09_backup_marker'")->fetchAll(), 'a plain copy of app.db misses the marker');
+
         self::assertSame([0, 'backed up' . PHP_EOL, ''], self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-r', $code], $root));
         $copies = glob($root . '/api/var/app.db.bak-*') ?: [];
         self::assertCount(1, $copies);
@@ -413,26 +468,36 @@ final class P1_09_SeedAndDocsTest extends TestCase
         self::assertFileDoesNotExist($copies[0] . '-wal');
         $copy = TestEnvironment::connect($copies[0]);
         self::assertSame('ok', $copy->query('PRAGMA integrity_check')->fetchColumn());
-        self::assertSame(self::snapshot(TestEnvironment::connect($path)), self::snapshot($copy));
+        self::assertSame('only in the WAL', $copy->query("SELECT value FROM app_state WHERE key = 'p1_09_backup_marker'")->fetchColumn(), 'the backup holds the write app.db-wal still had');
+        self::assertSame(self::snapshot($live), self::snapshot($copy));
     }
 
     public function testAShellDbDsnWinsOverTheDotenvFile(): void
     {
-        // INSTALL_LOCAL.md section 6 relies on this: Bootstrap loads `.env` with
-        // Dotenv::createImmutable(), and the app reads variables through Env. A fixture file
-        // stands in for `.env`, which tests never touch.
+        // INSTALL_LOCAL.md section 6 relies on this: Bootstrap loads `.env`, and the app reads
+        // variables through Env. L-04 cleanup B: Bootstrap::init() itself runs, on a temp
+        // folder standing in for the repository root (its `.env` is a fixture there; the real
+        // `.env` is never touched), with APP_ENV unset from test so it loads the file.
         $dir = TestEnvironment::tempDir('dotenv');
-        file_put_contents($dir . '/fixture.env', "DB_DSN=sqlite:from-the-file.db\nFX_P1_09_FILE_ONLY=from-the-file\n");
+        file_put_contents($dir . '/.env', "DB_DSN=sqlite:from-the-file.db\nFX_P1_09_FILE_ONLY=from-the-file\n");
         $code = 'require ' . var_export(dirname(__DIR__, 2) . '/vendor/autoload.php', true) . ';'
-            . ' Dotenv\Dotenv::createImmutable(' . var_export($dir, true) . ", 'fixture.env')->safeLoad();"
+            . ' FxInstallments\Bootstrap::init(' . var_export($dir . '/api', true) . ');'
             . " echo FxInstallments\\Env::get('DB_DSN'), ' ', FxInstallments\\Env::get('FX_P1_09_FILE_ONLY'), PHP_EOL;";
         foreach (['GPCS', 'EGPCS'] as $order) {
             self::assertSame(
                 [0, 'sqlite:from-the-shell.db from-the-file' . PHP_EOL, ''],
-                self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-d', "variables_order={$order}", '-r', $code], $dir, ['DB_DSN' => 'sqlite:from-the-shell.db']),
+                self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-d', "variables_order={$order}", '-r', $code], $dir, ['DB_DSN' => 'sqlite:from-the-shell.db', 'APP_ENV' => 'local']),
                 "variables_order={$order}",
             );
         }
+        // Under APP_ENV=test (runIn's default) Bootstrap skips the file: only the shell's value.
+        $skipped = 'require ' . var_export(dirname(__DIR__, 2) . '/vendor/autoload.php', true) . ';'
+            . ' FxInstallments\Bootstrap::init(' . var_export($dir . '/api', true) . ');'
+            . " var_export([FxInstallments\\Env::get('DB_DSN'), FxInstallments\\Env::get('FX_P1_09_FILE_ONLY')]);";
+        self::assertSame(
+            [0, var_export(['sqlite:from-the-shell.db', null], true), ''],
+            self::runIn([PHP_BINARY, ...self::GATE_FLAGS, '-r', $skipped], $dir, ['DB_DSN' => 'sqlite:from-the-shell.db']),
+        );
     }
 
     public function testConfigMistakesFailAsTheInstallGuideSays(): void
@@ -451,8 +516,15 @@ final class P1_09_SeedAndDocsTest extends TestCase
                 $this->addToAssertionCount(1);
             }
         }
-        // A key read only on use leaves the kernel buildable.
-        TestEnvironment::app(config: ['amount.max' => '1000000'])->kernel();
+        // A key read only on use leaves the kernel buildable. (amount.max of a wrong type no
+        // longer does: since L-04 cleanup B it is refused when the config loads.)
+        TestEnvironment::app(config: ['bot.session_ttl_minutes' => '30'])->kernel();
+        try {
+            TestEnvironment::app(config: ['amount.max' => '1000000']);
+            self::fail('the config accepted a string amount.max');
+        } catch (\InvalidArgumentException $e) {
+            self::assertSame('amount.max must be an integer', $e->getMessage());
+        }
 
         // --prune: Retention and the config getter refuse what the guide says.
         $pdo = TestEnvironment::connect(TestEnvironment::freshDatabasePath());
@@ -516,26 +588,40 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $lines = array_values(array_filter(array_map('trim', explode("\n", implode("\n", $blocks[1]))), static fn (string $line): bool => $line !== ''));
 
         $dsns = [];
-        foreach ($lines as $line) {
-            self::assertStringNotContainsString('api/var/app.db', $line, 'no demo command names the real database');
-            if (preg_match('/^\$env:DB_DSN = "([^"]*)"$/D', $line, $match) === 1) {
-                $dsns['powershell'][] = $match[1];
-            } elseif (preg_match('/^export DB_DSN=(\S*)$/D', $line, $match) === 1) {
-                $dsns['posix'][] = $match[1];
-            } else {
-                self::assertStringNotContainsString('DB_DSN', $line, "an unexpected DB_DSN form: {$line}");
+        $perSection = [];
+        foreach (preg_split('/^(?=## \d+\. )/m', $section[0]) ?: [] as $subsection) {
+            if (preg_match('/^## (\d+)\. /', $subsection, $number) !== 1) {
+                continue;
+            }
+            $perSection[$number[1]] = ['powershell' => 0, 'posix' => 0];
+            preg_match_all('/^ *```[a-z]*\n(.*?)^ *```$/ms', $subsection, $sectionBlocks);
+            foreach (explode("\n", implode("\n", $sectionBlocks[1])) as $line) {
+                $line = trim($line);
+                self::assertStringNotContainsString('api/var/app.db', $line, 'no demo command names the real database');
+                if (preg_match('/^\$env:DB_DSN = "([^"]*)"$/D', $line, $match) === 1) {
+                    $dsns[] = $match[1];
+                    $perSection[$number[1]]['powershell']++;
+                } elseif (preg_match('/^export DB_DSN=(\S*)$/D', $line, $match) === 1) {
+                    $dsns[] = $match[1];
+                    $perSection[$number[1]]['posix']++;
+                } else {
+                    self::assertStringNotContainsString('DB_DSN', $line, "an unexpected DB_DSN form: {$line}");
+                }
             }
         }
-        // Section 6 (migrate and seed) and section 8's second terminal (bot and report), each
-        // in both shell forms.
-        self::assertCount(2, $dsns['powershell'] ?? [], 'PowerShell sets DB_DSN in both demo shells');
-        self::assertCount(2, $dsns['posix'] ?? [], 'Linux and macOS set DB_DSN in both demo shells');
-        $all = array_unique([...$dsns['powershell'], ...$dsns['posix']]);
+        // L-04 cleanup B: counted per section. Section 6 (migrate and seed) and section 8's
+        // second terminal (bot and report) set DB_DSN once in each shell form; section 7 (the
+        // server, started in section 6's shell) doesn't set it.
+        self::assertSame([
+            '6' => ['powershell' => 1, 'posix' => 1],
+            '7' => ['powershell' => 0, 'posix' => 0],
+            '8' => ['powershell' => 1, 'posix' => 1],
+        ], $perSection, 'the demo DB_DSN lines, per section');
+        $all = array_values(array_unique($dsns));
         self::assertCount(1, $all, 'every demo shell points at the same file');
         $dsn = $all[0];
         self::assertMatchesRegularExpression('~^sqlite:api/var/[a-z0-9_-]+\.db$~D', $dsn, 'a relative SQLite file under api/var');
-        self::assertNotSame(Database::defaultDsn('api'), $dsn);
-        self::assertNotSame('sqlite:api/var/app.db', $dsn, 'not the real database');
+        self::assertNotSame(Database::defaultDsn('api'), $dsn, 'not the real database');
 
         // The demo shell's commands: migrate and seed (section 6), the demo server (section 7),
         // the bot and the report (section 8).
@@ -548,6 +634,48 @@ final class P1_09_SeedAndDocsTest extends TestCase
             'php -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php',
             'php -d variables_order=EGPCS -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php',
         ], $servers, 'the real server, then the demo server with E in variables_order');
+    }
+
+    /**
+     * The notes ReportQuery can print, as written in its source, sprintf's `%d` kept: the first
+     * string literal of each `$notes[] = …`, and of each `return [<string>` or
+     * `return [sprintf(<string>` that is a list item, not an array key (sweepFirst()).
+     *
+     * @return list<string>
+     */
+    private static function reportQueryNotes(): array
+    {
+        $tokens = array_values(array_filter(
+            token_get_all((string) file_get_contents(dirname(__DIR__, 2) . '/src/Metrics/ReportQuery.php')),
+            static fn (array|string $token): bool => !is_array($token) || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true),
+        ));
+        $text = static fn (array|string $token): string => is_array($token) ? $token[1] : $token;
+        $isString = static fn (array|string|null $token): bool => is_array($token) && $token[0] === T_CONSTANT_ENCAPSED_STRING;
+        $notes = [];
+        foreach ($tokens as $i => $token) {
+            $literal = null;
+            if ($text($token) === '$notes' && array_map($text, array_slice($tokens, $i + 1, 3)) === ['[', ']', '=']) {
+                for ($j = $i + 4; isset($tokens[$j]) && $text($tokens[$j]) !== ';'; $j++) {
+                    if ($isString($tokens[$j])) {
+                        $literal = $j;
+                        break;
+                    }
+                }
+            } elseif (is_array($token) && $token[0] === T_RETURN && $text($tokens[$i + 1] ?? '') === '[') {
+                $k = $text($tokens[$i + 2] ?? '') === 'sprintf' && $text($tokens[$i + 3] ?? '') === '(' ? $i + 4 : $i + 2;
+                if ($isString($tokens[$k] ?? null) && $text($tokens[$k + 1] ?? '') !== '=>') {
+                    $literal = $k;
+                }
+            }
+            if ($literal === null) {
+                continue;
+            }
+            $source = $tokens[$literal][1];
+            self::assertSame("'", $source[0], 'a single-quoted note: ' . $source);
+            $notes[] = str_replace(["\\'", '\\\\'], ["'", '\\'], substr($source, 1, -1));
+        }
+
+        return $notes;
     }
 
     /**

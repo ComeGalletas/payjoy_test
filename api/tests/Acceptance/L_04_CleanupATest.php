@@ -36,8 +36,8 @@ require_once dirname(__DIR__, 2) . '/db/seed_demo.php';
  *
  * The unit tests carry the rest of the list (ConfigRepositoryTest, ClientIpTest,
  * RateLimiterRaceTest, MetricsTest, FlowEngineTest, KernelBlockingTest, CsvWriterTest,
- * SmokeTest for the PHP floor). Every subprocess runs with ADR 0018's gate flags, APP_ENV=test and a canary
- * key behind a closed proxy port; `php -S` runs only through BuiltInServer.
+ * SmokeTest for the PHP floor). Every subprocess runs with ADR 0018's gate flags, APP_ENV=test
+ * and a canary key behind a closed proxy port; `php -S` runs only through BuiltInServer.
  */
 final class L_04_CleanupATest extends TestCase
 {

@@ -5,9 +5,10 @@ declare(strict_types=1);
 /*
  * Database schema and retention (docs/PLAN.md §5).
  *
- *     php bin/migrate.php           apply every pending migration to DB_DSN (default api/var/app.db)
- *     php bin/migrate.php --prune   delete expired rows (refuses while the schema is behind)
- *     php bin/migrate.php --dump    regenerate api/db/schema.sql from the migration list
+ *     php api/bin/migrate.php          apply every pending migration to DB_DSN
+ *                                      (default api/var/app.db)
+ *     php api/bin/migrate.php --prune  delete expired rows (refuses while the schema is behind)
+ *     php api/bin/migrate.php --dump   regenerate api/db/schema.sql from the migration list
  *
  * Run it at install and on every deploy: the app never migrates, and answers 500 INTERNAL while
  * the database is behind the code. Run --prune from a daily job. Plain migrate is the only
@@ -37,9 +38,11 @@ $mode = match ($args) {
     default => null,
 };
 if ($mode === null) {
-    fwrite(STDERR, "usage: php bin/migrate.php [--prune | --dump]\n");
+    fwrite(STDERR, "usage: php api/bin/migrate.php [--prune | --dump]\n");
     exit(2);
 }
+// What a failure line starts with: `prune:` for --prune, `migrate:` otherwise.
+$prefix = $mode === 'prune' ? 'prune' : 'migrate';
 
 try {
     if ($mode === 'dump') {
@@ -76,9 +79,9 @@ try {
     fwrite(STDERR, 'prune: ' . $e->getMessage() . "\n");
     exit(1);
 } catch (DatabaseFileMissing $e) {
-    fwrite(STDERR, "{$mode}: failed: " . $e->getMessage() . "\n");
+    fwrite(STDERR, "{$prefix}: failed: " . $e->getMessage() . "\n");
     exit(1);
 } catch (Throwable $e) {
-    fwrite(STDERR, sprintf("%s: failed: %s: %s\n", $mode === 'prune' ? 'prune' : 'migrate', $e::class, $e->getMessage()));
+    fwrite(STDERR, sprintf("%s: failed: %s: %s\n", $prefix, $e::class, $e->getMessage()));
     exit(1);
 }

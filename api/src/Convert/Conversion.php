@@ -9,7 +9,8 @@ use FxInstallments\Validation\UsdAmount;
 /**
  * One conversion (docs/PLAN.md §1): the full-precision numbers computed locally, `rate_as_of`,
  * `stale`, and the display block. Nothing here is rounded except the display strings, which
- * are exact for the stored rate; the raw numbers are the nearest doubles (ADR 0011).
+ * are exact for the stored rate; the raw numbers are double arithmetic on the nearest doubles
+ * of the amount and the rate, not the nearest doubles of the exact results (ADR 0011).
  *
  * `rateScaled` is the stored rate the display was computed from (ADR 0017). It isn't in the
  * response; the `api.request` and `bot.session_completed` events store it with `rate_as_of`

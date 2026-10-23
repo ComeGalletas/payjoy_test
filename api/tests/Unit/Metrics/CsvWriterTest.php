@@ -59,7 +59,11 @@ final class CsvWriterTest extends TestCase
         yield 'byte order mark before a formula' => ["\u{FEFF}=1", "'\u{FEFF}=1"];
         yield 'line separator before a formula' => ["\u{2028}=1", "'\u{2028}=1"];
         yield 'a no-break space before text is fine' => ["\u{00A0}a", "\u{00A0}a"];
+        // L-04 cleanup B: next-line in both branches. In UTF-8 `\s` under `/u` matches U+0085.
+        yield 'next-line (U+0085) before a formula' => ["\u{0085}=1", "'\u{0085}=1"];
+        yield 'next-line after a semicolon' => ["a;\u{0085}-1", "\"a;'\u{0085}-1\""];
         yield 'not UTF-8: a Latin-1 no-break space before a formula' => ["\xA0=1", "'\xA0=1"];
+        yield 'not UTF-8: a Latin-1 next-line before a formula' => ["\x85=1", "'\x85=1"];
         yield 'not UTF-8: other bytes are fine' => ["\xFFa", "\xFFa"];
     }
 

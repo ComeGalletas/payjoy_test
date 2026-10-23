@@ -82,14 +82,43 @@ final class ConfigRepositoryTest extends TestCase
         new ConfigRepository(['amount.max' => $max]);
     }
 
-    public function testTheSmallestAmountMaxLoadsAndAWrongTypeStillFailsOnlyWhenRead(): void
+    public function testTheSmallestAmountMaxLoads(): void
     {
         self::assertSame(1, (new ConfigRepository(['amount.max' => 1]))->int('amount.max'));
+    }
 
-        // A wrong type is a read-time error (INSTALL_LOCAL.md: the key is read only on use).
-        $config = new ConfigRepository(['amount.max' => '1000000']);
+    /**
+     * @return iterable<string, array{mixed}>
+     */
+    public static function nonIntegerAmountMaxima(): iterable
+    {
+        yield 'a float' => [0.5];
+        yield 'a whole float' => [1000000.0];
+        yield 'a numeric string' => ['100'];
+        yield 'true' => [true];
+        yield 'null' => [null];
+        yield 'a list' => [[1000000]];
+    }
+
+    /**
+     * L-04 cleanup B (owner decision 2026-10-22): a non-integer `amount.max` is refused when the
+     * config loads too, not only when it is read.
+     */
+    #[DataProvider('nonIntegerAmountMaxima')]
+    public function testANonIntegerAmountMaxIsRefusedWhenTheConfigLoads(mixed $max): void
+    {
         $this->expectException(InvalidArgumentException::class);
-        $config->int('amount.max');
+        $this->expectExceptionMessage('amount.max must be an integer');
+
+        new ConfigRepository(['amount.max' => $max]);
+    }
+
+    public function testAWrongTypeOfAnotherKeyStillFailsOnlyWhenRead(): void
+    {
+        // INSTALL_LOCAL.md section 10: a key other than amount.max is type-checked when read.
+        $config = new ConfigRepository(['bot.session_ttl_minutes' => '30']);
+        $this->expectException(InvalidArgumentException::class);
+        $config->int('bot.session_ttl_minutes');
     }
 
     public function testAStringListMustHoldOnlyStrings(): void

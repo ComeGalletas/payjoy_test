@@ -5,7 +5,7 @@ declare(strict_types=1);
 /*
  * Reports for operators (docs/PLAN.md §7, P1-08): the same numbers as `GET /reports`.
  *
- *     php bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]
+ *     php api/bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]
  *
  * `from` and `to` are days in `reports.timezone`, both included; the default is the last 7
  * days, today included, and a report covers at most 366 days. `--format` is `table` (default,
@@ -32,7 +32,7 @@ use FxInstallments\Metrics\ReportPeriod;
 $apiRoot = dirname(__DIR__);
 require $apiRoot . '/vendor/autoload.php';
 
-const REPORT_USAGE = "usage: php bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]\n";
+const REPORT_USAGE = "usage: php api/bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]\n";
 const REPORT_FORMATS = ['table', 'csv', 'json'];
 
 $usage = static function (string $problem = ''): never {

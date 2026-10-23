@@ -97,6 +97,40 @@ final class DatabaseTest extends TestCase
     }
 
     /**
+     * L-04 cleanup B (mutation M1): a file removed after the existence check is refused, not
+     * made, because SQLite opens it without SQLITE_OPEN_CREATE. The race is staged with PHP's
+     * stat cache: is_file() here caches "a file" for the path, another process removes the
+     * file (which leaves this process's cache alone), and fromEnvironment()'s own is_file()
+     * reads the cached answer. With the create flag SQLite would make an empty file, and the
+     * schema check would report SchemaOutOfDate instead.
+     */
+    public function testAFileRemovedAfterTheCheckIsNotCreated(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
+        self::assertTrue(is_file($path));
+
+        $process = proc_open(
+            [PHP_BINARY, '-d', 'allow_url_fopen=0', '-d', 'disable_functions=curl_exec,curl_multi_exec', '-r', 'exit(unlink($argv[1]) ? 0 : 1);', $path],
+            [],
+            $pipes,
+        );
+        self::assertIsResource($process);
+        self::assertSame(0, proc_close($process), 'another process removed the file');
+        self::assertTrue(is_file($path), 'the stat cache still says the file is there: the race is staged');
+
+        try {
+            Database::fromEnvironment(dirname(__DIR__, 3));
+            self::fail('SQLite opened a file that is gone');
+        } catch (PDOException $e) {
+            self::assertStringContainsString('unable to open database file', $e->getMessage());
+        }
+
+        clearstatcache();
+        self::assertFileDoesNotExist($path, 'the open did not create the file');
+    }
+
+    /**
      * @return iterable<string, array{string|null, string}>
      */
     public static function creatableDsns(): iterable
