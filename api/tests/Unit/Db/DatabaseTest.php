@@ -6,10 +6,14 @@ namespace FxInstallments\Tests\Unit\Db;
 
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
+use FxInstallments\Db\DatabaseFileMissing;
+use FxInstallments\Db\SchemaCorrupt;
+use FxInstallments\Db\SchemaOutOfDate;
 use FxInstallments\Tests\Support\OverridesEnvironment;
 use FxInstallments\Tests\Support\TestEnvironment;
 use PDO;
 use PDOException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -68,9 +72,118 @@ final class DatabaseTest extends TestCase
         $path = TestEnvironment::tempDir() . '/env.db';
         $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
 
-        Database::fromEnvironment(dirname(__DIR__, 3))->exec('CREATE TABLE t (x INTEGER)');
+        Database::fromEnvironment(dirname(__DIR__, 3), create: true)->exec('CREATE TABLE t (x INTEGER)');
 
         self::assertFileExists($path);
+    }
+
+    /**
+     * L-04: only a command that may create the database (migrate) creates a missing SQLite
+     * file; every other caller is refused before anything is opened.
+     */
+    public function testFromEnvironmentRefusesAMissingSqliteFileWithoutCreatingIt(): void
+    {
+        $dir = TestEnvironment::tempDir('missing') . '/not-yet';
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $dir . '/app.db');
+
+        try {
+            Database::fromEnvironment(dirname(__DIR__, 3));
+            self::fail('a missing file must be refused');
+        } catch (DatabaseFileMissing $e) {
+            self::assertSame('no database file (run php api/bin/migrate.php first)', $e->getMessage());
+        }
+
+        self::assertDirectoryDoesNotExist($dir);
+    }
+
+    /**
+     * @return iterable<string, array{string|null, string}>
+     */
+    public static function creatableDsns(): iterable
+    {
+        // The P1-09 finding: on Windows dirname(__DIR__) has backslashes, so an explicit
+        // `sqlite:api/var/app.db` never equalled the default DSN and its folder wasn't created.
+        yield 'the default' => [null, 'repo/api/var/app.db'];
+        yield 'the default, given explicitly' => ['sqlite:api/var/app.db', 'repo/api/var/app.db'];
+        yield 'another relative file' => ['sqlite:api/var/demo.db', 'repo/api/var/demo.db'];
+        yield 'a relative file in a new folder' => ['sqlite:data/one/two.db', 'repo/data/one/two.db'];
+        yield 'an absolute file in a new folder' => ['sqlite:{root}/elsewhere/deep/app.db', 'elsewhere/deep/app.db'];
+    }
+
+    #[DataProvider('creatableDsns')]
+    public function testMigrateCreatesTheFolderOfAnySqliteFile(?string $dsn, string $expected): void
+    {
+        $root = TestEnvironment::tempDir('create');
+        // As dirname(__DIR__) gives it: the platform's separator.
+        $apiRoot = $root . DIRECTORY_SEPARATOR . 'repo' . DIRECTORY_SEPARATOR . 'api';
+        $this->setEnvironment('DB_DSN', $dsn === null ? null : str_replace('{root}', $root, $dsn));
+
+        $pdo = Database::fromEnvironment($apiRoot, create: true);
+
+        self::assertFileExists($root . '/' . $expected);
+        self::assertSame('wal', $pdo->query('PRAGMA journal_mode')->fetchColumn());
+        self::assertSame([], $pdo->query('SELECT name FROM sqlite_master')->fetchAll(), 'creating runs no migration');
+    }
+
+    /**
+     * L-04: the schema is checked before the journal mode is set, so refusing an empty (or old)
+     * file writes nothing to it, not even the WAL header.
+     */
+    public function testTheSchemaIsCheckedBeforeWalSoAnEmptyFileStaysEmpty(): void
+    {
+        $path = TestEnvironment::tempDir('empty') . '/empty.db';
+        touch($path);
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
+
+        try {
+            Database::fromEnvironment(dirname(__DIR__, 3));
+            self::fail('an empty database is behind the code');
+        } catch (SchemaOutOfDate $e) {
+            self::assertSame(0, $e->current);
+        }
+
+        clearstatcache();
+        self::assertSame(0, filesize($path), 'nothing was written');
+        self::assertFileDoesNotExist($path . '-wal');
+    }
+
+    public function testACurrentDatabaseOpensInWalMode(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
+
+        $pdo = Database::fromEnvironment(dirname(__DIR__, 3));
+
+        self::assertSame('wal', $pdo->query('PRAGMA journal_mode')->fetchColumn());
+        self::assertSame(5000, (int) $pdo->query('PRAGMA busy_timeout')->fetchColumn());
+    }
+
+    public function testACorruptVersionIsRefusedBeforeWalToo(): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        TestEnvironment::connect($path)->exec("UPDATE app_state SET value = 'garbage' WHERE key = 'schema_version'");
+        $this->setEnvironment('DB_DSN', 'sqlite:' . $path);
+
+        $this->expectException(SchemaCorrupt::class);
+        Database::fromEnvironment(dirname(__DIR__, 3));
+    }
+
+    /**
+     * @return iterable<string, array{string, string|null}>
+     */
+    public static function sqliteFiles(): iterable
+    {
+        yield 'a file' => ['sqlite:/data/app.db', '/data/app.db'];
+        yield 'a Windows file' => ['sqlite:C:\\data\\app.db', 'C:\\data\\app.db'];
+        yield 'in memory' => ['sqlite::memory:', null];
+        yield 'a temporary database' => ['sqlite:', null];
+        yield 'Postgres' => ['pgsql:host=db;dbname=fx', null];
+    }
+
+    #[DataProvider('sqliteFiles')]
+    public function testTheSqliteFileOfADsn(string $dsn, ?string $file): void
+    {
+        self::assertSame($file, Database::sqliteFile($dsn));
     }
 
     public function testThereIsNoFloatBindingHelper(): void

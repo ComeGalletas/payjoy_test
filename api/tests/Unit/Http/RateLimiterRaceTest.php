@@ -11,11 +11,14 @@ use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\RateLimiter;
 use FxInstallments\Http\Request;
 use FxInstallments\Tests\Support\FakeClock;
+use FxInstallments\Tests\Support\HookedPdo;
 use FxInstallments\Tests\Support\RacingPdo;
 use FxInstallments\Tests\Support\TestEnvironment;
 use PDO;
 use PDOException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 /**
  * Two connections to one SQLite file racing on the first request of a window: the
@@ -106,6 +109,81 @@ final class RateLimiterRaceTest extends TestCase
         } finally {
             $a->rollBack();
         }
+    }
+
+    /**
+     * @return iterable<string, array{list<string>}>
+     */
+    public static function otherConstraintFailures(): iterable
+    {
+        yield 'a CHECK constraint' => [[
+            'DROP TABLE rate_limits',
+            'CREATE TABLE rate_limits (ip TEXT NOT NULL, window_start INTEGER NOT NULL, count INTEGER NOT NULL CHECK (count > 1), PRIMARY KEY (ip, window_start))',
+        ]];
+        yield 'a trigger that aborts' => [[
+            "CREATE TRIGGER l04_refuse BEFORE INSERT ON rate_limits BEGIN SELECT RAISE(ABORT, 'l-04 test'); END",
+        ]];
+    }
+
+    /**
+     * L-04: SQLSTATE 23000 also covers CHECK, NOT NULL and trigger failures; only a real
+     * unique-constraint clash is counted again. Anything else fails at once, with one INSERT.
+     *
+     * @param list<string> $setup
+     */
+    #[DataProvider('otherConstraintFailures')]
+    public function testAnotherConstraintFailureIsNotRetried(array $setup): void
+    {
+        $path = TestEnvironment::freshDatabasePath();
+        $setupPdo = Database::connect('sqlite:' . $path);
+        foreach ($setup as $statement) {
+            $setupPdo->exec($statement);
+        }
+        unset($setupPdo);
+        $pdo = HookedPdo::open($path);
+
+        try {
+            self::hit($this->limiter($pdo, 2));
+            self::fail('the failed INSERT should reach the caller');
+        } catch (PDOException $e) {
+            self::assertSame('23000', (string) $e->getCode(), 'the same SQLSTATE as a unique clash');
+        }
+
+        self::assertSame(['UPDATE', 'INSERT'], array_column($pdo->prepared, 0), 'one attempt, no retry');
+        self::assertFalse($pdo->inTransaction());
+    }
+
+    /**
+     * @return iterable<string, array{array{string, int|null, string}, bool}>
+     */
+    public static function driverErrors(): iterable
+    {
+        yield 'SQLite unique' => [['23000', 19, 'UNIQUE constraint failed: rate_limits.ip, rate_limits.window_start'], true];
+        yield 'SQLite extended unique code' => [['23000', 2067, 'UNIQUE constraint failed: rate_limits.ip'], true];
+        yield 'SQLite extended primary key code' => [['23000', 1555, 'UNIQUE constraint failed: rate_limits.ip'], true];
+        yield 'old SQLite primary key text' => [['23000', 19, 'PRIMARY KEY must be unique'], true];
+        yield 'SQLite NOT NULL' => [['23000', 19, 'NOT NULL constraint failed: rate_limits.ip'], false];
+        yield 'SQLite CHECK' => [['23000', 19, 'CHECK constraint failed: count > 1'], false];
+        yield 'SQLite FOREIGN KEY' => [['23000', 19, 'FOREIGN KEY constraint failed'], false];
+        yield 'SQLite trigger text mentioning UNIQUE' => [['23000', 19, 'l-04: not a UNIQUE constraint failed'], false];
+        yield 'Postgres unique_violation' => [['23505', 7, 'ERROR:  duplicate key value violates unique constraint "rate_limits_pkey"'], true];
+        yield 'Postgres not_null_violation' => [['23502', 7, 'ERROR:  null value in column "ip"'], false];
+        yield 'Postgres check_violation' => [['23514', 7, 'ERROR:  new row violates check constraint'], false];
+        yield 'MySQL duplicate entry' => [['23000', 1062, "Duplicate entry 'x' for key 'PRIMARY'"], true];
+        yield 'MySQL column cannot be null' => [['23000', 1048, "Column 'ip' cannot be null"], false];
+        yield 'busy' => [['HY000', 5, 'database is locked'], false];
+    }
+
+    /**
+     * @param array{string, int|null, string} $errorInfo
+     */
+    #[DataProvider('driverErrors')]
+    public function testOnlyAUniqueViolationCountsAsAKeyClash(array $errorInfo, bool $expected): void
+    {
+        $e = new PDOException('SQLSTATE[' . $errorInfo[0] . ']: ' . $errorInfo[2]);
+        $e->errorInfo = $errorInfo;
+
+        self::assertSame($expected, (new ReflectionMethod(RateLimiter::class, 'isUniqueViolation'))->invoke(null, $e));
     }
 
     private function limiter(PDO $pdo, int $perMinute): RateLimiter

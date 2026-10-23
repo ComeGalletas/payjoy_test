@@ -146,7 +146,7 @@ final class P1_02_MigrateTest extends TestCase
 
         self::assertSame(1, $exit);
         self::assertSame('', $out);
-        self::assertSame("prune: Database schema is at version 0, the code needs 3: run php bin/migrate.php\n", $err);
+        self::assertSame("prune: Database schema is at version 0, the code needs 3: run php api/bin/migrate.php\n", $err);
     }
 
     public function testNoColumnInAnyTableHasAFloatingPointType(): void

@@ -17,14 +17,14 @@ declare(strict_types=1);
  * The IP is stored in its canonical form (lowercase, compressed IPv6), which is how PHP and
  * web servers report REMOTE_ADDR. `block` and `unblock` write `ip.block` / `ip.unblock` events
  * without the IP or the reason text. Refuses to run while the database is behind the code,
- * or its SQLite file is missing (run bin/migrate.php first). Exit codes: 0 done, 1 failed,
- * 2 usage.
+ * or its SQLite file is missing (run php api/bin/migrate.php first). Exit codes: 0 done,
+ * 1 failed, 2 usage.
  */
 
 use FxInstallments\Bootstrap;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
-use FxInstallments\Db\Migrator;
+use FxInstallments\Db\DatabaseFileMissing;
 use FxInstallments\Http\IpBlock;
 use FxInstallments\Http\IpBlocking;
 use FxInstallments\Http\IpBlocks;
@@ -97,15 +97,8 @@ $describe = static fn (IpBlock $block): string => sprintf(
 
 try {
     Bootstrap::init($apiRoot);
-    // A missing SQLite file is refused before connecting, so this never creates one.
-    $dsn = Database::dsnFromEnvironment($apiRoot);
-    if (str_starts_with($dsn, 'sqlite:') && substr($dsn, 7) !== ':memory:' && !is_file(substr($dsn, 7))) {
-        fwrite(STDERR, "ip: failed: no database file (run php bin/migrate.php first)\n");
-        exit(1);
-    }
-    $pdo = Database::fromEnvironment($apiRoot);
-    (new Migrator($pdo))->assertCurrent();
-    $db = Connection::wrap($pdo);
+    // Refuses a missing SQLite file (without creating it) and a schema behind the code.
+    $db = Connection::wrap(Database::fromEnvironment($apiRoot));
     $blocks = new IpBlocks($db);
     // ip.block / ip.unblock events never hold the IP, nor the reason text (an operator may
     // type an IP there). A failed event write is noted on stderr and never fails the command.
@@ -163,6 +156,9 @@ try {
         $forever === 0 ? '' : ' (review them: they keep a raw IP until unblocked)',
     ));
     exit(0);
+} catch (DatabaseFileMissing $e) {
+    fwrite(STDERR, 'ip: failed: ' . $e->getMessage() . "\n");
+    exit(1);
 } catch (Throwable $e) {
     // The class only: a message could name the database path or other local details.
     fwrite(STDERR, sprintf("ip: failed: %s\n", $e::class));

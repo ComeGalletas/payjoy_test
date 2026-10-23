@@ -26,7 +26,14 @@ declare(strict_types=1);
  * - **Deterministic:** the same rows every time, at fixed local times on each of the six days
  *   before today, plus two sessions still open, started minutes before now (they stay open for
  *   `bot.session_ttl_minutes`, then the next sweep closes them as expired). Only the times move
- *   with "now"; there is no randomness.
+ *   with "now"; there is no randomness. The local times hold on a daylight-saving change day
+ *   in `reports.timezone` too (L-04).
+ * - **Follows the config (L-04):** the demo block lasts `block.duration_minutes` (its unblock
+ *   comes 25 minutes in, or 30 seconds before the block would end if that is sooner, and only
+ *   requests before the unblock are blocked). A `bot.session_ttl_minutes` so long that the
+ *   sweep closing a session declared to expire would come after now is refused (exit 1, a
+ *   fixed text with the longest TTL that works today; owner decision 2026-10-22), so no row is
+ *   ever written in the future.
  * - **Telling demo rows apart:** every event this script writes has `"demo": true` in its meta.
  *   The expiry events a later sweep writes for the two open sessions come from the app and
  *   don't carry it; find them by their fixed session ids (sha256 of
@@ -40,9 +47,13 @@ declare(strict_types=1);
  * sessions, so it never mixes demo rows into real ones or runs twice.
  *
  * Exit codes: 0 done; 1 failed (no database file, a schema behind the code or corrupt, a
- * database that already has events or sessions, a failed write; stderr names the exception
+ * database that already has events or sessions, a TTL too long for the demo, a failed write;
+ * stderr names the exception
  * class only, or gives a fixed text); 2 usage. `--help` prints the usage and exits 0. Like
  * bin/report.php, a missing SQLite file is refused and never created.
+ *
+ * A test may `require_once` this file for DemoWriter and the SEED_* lists: the script part runs
+ * only when this file is the one PHP was started with.
  */
 
 use FxInstallments\App;
@@ -51,7 +62,7 @@ use FxInstallments\Config\ConfigRepository;
 use FxInstallments\Convert\InstallmentCalculator;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
-use FxInstallments\Db\Migrator;
+use FxInstallments\Db\DatabaseFileMissing;
 use FxInstallments\Flow\Collected;
 use FxInstallments\Flow\FlowDefinition;
 use FxInstallments\Http\IpBlock;
@@ -60,8 +71,7 @@ use FxInstallments\Metrics\Metrics;
 use FxInstallments\Metrics\ReportPeriod;
 use FxInstallments\Metrics\RequestLog;
 
-$apiRoot = dirname(__DIR__);
-require $apiRoot . '/vendor/autoload.php';
+require_once dirname(__DIR__) . '/vendor/autoload.php';
 
 const SEED_USAGE = "usage: php api/db/seed_demo.php\n";
 
@@ -75,6 +85,12 @@ const SEED_RATES = [
 
 /** Seconds between two messages of one demo session. */
 const SEED_MESSAGE_GAP = 40;
+
+/** Seconds after its expiry at which a later sweep closes a demo session declared to expire. */
+const SEED_SWEEP_DELAY = 75;
+
+/** The demo unblock: this many minutes after the first 429's minute, unless the block ends first. */
+const SEED_UNBLOCK_MINUTES = 25;
 
 /**
  * The bot sessions: channel, days before today (0: relative to now), the local start time
@@ -129,74 +145,76 @@ const SEED_ERRORS = [
 /** One client rate-limited in five minutes, blocked automatically, then unblocked by hand. */
 const SEED_BLOCKED_IP = '198.51.100.23';
 
-$usage = static function (): never {
-    fwrite(STDERR, SEED_USAGE);
-    exit(2);
-};
+// The script part: only when PHP was started with this file, not when a test requires it.
+if (get_included_files()[0] === __FILE__) {
+    $apiRoot = dirname(__DIR__);
+    $usage = static function (): never {
+        fwrite(STDERR, SEED_USAGE);
+        exit(2);
+    };
 
-$args = array_slice($argv, 1);
-if ($args === ['--help'] || $args === ['-h']) {
-    fwrite(STDOUT, SEED_USAGE);
-    exit(0);
-}
-if ($args !== []) {
-    $usage();
-}
+    $args = array_slice($argv, 1);
+    if ($args === ['--help'] || $args === ['-h']) {
+        fwrite(STDOUT, SEED_USAGE);
+        exit(0);
+    }
+    if ($args !== []) {
+        $usage();
+    }
 
-try {
-    Bootstrap::init($apiRoot);
-    $config = new ConfigRepository();
+    try {
+        Bootstrap::init($apiRoot);
+        $config = new ConfigRepository();
 
-    // A missing SQLite file is refused before connecting, so this never creates one.
-    $dsn = Database::dsnFromEnvironment($apiRoot);
-    if (str_starts_with($dsn, 'sqlite:') && substr($dsn, 7) !== ':memory:' && !is_file(substr($dsn, 7))) {
-        fwrite(STDERR, "seed_demo: failed: no database file (run php api/bin/migrate.php first)\n");
+        // Refuses a missing SQLite file (never creating it) and a schema behind the code.
+        $pdo = Database::fromEnvironment($apiRoot);
+
+        foreach (['events', 'sessions'] as $table) {
+            if ((int) $pdo->query("SELECT COUNT(*) FROM {$table}")->fetchColumn() > 0) {
+                fwrite(STDERR, "seed_demo: failed: the database already has {$table}; demo data goes only into a new database\n");
+                exit(1);
+            }
+        }
+
+        $writer = DemoWriter::fromConfig(Connection::wrap($pdo), $config, App::DEFAULT_FLOW, time());
+
+        $pdo->beginTransaction();
+        try {
+            $counts = $writer->write();
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        fwrite(STDOUT, sprintf(
+            "seed_demo: wrote %d sessions, %d events and %d request-log rows, %s to %s (%s)\n",
+            $counts['sessions'],
+            $counts['events'],
+            $counts['requests'],
+            $writer->period->from,
+            $writer->period->to,
+            $writer->period->timezone,
+        ));
+        exit(0);
+    } catch (DatabaseFileMissing | SeedDemoRefused $e) {
+        // Fixed texts, without the path.
+        fwrite(STDERR, 'seed_demo: failed: ' . $e->getMessage() . "\n");
+        exit(1);
+    } catch (Throwable $e) {
+        // The class only: a message could name the database path or other local details.
+        fwrite(STDERR, sprintf("seed_demo: failed: %s\n", $e::class));
         exit(1);
     }
-    $pdo = Database::fromEnvironment($apiRoot);
-    (new Migrator($pdo))->assertCurrent();
+}
 
-    foreach (['events', 'sessions'] as $table) {
-        if ((int) $pdo->query("SELECT COUNT(*) FROM {$table}")->fetchColumn() > 0) {
-            fwrite(STDERR, "seed_demo: failed: the database already has {$table}; demo data goes only into a new database\n");
-            exit(1);
-        }
-    }
-
-    $now = time();
-    $writer = new DemoWriter(
-        Connection::wrap($pdo),
-        FlowDefinition::fromFile(App::DEFAULT_FLOW, $config),
-        $config->int('bot.session_ttl_minutes') * 60,
-        ReportPeriod::fromStrings(null, null, $config->string('reports.timezone'), $now),
-        $now,
-    );
-
-    $pdo->beginTransaction();
-    try {
-        $counts = $writer->write();
-        $pdo->commit();
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-        throw $e;
-    }
-
-    fwrite(STDOUT, sprintf(
-        "seed_demo: wrote %d sessions, %d events and %d request-log rows, %s to %s (%s)\n",
-        $counts['sessions'],
-        $counts['events'],
-        $counts['requests'],
-        $writer->period->from,
-        $writer->period->to,
-        $writer->period->timezone,
-    ));
-    exit(0);
-} catch (Throwable $e) {
-    // The class only: a message could name the database path or other local details.
-    fwrite(STDERR, sprintf("seed_demo: failed: %s\n", $e::class));
-    exit(1);
+/**
+ * The config can't hold the demo story; the message is a fixed text with config numbers only.
+ */
+final class SeedDemoRefused extends RuntimeException
+{
 }
 
 /**
@@ -219,12 +237,22 @@ final class DemoWriter
     /** @var array<string, string> expecting => step id */
     private readonly array $stepIds;
 
+    /**
+     * The longest TTL, in seconds, under which every session declared to expire is swept by
+     * now: the shortest time from such a session's last message to now, less the sweep delay.
+     */
+    private ?int $ttlRoom = null;
+
+    /**
+     * @param int $blockMinutes `block.duration_minutes`
+     */
     public function __construct(
         private readonly Connection $db,
         private readonly FlowDefinition $flow,
         private readonly int $ttlSeconds,
         public readonly ReportPeriod $period,
         private readonly int $now,
+        private readonly int $blockMinutes = 60,
     ) {
         $this->metrics = new Metrics($db, fn (): int => $this->clock, static function (string $line): void {
             // A failed write is turned into an exception by write(), which rolls everything back.
@@ -239,7 +267,29 @@ final class DemoWriter
     }
 
     /**
+     * The writer for this config: the flow file, `bot.session_ttl_minutes`, the default report
+     * period in `reports.timezone` as of $now, and `block.duration_minutes`.
+     */
+    public static function fromConfig(Connection $db, ConfigRepository $config, string $flowPath, int $now): self
+    {
+        return new self(
+            $db,
+            FlowDefinition::fromFile($flowPath, $config),
+            $config->int('bot.session_ttl_minutes') * 60,
+            ReportPeriod::fromStrings(null, null, $config->string('reports.timezone'), $now),
+            $now,
+            $config->int('block.duration_minutes'),
+        );
+    }
+
+    /**
+     * Builds every row, then writes them in time order. Nothing is written when the config
+     * can't hold the demo (SeedDemoRefused).
+     *
      * @return array{sessions: int, events: int, requests: int}
+     *
+     * @throws SeedDemoRefused when `bot.session_ttl_minutes` is so long that a session declared
+     *         to expire would be swept after now, which would place a row in the future
      */
     public function write(): array
     {
@@ -255,6 +305,16 @@ final class DemoWriter
             $this->errorResponse($this->at($days, $at), $ip, $method, $path, $code);
         }
         $this->blockedClient($this->at(2, '11:00'));
+
+        // L-04 (owner decision 2026-10-22): refuse, never clamp, a TTL that would put an expiry
+        // sweep after now.
+        if ($this->ttlRoom !== null && $this->ttlSeconds > $this->ttlRoom) {
+            throw new SeedDemoRefused(sprintf(
+                'bot.session_ttl_minutes is %d, too long for the demo data: its expired sessions would close after now; seed with at most %d',
+                intdiv($this->ttlSeconds, 60),
+                max(0, intdiv($this->ttlRoom, 60)),
+            ));
+        }
 
         usort($this->rows, static fn (array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
         $events = 0;
@@ -371,8 +431,11 @@ final class DemoWriter
         $updated = $ts;
         $expires = $status === 'open' ? $ts + $this->ttlSeconds : $ts;
         if ($status === 'open' && $end === 'expire') {
-            // Closed by a later sweep (SessionSweeper): abandoned at its last step.
-            $updated = $expires + 75;
+            // Closed by a later sweep (SessionSweeper): abandoned at its last step. write()
+            // refuses a TTL that would put that sweep after now.
+            $room = $this->now - SEED_SWEEP_DELAY - $ts;
+            $this->ttlRoom = $this->ttlRoom === null ? $room : min($this->ttlRoom, $room);
+            $updated = $expires + SEED_SWEEP_DELAY;
             $this->event($updated, 'bot.session_abandoned', $bot + ['step' => $step, 'error_code' => ErrorCodes::BOT_SESSION_EXPIRED, 'meta' => ['expires_at' => $expires]] + $collected->eventFields());
             $status = 'abandoned';
         } elseif (($status === 'open') !== ($end === 'open')) {
@@ -427,25 +490,32 @@ final class DemoWriter
 
     /**
      * SEED_BLOCKED_IP: a 429 in five consecutive minutes, an automatic block on the fifth
-     * (`block.rate_limit_hits`), two blocked requests, and an operator's unblock 25 minutes in.
-     * Like the real app, it writes `ip.block` and `ip.unblock` events without the IP, and no
-     * `ip_blocks` row (that block would have ended and been pruned long ago).
+     * (`block.rate_limit_hits`) for `block.duration_minutes`, blocked requests 6 and 9 minutes
+     * in, and an operator's unblock 25 minutes in, or 30 seconds before the block would end if
+     * that is sooner (L-04), so it always lifts an active block; a blocked request is written
+     * only before the unblock. Like the real app, it writes `ip.block` and `ip.unblock` events
+     * without the IP, and no `ip_blocks` row (that block would have ended and been pruned long
+     * ago).
      */
     private function blockedClient(int $start): void
     {
         for ($minute = 0; $minute < 5; $minute++) {
             $this->errorResponse($start + $minute * 60 + 30, SEED_BLOCKED_IP, 'GET', '/convert', ErrorCodes::RATE_LIMITED);
         }
-        $this->event($start + 4 * 60 + 30, 'ip.block', ['source' => 'api', 'meta' => [
+        $blockedAt = $start + 4 * 60 + 30;
+        $this->event($blockedAt, 'ip.block', ['source' => 'api', 'meta' => [
             'block_source' => IpBlock::AUTO,
             'reason' => IpBlock::REASON_RATE_LIMIT_HITS,
-            'duration_minutes' => 60,
+            'duration_minutes' => $this->blockMinutes,
             'extended' => false,
         ]]);
+        $unblockAt = min($start + SEED_UNBLOCK_MINUTES * 60, $blockedAt + $this->blockMinutes * 60 - 30);
         foreach ([6, 9] as $minute) {
-            $this->request($start + $minute * 60, SEED_BLOCKED_IP, 'GET', '/convert', 403, true);
+            if ($start + $minute * 60 < $unblockAt) {
+                $this->request($start + $minute * 60, SEED_BLOCKED_IP, 'GET', '/convert', 403, true);
+            }
         }
-        $this->event($start + 25 * 60, 'ip.unblock', ['source' => 'api', 'meta' => [
+        $this->event($unblockAt, 'ip.unblock', ['source' => 'api', 'meta' => [
             'block_source' => IpBlock::AUTO,
             'was_active' => true,
             'by' => 'cli',
@@ -480,16 +550,18 @@ final class DemoWriter
     }
 
     /**
-     * $at (`HH:MM`, local) on the day $days before today in the report's time zone.
+     * $at (`HH:MM`, local) on the day $days before today in the report's time zone. It is read
+     * as a local time on that date, so it holds on a daylight-saving change day too (L-04); a
+     * time a change skips is moved forward by the change, as PHP does.
      */
     private function at(int $days, string $at): int
     {
         if ($days < 1 || $days >= ReportPeriod::DEFAULT_DAYS || preg_match('/^(\d{2}):(\d{2})$/D', $at, $match) !== 1) {
             throw new LogicException('A demo time is a day 1 to 6 days back and HH:MM');
         }
-        $start = $this->period->days[ReportPeriod::DEFAULT_DAYS - 1 - $days][1];
+        $date = $this->period->days[ReportPeriod::DEFAULT_DAYS - 1 - $days][0];
 
-        return $start + (int) $match[1] * 3600 + (int) $match[2] * 60;
+        return (new DateTimeImmutable("{$date} {$match[1]}:{$match[2]}:00", new DateTimeZone($this->period->timezone)))->getTimestamp();
     }
 
     private static function validationCode(string $expecting): string

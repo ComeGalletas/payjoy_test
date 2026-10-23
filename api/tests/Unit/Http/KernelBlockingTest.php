@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace FxInstallments\Tests\Unit\Http;
 
 use ArrayObject;
+use FxInstallments\App;
+use FxInstallments\Config\ConfigRepository;
+use FxInstallments\Db\Connection;
 use FxInstallments\Http\JsonResponse;
 use FxInstallments\Http\Kernel;
 use FxInstallments\Http\Request;
@@ -212,6 +215,57 @@ final class KernelBlockingTest extends TestCase
     /**
      * @param array<string, mixed> $config
      */
+    /**
+     * L-04: the Kernel reads the clock once per request and hands that reading to RateLimiter,
+     * so a 429 always lands in the minute the block check reads, even when the clock crosses a
+     * minute boundary while the request runs. The clock here moves one second on every read.
+     */
+    public function testTheRateLimiterCountsInTheKernelsMinute(): void
+    {
+        $minute = 1_790_000_040; // a multiple of 60
+        $reads = 0;
+        $clock = static function () use ($minute, &$reads): int {
+            return $minute - 1 + $reads++;
+        };
+        $config = ['ratelimit.per_minute' => 1, 'block.rate_limit_hits' => 1];
+        $app = new App(new ConfigRepository($config), Connection::wrap($this->pdo), $clock, function (string $line): void {
+            $this->log[] = $line;
+        });
+        $router = new Router();
+        $router->get('/limited', static fn (): JsonResponse => JsonResponse::ok(['ok' => true]), [$app->rateLimiter()]);
+        $kernel = $app->kernel($router);
+
+        self::assertSame(200, $kernel->handle(new Request('GET', '/limited', remoteAddr: self::IP))->status());
+        $reads = 0; // the second request starts at the same second, one before the boundary
+        self::assertSame(429, $kernel->handle(new Request('GET', '/limited', remoteAddr: self::IP))->status());
+
+        // Both requests were counted in the minute before the boundary, the Kernel's minute...
+        self::assertSame(
+            [['window_start' => $minute - 60, 'count' => 2]],
+            array_map(static fn (array $row): array => array_map('intval', $row), $this->pdo->query('SELECT window_start, count FROM rate_limits')->fetchAll()),
+        );
+        self::assertSame([$minute - 1, $minute - 1], array_map('intval', $this->pdo->query('SELECT ts FROM requests ORDER BY id')->fetchAll(PDO::FETCH_COLUMN)));
+        // ...so the 429 blocked the IP at once (block.rate_limit_hits = 1).
+        self::assertSame(1, $this->rowCount('ip_blocks'));
+        self::assertSame(403, $kernel->handle(new Request('GET', '/limited', remoteAddr: self::IP))->status());
+        self::assertSame([], $this->log->getArrayCopy());
+    }
+
+    /**
+     * A request that doesn't come through the Kernel (RateLimiter used alone) still reads the
+     * limiter's own clock.
+     */
+    public function testARequestWithoutAKernelReadingUsesTheLimitersClock(): void
+    {
+        $request = new Request('GET', '/limited', remoteAddr: self::IP);
+        self::assertNull($request->receivedAt());
+
+        $stamped = $request->withReceivedAt(self::NOW);
+        self::assertSame(self::NOW, $stamped->receivedAt());
+        self::assertNull($request->receivedAt(), 'the original request is unchanged');
+        self::assertSame([self::IP, '/limited', 'GET'], [$stamped->remoteAddr(), $stamped->path(), $stamped->method()]);
+    }
+
     private function kernel(array $config = []): Kernel
     {
         $app = TestEnvironment::app($this->clock, $config, $this->pdo, $this->log);

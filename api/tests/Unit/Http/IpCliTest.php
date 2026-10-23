@@ -184,7 +184,7 @@ final class IpCliTest extends TestCase
         $path = TestEnvironment::tempDir('ip-cli-missing') . '/missing.db';
 
         foreach ([['list'], ['block', '203.0.113.7'], ['unblock', '203.0.113.7']] as $args) {
-            self::assertSame([1, '', "ip: failed: no database file (run php bin/migrate.php first)\n"], $this->runCli($args, $path));
+            self::assertSame([1, '', "ip: failed: no database file (run php api/bin/migrate.php first)\n"], $this->runCli($args, $path));
         }
         self::assertFileDoesNotExist($path);
     }

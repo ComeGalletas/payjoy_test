@@ -98,7 +98,7 @@ final class ReportCliTest extends TestCase
     {
         $missing = TestEnvironment::tempDir('report-missing') . '/none.db';
 
-        self::assertSame([1, '', "report: failed: no database file (run php bin/migrate.php first)\n"], $this->runCli([], $missing));
+        self::assertSame([1, '', "report: failed: no database file (run php api/bin/migrate.php first)\n"], $this->runCli([], $missing));
         self::assertFileDoesNotExist($missing);
     }
 

@@ -10,14 +10,14 @@ declare(strict_types=1);
  *                                   records an `upstream.breaker_reset` event
  *
  * Never calls upstream and never prints the API key (only whether one is set). Refuses to run
- * while the database is behind the code (run bin/migrate.php first). Exit codes: 0 done,
- * 1 failed, 2 usage.
+ * while the database is behind the code or its SQLite file is missing, which it never creates
+ * (run php api/bin/migrate.php first). Exit codes: 0 done, 1 failed, 2 usage.
  */
 
 use FxInstallments\Bootstrap;
 use FxInstallments\Db\Connection;
 use FxInstallments\Db\Database;
-use FxInstallments\Db\Migrator;
+use FxInstallments\Db\DatabaseFileMissing;
 use FxInstallments\Env;
 use FxInstallments\Metrics\Metrics;
 use FxInstallments\Rates\BreakerState;
@@ -58,9 +58,7 @@ $describe = static function (?BreakerState $state, int $now) use ($time): string
 
 try {
     Bootstrap::init($apiRoot);
-    $pdo = Database::fromEnvironment($apiRoot);
-    (new Migrator($pdo))->assertCurrent();
-    $db = Connection::wrap($pdo);
+    $db = Connection::wrap(Database::fromEnvironment($apiRoot));
     $breaker = new UpstreamBreaker($db);
     $now = time();
 
@@ -94,6 +92,9 @@ try {
         ));
     fwrite(STDOUT, 'api key: ' . (Env::nonEmpty('EXCHANGERATE_API_KEY') === null ? 'not set' : 'set') . "\n");
     exit(0);
+} catch (DatabaseFileMissing $e) {
+    fwrite(STDERR, 'upstream: failed: ' . $e->getMessage() . "\n");
+    exit(1);
 } catch (Throwable $e) {
     // The class only: a message could name the database path or other local details.
     fwrite(STDERR, sprintf("upstream: failed: %s\n", $e::class));

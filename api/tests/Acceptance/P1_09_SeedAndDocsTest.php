@@ -94,7 +94,8 @@ final class P1_09_SeedAndDocsTest extends TestCase
             ['bin/upstream.php', ['reset'], "upstream: failed: {$class}\n"],
             ['db/seed_demo.php', [], "seed_demo: failed: {$class}\n"],
             ['bin/migrate.php', [], "migrate: failed: {$class}: {$message}\n"],
-            ['bin/migrate.php', ['--prune'], "migrate: failed: {$class}: {$message}\n"],
+            // L-04: --prune names itself, as it does for an old schema.
+            ['bin/migrate.php', ['--prune'], "prune: failed: {$class}: {$message}\n"],
         ] as [$script, $args, $stderr]) {
             self::assertSame([1, '', $stderr], self::runScript($script, $args, $path), $script . ' ' . implode(' ', $args));
         }
@@ -301,7 +302,9 @@ final class P1_09_SeedAndDocsTest extends TestCase
         $empty = TestEnvironment::tempDir('seed-empty') . '/empty.db';
         touch($empty);
         self::assertSame([1, '', "seed_demo: failed: FxInstallments\\Db\\SchemaOutOfDate\n"], self::runScript('db/seed_demo.php', [], $empty));
-        // Opening the file sets WAL mode (a header), as every CLI does; no table was created.
+        // L-04: the schema is checked before WAL mode is set, so not even a header was written.
+        clearstatcache();
+        self::assertSame(0, filesize($empty), 'nothing was written to the old database');
         self::assertSame(0, (int) TestEnvironment::connect($empty)->query('SELECT COUNT(*) FROM sqlite_master')->fetchColumn(), 'nothing was written to the old database');
 
         $path = TestEnvironment::freshDatabasePath();

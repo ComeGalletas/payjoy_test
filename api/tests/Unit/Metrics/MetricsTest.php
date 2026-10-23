@@ -94,6 +94,10 @@ final class MetricsTest extends TestCase
         yield 'float installments' => ['installments', 3.0];
         yield 'string latency' => ['latency_ms', '12'];
         yield 'float in a text column' => ['currency', 1.5];
+        // L-04: PDO would bind true as 1 and false as '' in a text column.
+        yield 'true in a text column' => ['currency', true];
+        yield 'false in a text column' => ['session_id', false];
+        yield 'bool in the step column' => ['step', true];
     }
 
     #[DataProvider('nonIntegerValues')]

@@ -15,15 +15,16 @@ declare(strict_types=1);
  * Like `/reports`, it first closes expired sessions as abandoned (ADR 0021), so it writes those
  * events; a failed sweep only adds a note. Output never holds an IP, the API key or upstream
  * text. Refuses to run while the database is behind the code or its SQLite file is missing
- * (run bin/migrate.php first). Exit codes: 0 done, 1 failed (stderr names the exception class
- * only), 2 usage (an unknown or repeated option, a bad date or format, from after to, a
- * period over 366 days). `--help` prints the usage and exits 0.
+ * (run php api/bin/migrate.php first). Exit codes: 0 done, 1 failed (stderr names the exception
+ * class only, or gives the fixed missing-file text), 2 usage (an unknown or repeated option, a
+ * bad date or format, from after to, a period over 366 days). `--help` prints the usage and
+ * exits 0.
  */
 
 use FxInstallments\App;
 use FxInstallments\Bootstrap;
 use FxInstallments\Config\ConfigRepository;
-use FxInstallments\Db\Database;
+use FxInstallments\Db\DatabaseFileMissing;
 use FxInstallments\Metrics\InvalidReportQuery;
 use FxInstallments\Metrics\ReportFormatter;
 use FxInstallments\Metrics\ReportPeriod;
@@ -64,12 +65,8 @@ try {
         $usage($e->getMessage());
     }
 
-    // A missing SQLite file is refused before connecting, so this never creates one.
-    $dsn = Database::dsnFromEnvironment($apiRoot);
-    if (str_starts_with($dsn, 'sqlite:') && substr($dsn, 7) !== ':memory:' && !is_file(substr($dsn, 7))) {
-        fwrite(STDERR, "report: failed: no database file (run php bin/migrate.php first)\n");
-        exit(1);
-    }
+    // A missing SQLite file is refused before connecting (DatabaseFileMissing), so this never
+    // creates one.
     $app = App::fromEnvironment($apiRoot);
     $app->db->pdo();
     $report = $app->reportQuery()->run($period);
@@ -80,6 +77,9 @@ try {
         default => ReportFormatter::table($report),
     });
     exit(0);
+} catch (DatabaseFileMissing $e) {
+    fwrite(STDERR, 'report: failed: ' . $e->getMessage() . "\n");
+    exit(1);
 } catch (Throwable $e) {
     // The class only: a message could name the database path or other local details.
     fwrite(STDERR, sprintf("report: failed: %s\n", $e::class));

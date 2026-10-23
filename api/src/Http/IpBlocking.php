@@ -179,7 +179,7 @@ final class IpBlocking
         if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
             return true;
         }
-        if ($this->trustedProxy !== null && $this->trustedProxy !== '' && $ip === $this->trustedProxy) {
+        if ($this->trustedProxy !== null && ClientIp::sameAddress($ip, $this->trustedProxy)) {
             return true;
         }
 

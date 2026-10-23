@@ -67,7 +67,11 @@ final class Kernel
     public function handle(Request $request): Response
     {
         $started = hrtime(true);
+        // One clock reading per request (L-04): the request log, the block check, automatic
+        // blocking and RateLimiter (through the stamped request) all use it, so a rate-limited
+        // request can't land in a minute the block check doesn't read yet.
         $now = ($this->clock)();
+        $request = $request->withReceivedAt($now);
         $ip = ClientIp::resolve($request, $this->trustedProxy);
 
         $block = $this->checkBlock($ip);

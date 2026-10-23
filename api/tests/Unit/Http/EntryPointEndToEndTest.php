@@ -65,8 +65,10 @@ final class EntryPointEndToEndTest extends TestCase
 
     public function testADatabaseBehindTheCodeFailsClosedWithInternal(): void
     {
-        // Never migrated: index.php must not apply the schema, and must not route either.
+        // Never migrated: index.php must not apply the schema, and must not route either. (An
+        // empty file: a missing one is refused before opening, L_04_CleanupATest.)
         $databasePath = TestEnvironment::tempDir('e2e-db') . '/behind.db';
+        touch($databasePath);
         $port = $this->startServer($databasePath);
 
         [$status, $headers, $body] = self::get($port, '/no/such/route');
