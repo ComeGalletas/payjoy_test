@@ -82,7 +82,7 @@ post_max_size = 64K
   server. `file_uploads = Off` and `post_max_size = 64K` cut the multipart work PHP does before
   the app runs (the app takes no uploads, and its largest request body is 4 KiB,
   `/bot/message`); `post_max_size` bounds only a request that declares its length. None of these
-  fixes either CVE; only PHP 8.3.36 or a later 8.3 release does.
+  fixes either CVE; for this app, only PHP 8.3.36 or a later 8.3 release does.
 
 **Don't disable `ini_set`.** Some hardened hosts list it in `disable_functions`. The app calls
 `ini_set()` at startup (`serialize_precision = -1`) and when it sends an answer without a body,
@@ -171,9 +171,9 @@ migrate: schema version 0 -> 3
 ```
 
 and on a database that is already current, `migrate: schema is current (version 3)`. It exits 0
-when done, 1 on failure (`migrate: failed: <exception class>: <message>` on stderr, `prune:` with
-`--prune`; a missing file and, for `--prune`, a schema behind the code print their fixed text
-instead) and 2 for usage errors.
+when done, 1 on failure (`migrate: failed: <exception class>: <message>` on stderr; `--prune`
+prints `prune:` instead, with fixed text for a missing file or a schema behind the code) and 2 for
+usage errors.
 
 **Run it after `composer install` and after every `git pull`**, before starting the server:
 

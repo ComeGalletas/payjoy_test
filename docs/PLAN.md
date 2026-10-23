@@ -838,14 +838,13 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   blocked IPs, closing the connection without a response; nginx's access log for those requests is
   imported into `requests` with `blocked = 1`, so INV-08 still holds (ADR 0016).
   Also (from P1-11): canonicalize addresses in `ClientIp` (`inet_ntop(inet_pton())`, deciding
-  whether the stored address unmaps `::ffff:a.b.c.d`, as `sameAddress` does since L-04 cleanup B),
+  whether the stored address unmaps `::ffff:a.b.c.d`, as `sameAddress` will from L-04 cleanup B),
   so manual blocks and `rate_limits` keys match the proxy's `X-Forwarded-For` hop (`TRUSTED_PROXY`
-  is compared parsed since L-04 cleanup A); exempt
-  the Typebot host from automatic blocking (a config list) or retune `block.error_responses`, since
-  all bot traffic comes from it and it doesn't forward users' IPs; with nginx in front,
-  `TRUSTED_PROXY` must be nginx's container address, so check that the API doesn't see the Docker
-  bridge gateway for every client; add a covering index on `requests` (migration 4) if tuning
-  shows the `error_responses` scan matters.
+  is compared parsed since L-04 cleanup A); exempt the Typebot host from automatic blocking (a
+  config list) or retune `block.error_responses`, since all bot traffic comes from it and it
+  doesn't forward users' IPs; with nginx in front, `TRUSTED_PROXY` must be nginx's container
+  address, so check that the API doesn't see the Docker bridge gateway for every client; add a
+  covering index on `requests` (migration 4) if tuning shows the `error_responses` scan matters.
   Also (from P1-07): in the image's `php.ini` set `expose_php=Off`; in nginx use
   `fastcgi_hide_header X-Powered-By` and `server_tokens off`, and don't add a second CSP with
   `add_header`; rate-limit or cache the widget's static files; answer `HEAD`,
@@ -904,20 +903,22 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     - owner decisions from cleanup A's review (2026-10-22): `require.php` becomes `~8.3.36`, 8.3
       only (ADR 0001 fourth amendment), and the lock is refreshed with `composer update --lock`
       (only `platform` and the content-hash change, no packages); `composer.json` `scripts`
-      untouched (GR-006); `SmokeTest` asserts that `require.php` is `'~' .` the
-      `config.platform.php` pin (its failure message updated) and that `PHP_VERSION` is at
-      least the pin and below 8.4.0; `ClientIp::sameAddress` unmaps `::ffff:a.b.c.d` in either
-      argument before comparing, as `isLoopback` does (ADR 0016 fifth amendment);
+      untouched (GR-006); `SmokeTest` asserts that `require.php` is `~` followed by the
+      `config.platform.php` pin (today `~8.3.36`; its failure message updated) and that
+      `PHP_VERSION` is at least the pin and below 8.4.0; `ClientIp::sameAddress` unmaps
+      `::ffff:a.b.c.d` in either argument before comparing, as `isLoopback` does (ADR 0016 fifth
+      amendment);
       `ConfigRepository` rejects a non-integer `amount.max` when the config loads, and its class
       docblock (which says a wrong type is reported only when read) says so;
     - cleanup A's review nits: a test for the no-create open flag in
       `Database::fromEnvironment`; a test that tells the sweep's close from a message's by
       `expires_at` alone; the orphaned `kernel()` docblock and the misnamed test in
       `KernelBlockingTest`; one prefix variable in `migrate.php`; the lines over 100 columns in
-      `public/index.php`, `seed_demo.php` and `L_04_CleanupATest`; `CsvWriter`'s UTF-8 branch
-      also skips U+0085 before `=`, as its byte branch does; the docblocks (`Migrations.php`,
-      `Migrator.php`, `Retention.php`, `migrate.php`) and the `usage:` lines that say
-      `php bin/<script>.php` become `php api/bin/<script>.php`, with their pinned tests;
+      `public/index.php`, `seed_demo.php` and `L_04_CleanupATest`; `CsvWriterTest` pins U+0085
+      before `=` in the UTF-8 branch (`\s` under `/u` already matches it), and the class
+      docblock says so; every docblock and `usage:` line that says `php bin/<script>.php`
+      (`grep -rn "php bin/" api/src api/bin api/db api/public`; not `bin/lint.php`, which
+      Composer runs from `api/`) becomes `php api/bin/<script>.php`, with their pinned tests;
     - `RoundingRuleTest` adds `floor(`, `ceil(` and `fdiv(`, scans `api/bin`, `api/db` and
       `api/public`, and drops `ReportFormatter` from the allowed files;
     - `EntryPointEndToEndTest` moves onto `BuiltInServer`;
@@ -932,8 +933,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
       (already in `REPORTS.md`; `ReportQuery` and the two `ReportQueryTest` assertions that pin
       the old wording change with it);
     - stale comments: `IpBlock`, `QuotaStatus`, `App.php`, `RequestLog`, `ConvertService` and
-      `Conversion`, the `P1_10_LiveCodesTest` docblock ("owner decision"), and the `widget.js`
-      lines over 100 columns.
+      `Conversion`, the `P1_10_LiveCodesTest` docblock ("owner decision"), the
+      `FlowEngine::sweptAsExpired()` docblock (a save in the same second leaves `expires_at` as it
+      was; ADR 0021 second amendment), and the `widget.js` lines over 100 columns.
   - Docs that cleanup B changes are the lead's, at its close-out: INSTALL section 10's
     `amount.max` bullets, and the "until cleanup B" sentences in ADR 0001's fourth and ADR 0016's
     fifth amendments.

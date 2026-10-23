@@ -164,7 +164,8 @@ Owner decision 2026-10-22 (L-04 cleanup A).
   accepted. The message re-reads the row, and an abandoned row whose `expires_at`, step, retries and
   collected values all still equal what the message read was closed without a message's save: every
   save by a message changes the step, the retries or the collected values, and moves `expires_at`
-  (to now plus the TTL, or to now on close) unless it falls in the same second. A session another
+  (to now plus the TTL, or to now on close) unless the save lands in the same second as the one
+  that set the expiry the message read. A session another
   message found expired and closed (`liveSession()`) uses the sweep's own close, so it is answered
   the same way.
 - Known limit: if, while one message is in flight, another message saves an answer and the sweep

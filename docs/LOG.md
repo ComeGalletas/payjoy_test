@@ -20,7 +20,7 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   open flag untested, the `expires_at` equality untested on its own, and one equivalent). Judge:
   APPROVE WITH NITS; the code follows the merged ADR 0001 third amendment and ADR 0021 second
   amendment (the owner's condition), and the builder's stricter in-flight rule is redundant but
-  safe.
+  safe (the review of #34 found it is needed when two saves fall in the same second).
 - **Owner decisions** (2026-10-22): merge as is; three items go to cleanup B: `require.php`
   `~8.3.36`, 8.3 only (ADR 0001 fourth amendment); unmap IPv4-mapped addresses before comparing
   (ADR 0016 fifth amendment); a non-integer `amount.max` refused at load. The review nits go to
@@ -42,7 +42,10 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
   "8.3.36 or later"; the `~8.3.36` PLAN item lacked the lock refresh and the exact check; ADR
   0021 credited the builder's row rule to the owner); all findings applied in round 2, except
   ADR 0010, left as is (its `api/var/` line is still the default). The tester hit one guard block
-  on an optional inline `php -r` probe, reported it and dropped the probe (GR-030).
+  on an optional inline `php -r` probe, reported it and dropped the probe (GR-030). Round 2:
+  tester PASS WITH NITS, judge APPROVE WITH NITS; the lead applied their wording nits without a
+  third review (the U+0085 item became a test, since `\s` under `/u` already matches it; the
+  docblock list became a grep, without `bin/lint.php`).
 
 ## 2026-10-22 — PHP2Shell review and L-04 triage
 
