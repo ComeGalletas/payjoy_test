@@ -920,7 +920,8 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     - PHP 8.3.36 at least (ADR 0001 third amendment): `require.php` `^8.3.36` and
       `config.platform.php` `8.3.36`, the lock refreshed with `composer update --lock` (only
       `platform`, `platform-overrides` and the content-hash change, no packages), `SmokeTest`'s
-      version check reading the pin; `composer.json` `scripts` untouched (GR-006).
+      version check reading the pin and checking that `require.php` matches it; `composer.json`
+      `scripts` untouched (GR-006).
   - **Cleanup B, tests, comments and small code tidy-ups:**
     - `RoundingRuleTest` adds `floor(`, `ceil(` and `fdiv(`, scans `api/bin`, `api/db` and
       `api/public`, and drops `ReportFormatter` from the allowed files;
@@ -989,10 +990,10 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     the backstop.
   - (P1-06) A message in flight when expiry closes its session gets `done: true` with an empty
     reply; answer it like an expired id instead (a new session and the greeting).
-  - (P1-06) Document the busy wait before a skipped sweep; the loader's `!!` error could name the
-    line; `FlowDefinition::steps()` is used only by tests; `Step` is a bag of nullable fields;
-    `abandon()` takes 9 parameters; `read()` returns a 4-tuple although `InstallmentsReading`
-    exists; a later `FlowLoader` / `FlowDefinition` split would shrink the loader.
+  - (P1-06) The loader's `!!` error could name the line; `FlowDefinition::steps()` is used only by
+    tests; `Step` is a bag of nullable fields; `abandon()` takes 9 parameters; `read()` returns a
+    4-tuple although `InstallmentsReading` exists; a later `FlowLoader` / `FlowDefinition` split
+    would shrink the loader.
   - (P1-06) "Just one payment" maps to `installments.default`; if the owner changes the default
     from 1, change the button text too.
   - (P1-07) Add an ETag (or Last-Modified) to the widget files so views revalidate instead of

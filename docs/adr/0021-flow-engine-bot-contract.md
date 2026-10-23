@@ -38,8 +38,8 @@ which the tester and judge accepted.
    - `done` is true once the session is completed or abandoned. `step` is the waiting step,
      `result` when completed, or the step where the session was abandoned.
    - Reply parts are joined with `\n` (greeting plus first question; result plus stale note).
-   - `reply` is empty only with `done: true`, for a race-losing message on a closed session
-     (item 6).
+   - `reply` is empty only with `done: true`, for a message that lost the race to another message
+     that closed the session (item 6).
    - CORS runs before the rate limiter on `/bot/message`, so a 429 still carries CORS headers.
    - HTTP sessions are `static` and the body can't choose a channel; `bin/bot.php` uses `cli`.
 3. **Sessions.** Ids are `bin2hex(random_bytes(16))`, issued by the server (the rows `seed_demo`
@@ -155,6 +155,9 @@ Owner decision 2026-10-22 (L-04 cleanup A).
 - A message whose session the expiry sweep closed (`bot.session_abandoned` with
   `BOT_SESSION_EXPIRED`) before the message saved is answered like an expired id (item 3): a new
   session, `bot.session_start` and the greeting. Its text is not read as an answer (the
-  owner-ratified rule of item 3).
+  owner-ratified rule of item 3). The message tells this case from item 6 by the row it
+  re-reads: the sweep closes a session without moving `expires_at`, while a message that closes
+  one sets it to now (item 3). The flow doesn't read events, and the sweep's event write can fail
+  (INV-07).
 - Item 6's `done: true` with an empty `reply` stays for a message that lost the race to another
   message that closed the session.

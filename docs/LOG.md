@@ -8,13 +8,13 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
 
 - **CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell").** At the owner's request the lead reviewed
   them against this project. PHP published both on 2026-10-21 (GHSA-w8hw-w9fx-j79w,
-  GHSA-6wmf-4rv5-p3rp); details leaked on 2026-10-20, and public proofs of concept and
-  exploitation attempts were reported. CVE-2026-109618: PHP's out-of-memory exit can leave request
-  memory invalid (a crafted multipart body or any input that exhausts `memory_limit`; on mod_php
-  before any application code runs). CVE-2026-109619: a use-after-free across requests on one
-  worker (memory disclosure also reported). Both CVSS 4.0 9.2; remote code execution confirmed on
-  mod_php, PHP-FPM affected too. Fixed in 8.3.36 (and 8.2.35, 8.4.27, 8.5.12); the upgrade is the
-  only complete fix.
+  GHSA-6wmf-4rv5-p3rp); news of them leaked on 2026-10-20 (Huntress), and after publication public
+  proofs of concept and exploitation attempts were reported (Rapid7, watchTowr). CVE-2026-109618:
+  PHP's out-of-memory exit can leave request memory invalid (a crafted multipart body or any input
+  that exhausts `memory_limit`; on mod_php before any application code runs). CVE-2026-109619: a
+  use-after-free across requests on one worker (memory disclosure also reported). Both CVSS 4.0 9.2;
+  remote code execution confirmed on mod_php, PHP-FPM affected too. Fixed in 8.3.36 (and 8.2.35,
+  8.4.27, 8.5.12); the upgrade is the only complete fix.
 - **Exposure.** The dev host ran 8.3.33 (vulnerable). CI was already on 8.3.36 (`setup-php`
   resolves `8.3` to the latest patch). Nothing is deployed, and `php -S` binds `127.0.0.1`, so
   the exposure was low; but the app keeps the API key and admin token in process memory once it
@@ -47,7 +47,10 @@ entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything 
     to change) and naming the line in the flow loader's `!!` error (a small nicety; with the
     `FlowDefinition` refactor);
   - documenting the busy wait before a skipped sweep: already in ADR 0021's known limits, so it is
-    dropped;
+    dropped from L-04;
+  - two notes with no action: `ConvertService` and `display()` both compute the exact total
+    (harmless), and `RoundingRuleTest` can't see dynamic calls (the behaviour tests are the
+    backstop);
   - logging the `AllowedOrigins` warning once (needs stored state); NFC in `TextNormalizer`
     (needs `intl`); the "Just one payment" text (only if `installments.default` changes);
   - the INSTALL section 8 indent (needs a docs and test change together);

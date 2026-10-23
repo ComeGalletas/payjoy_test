@@ -74,11 +74,12 @@ chose 7.4, the long-term-support line, and the owner ratified it.
 Recorded from the lead's review of CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell"); owner
 decisions 2026-10-22.
 
-**Context.** PHP published both on 2026-10-21 (GHSA-w8hw-w9fx-j79w, GHSA-6wmf-4rv5-p3rp); the
-details had leaked the day before, and public proofs of concept and exploitation attempts were
-reported. CVE-2026-109618: PHP's out-of-memory exit can leave request memory invalid; a crafted
-multipart body, or any input that exhausts `memory_limit`, triggers it, and on mod_php that
-happens during body parsing, before any application code runs. CVE-2026-109619: a persistent
+**Context.** PHP published both on 2026-10-21 (GHSA-w8hw-w9fx-j79w, GHSA-6wmf-4rv5-p3rp); news
+of them leaked the day before (Huntress), and after publication public proofs of concept and
+exploitation attempts were reported (Rapid7, watchTowr). CVE-2026-109618: PHP's out-of-memory
+exit can leave request memory invalid; a crafted multipart body, or any input that exhausts
+`memory_limit`, triggers it, and on mod_php that happens during body parsing, before any
+application code runs. CVE-2026-109619: a persistent
 worker keeps state that points into a previous request's freed memory (a use-after-free; memory
 disclosure is also reported). Both are rated CVSS 4.0 9.2 (network, high complexity, no
 authentication). Remote code execution was confirmed on mod_php; PHP-FPM is affected too, and the
@@ -90,7 +91,8 @@ advisories call the upgrade the only complete fix.
 - `api/composer.json` `require.php` becomes `^8.3.36` (owner decision), so Composer's generated
   platform check refuses an older PHP on every entry point; `config.platform.php` moves from
   8.3.33 to 8.3.36, and the lock's `platform-overrides` with it. `SmokeTest`'s version check reads
-  that pin, so a release moves both with one edit (L-04 cleanup A).
+  that pin and checks that `require.php`'s lower bound matches it, so the two values can't drift
+  (L-04 cleanup A).
 - The server's `php.ini` sets `session.upload_progress.enabled = 0` (a confirmed
   CVE-2026-109619 path, which the advisory says to disable even after the upgrade; the app uses
   no PHP sessions), `file_uploads = Off` (the app takes no uploads) and `post_max_size = 64K`
@@ -106,7 +108,8 @@ advisories call the upgrade the only complete fix.
   uses PHP-FPM, not mod_php, the server API where both remote code executions were confirmed
   (FPM is still affected, so the pinned release is the fix). nginx rejects multipart bodies,
   caps `client_max_body_size`, and never passes `PHP_VALUE` or `PHP_ADMIN_VALUE`.
-- **Known limits.** Between releases nothing detects a new PHP security release, and the gate
-  checks only the PHP that runs `make check`; the next release checks again and moves the pin.
-  PHP 8.3 security support ends on 2027-12-31; moving to 8.4 needs a new ADR (see the second
-  amendment).
+- **Known limits.** Between releases nothing detects a new PHP security release; the platform
+  check and the gate prove only the floor, and the next release checks again and moves both
+  values. On an older PHP, Composer's platform check stops every entry point with a plain error
+  (a 500 for HTTP), not the envelope, an intended exception to INV-04. PHP 8.3 security support
+  ends on 2027-12-31; moving to 8.4 needs a new ADR (see the second amendment).
