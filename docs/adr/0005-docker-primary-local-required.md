@@ -1,6 +1,7 @@
 # 0005 — Local install primary through Phase 2; Docker compose from Phase 3
 
-- **Status:** Accepted (amended 2026-10-20 after the pre-work review)
+- **Status:** Accepted (amended 2026-10-20 after the pre-work review; note 2026-10-22: the image
+  pins a fixed PHP, ADR 0001 third amendment)
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -18,8 +19,8 @@ Docker task before P3-01.
   `docs/INSTALL_LOCAL.md`.
 - **Phase 3 onward:** `docker compose` becomes the primary deployment, with the PHP app as the
   `api` service and profiles `typebot` and `ollama`. The `api` image is `php:8.3-fpm-alpine` plus
-  nginx. SQLite lives on a named volume, not a Windows bind mount. The local install stays
-  supported and tested.
+  nginx, pinned to a patch release of 8.3.36 or later (ADR 0001 third amendment). SQLite lives on
+  a named volume, not a Windows bind mount. The local install stays supported and tested.
 
 ## Consequences
 

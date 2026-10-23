@@ -12,9 +12,10 @@ repository path may contain spaces, so keep the quotes around paths.
 
 ## 1. Prerequisites
 
-- **PHP 8.3** (the lock file targets 8.3.33) with the extensions `pdo_sqlite`, `curl`, `mbstring`
-  and `openssl` (`api/composer.json` requires all four). Enable `zip` too, so Composer can unpack
-  packages.
+- **PHP 8.3.36 or later** with the extensions `pdo_sqlite`, `curl`, `mbstring` and `openssl`
+  (`api/composer.json` requires all four). Enable `zip` too, so Composer can unpack packages.
+  Older 8.3 releases have CVE-2026-109618 and CVE-2026-109619, which can allow remote code
+  execution (ADR 0001 third amendment).
 - **Composer 2.**
 - **git.**
 - Optional: **GNU Make** and **Node**, for contributors (section 13).
@@ -66,6 +67,9 @@ Set these in the `php.ini` the server uses:
 expose_php = Off
 display_errors = Off
 log_errors = On
+file_uploads = Off
+session.upload_progress.enabled = 0
+post_max_size = 64K
 ```
 
 - `display_errors = Off`: with it on, a PHP startup warning (an oversized POST, for example) is
@@ -73,6 +77,12 @@ log_errors = On
   once it runs, and section 7 also passes `-d display_errors=0`.
 - `expose_php = Off`: PHP adds `X-Powered-By` before the app runs; the app removes it from every
   answer, and this stops PHP sending it at all.
+- `session.upload_progress.enabled = 0` closes a confirmed CVE-2026-109619 path (the app uses no
+  PHP sessions); set it in `php.ini`, not through `ini_set()` or `.user.ini`, and restart the
+  server. `file_uploads = Off` and `post_max_size = 64K` cut the multipart work PHP does before
+  the app runs (the app takes no uploads, and its largest request body is 4 KiB,
+  `/bot/message`); `post_max_size` bounds only a request that declares its length. None of these
+  fixes either CVE; only PHP 8.3.36 or later does.
 
 **Don't disable `ini_set`.** Some hardened hosts list it in `disable_functions`. The app calls
 `ini_set()` at startup (`serialize_precision = -1`) and when it sends an answer without a body,

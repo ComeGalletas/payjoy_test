@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (note 2026-10-22: the widget opens sessions lazily, ADR 0022; amended
   2026-10-22: completion meta and report sweeps, see "Amendment"; note 2026-10-22: demo sessions
-  use derived ids, ADR 0024)
+  use derived ids, ADR 0024; amended again 2026-10-22: a message in flight at expiry, see "Second
+  amendment")
 - **Date:** 2026-10-21
 - **Deciders:** owner
 - **Relates to:** 0003 (static flow), 0004 (Typebot), 0011, 0012, 0013, 0016, 0018
@@ -37,8 +38,8 @@ which the tester and judge accepted.
    - `done` is true once the session is completed or abandoned. `step` is the waiting step,
      `result` when completed, or the step where the session was abandoned.
    - Reply parts are joined with `\n` (greeting plus first question; result plus stale note).
-   - `reply` is empty only with `done: true`, for a race-losing message on a closed session
-     (item 6).
+   - `reply` is empty only with `done: true`, for a message that lost the race to another message
+     that closed the session (item 6).
    - CORS runs before the rate limiter on `/bot/message`, so a 429 still carries CORS headers.
    - HTTP sessions are `static` and the body can't choose a channel; `bin/bot.php` uses `cli`.
 3. **Sessions.** Ids are `bin2hex(random_bytes(16))`, issued by the server (the rows `seed_demo`
@@ -72,8 +73,9 @@ which the tester and judge accepted.
    row. A message that loses the race re-reads the session: if it is still waiting on the same
    step, the text is read again; if it moved to another step, the reply is that step's question
    and buttons, with no event and no retry spent; if the winner closed the session, the reply is
-   `done: true` with the closed session's id and an empty `reply`, and no new session starts.
-   Only the winner's events are written.
+   `done: true` with the closed session's id and an empty `reply`, and no new session starts
+   (except when the expiry sweep closed it, see "Second amendment"). Only the winner's events are
+   written.
 7. **Expiry sweep.** `Flow/SessionSweeper` closes open sessions past `expires_at` as
    `bot.session_abandoned` with `BOT_SESSION_EXPIRED` and their last step. It needs only the
    session store and `Metrics`, not the flow file, so reports can sweep even if the YAML is
@@ -117,7 +119,7 @@ which the tester and judge accepted.
   - A duplicate *invalid* message on the same step spends two retries; a race-losing different
     answer is dropped silently; a race loser may add one `upstream.call` event.
   - A message in flight when expiry closes its session gets `done: true` with an empty reply
-    (L-04).
+    (L-04). L-04 cleanup A changes this (see "Second amendment"); the limit goes when it merges.
   - `below_minor_unit` at 1 installment can't be fixed by re-asking installments, so it ends by
     max retries; only an amount of about a cent reaches it.
   - The first message of a session is dropped, so a user who opens with `200` retypes it, and
@@ -145,3 +147,17 @@ from the co-leads' round-2 brief and the placement rules from their round-3 brie
 - Reports place a session that was closed without its end event by its `sessions` row, and a
   session that ended, or still waits, at a step outside the flow's order at the step after its
   furthest accepted answer, at most `installments` (ADR 0023 item 7).
+
+## Second amendment (2026-10-22): a message in flight at expiry
+
+Owner decision 2026-10-22 (L-04 cleanup A).
+
+- A message whose session the expiry sweep closed (`bot.session_abandoned` with
+  `BOT_SESSION_EXPIRED`) before the message saved is answered like an expired id (item 3): a new
+  session, `bot.session_start` and the greeting. Its text is not read as an answer (the
+  owner-ratified rule of item 3). The message tells this case from item 6 by the row it
+  re-reads: the sweep closes a session without moving `expires_at`, while a message that closes
+  one sets it to now (item 3). The flow doesn't read events, and the sweep's event write can fail
+  (INV-07).
+- Item 6's `done: true` with an empty `reply` stays for a message that lost the race to another
+  message that closed the session.
