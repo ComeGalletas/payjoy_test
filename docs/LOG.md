@@ -4,6 +4,41 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-22 — PHP2Shell review and L-04 triage
+
+- **CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell", disclosed 2026-10-21).** At the owner's
+  request the lead reviewed them against this project. Both are rated CVSS 9.2: memory corruption
+  in PHP's out-of-memory handling, reachable through a crafted multipart request before any
+  application code runs, and a use-after-free across requests on one worker. They can allow
+  unauthenticated remote code execution, and memory disclosure is also reported. Fixed in 8.3.36
+  (and 8.2.35, 8.4.27, 8.5.12); the upgrade is the only complete fix.
+- **Exposure.** The dev host ran 8.3.33 (vulnerable). CI was already on 8.3.36 (`setup-php`
+  resolves `8.3` to the latest patch). Nothing is deployed, and `php -S` binds `127.0.0.1`, so
+  the exposure was low; but the app keeps the API key and admin token in process memory once it
+  has read `.env`, so a memory leak would matter. The app takes no uploads and no PHP sessions,
+  but the trigger is in PHP's request parsing, before the app runs.
+- **Upgrade.** The owner ran `winget upgrade --id PHP.PHP.8.3`. The first attempt failed ("Access
+  is denied" on `brotlicommon.dll`) because a `php -S` the owner had started from the Terminal
+  panel still held the DLL; after stopping it the upgrade went through. `php -v`: 8.3.36;
+  `curl.cainfo` and `openssl.cafile` kept their values; `make check` passed (1956 tests, 80
+  guards). The dev host's `php.ini` still has the PHP defaults `file_uploads=1`,
+  `session.upload_progress.enabled=1`, `display_errors=1` and `expose_php=1`; INSTALL section 1
+  now says to turn them off on the server (the owner's machine configuration).
+- **Decision** (owner): PHP 8.3.36 at least, the composer platform pin and a gate test in cleanup
+  A, the `php.ini` hardening in INSTALL, and the P3-01 image notes (ADR 0001 third amendment).
+- **L-04 triage.** The lead sorted the 29 backlog items and the open owner notes. The owner
+  scheduled cleanup A (correctness and safety) and then cleanup B (tests and comments), each with
+  a builder, tester and judge; the lists are in PLAN L-04. Owner-owned items went to issue #31.
+  Left in the backlog, with the reason: the `ReportQuery` split, the `STEPS` derivation,
+  `SessionSweeper::sweepAll()` and `report.php`'s timezone (do them with the P3 rollups); the
+  `AppState` helper and the `IpBlocks` retry test (L-03 Postgres); widget ETags, rate limits on
+  `/reports` and `/health`, and `HEAD` (P3-01 nginx); the `IpBlocking`/`Retention` and
+  `FlowDefinition`/`Step` refactors (no bug behind them); logging the `AllowedOrigins` warning
+  once (needs stored state); NFC in `TextNormalizer` (needs `intl`); the "Just one payment" text
+  (only if `installments.default` changes); the INSTALL section 8 indent (a cosmetic nit that
+  needs a test change); the live-code recapture and the untried prune-task forms (release steps);
+  and the owner's calls (withdrawn currencies, `Env::get` precedence, HMAC token comparison).
+
 ## 2026-10-22 — P1-10 End-to-end run and live codes (MVP delivered; PR #28, head fbe4d59)
 
 - PR #27 (P1-09 close-out) merged by the owner as `e761e7e`, the build this run used.

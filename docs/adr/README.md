@@ -13,7 +13,7 @@ later ADR.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended twice 2026-10-21; note 2026-10-22) |
+| [0001](0001-php-without-framework.md) | PHP 8.3 without a framework; Composer dependency set | Accepted (amended twice 2026-10-21; note and amendment 2026-10-22) |
 | [0002](0002-sqlite-pdo-postgres-ready.md) | SQLite via PDO, Postgres-ready through `Database` + `Dialect` | Superseded by 0010 |
 | [0003](0003-static-flow-deterministic-mvp.md) | Static YAML flow and deterministic parsing for the MVP; LLM deferred | Accepted |
 | [0004](0004-typebot-optional-frontend.md) | Typebot as optional Phase 3 front-end; static flow as fallback | Accepted (amended 2026-10-21) |

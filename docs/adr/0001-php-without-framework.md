@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (amended 2026-10-21: Guzzle 8, see "Amendment"; amended again 2026-10-21:
   `symfony/yaml` 7.4, see "Second amendment"; note 2026-10-22: the P1-10 patch check, LOG
-  2026-10-22)
+  2026-10-22; amended a third time 2026-10-22: PHP 8.3.36 at least, see "Third amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -67,3 +67,29 @@ chose 7.4, the long-term-support line, and the owner ratified it.
 - Moving to 8.x waits for a PHP upgrade to 8.4.1 or later; that needs a new ADR.
 - v7.4.21 was nine days old when locked; P1-10 checked for 7.4.x patch releases with Guzzle's
   on 2026-10-22: none.
+
+## Third amendment (2026-10-22): PHP 8.3.36 at least
+
+Recorded from the lead's review of CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell", disclosed
+2026-10-21); owner decision 2026-10-22.
+
+**Decision.**
+- The app needs PHP 8.3.36 or later, the 8.3 security release that fixes both. One is memory
+  corruption in PHP's out-of-memory handling, reachable through a crafted multipart request before
+  any application code runs; the other is a use-after-free across requests on the same worker.
+  Both are rated CVSS 9.2 (unauthenticated remote code execution; memory disclosure is also
+  reported), and an upgrade is the only complete fix.
+- `api/composer.json`'s `config.platform.php` moves from 8.3.33 to 8.3.36, and a gate test fails
+  on an older PHP (L-04 cleanup A).
+- The server's `php.ini` turns off what the app doesn't use: `file_uploads = Off` and
+  `session.upload_progress.enabled = 0` (it takes no uploads and uses no PHP sessions), and a
+  small `post_max_size` (its largest request body is 4 KiB). These narrow the attack paths but
+  don't replace the upgrade (`INSTALL_LOCAL.md` section 1).
+
+**Consequences.**
+- CI's `setup-php` resolves `8.3` to the latest patch release and was already on 8.3.36; the
+  owner upgraded the dev host the same day.
+- Every release checks for a newer PHP 8.3 security release along with the dependency check, and
+  the gate test's minimum moves with it.
+- P3-01's image pins a fixed PHP and uses PHP-FPM, not mod_php (the most exposed server API), and
+  nginx rejects multipart request bodies, since no route takes one.
