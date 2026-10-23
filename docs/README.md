@@ -9,8 +9,118 @@ and it gets its rates from ExchangeRate-API with one `/latest/USD` call per refr
 - **Operators** use the reports (`GET /reports`, `php api/bin/report.php`), `GET /health` and a
   few command-line tools.
 
-Phase 1 (the deterministic MVP) runs locally without Docker; see
-[INSTALL_LOCAL.md](INSTALL_LOCAL.md).
+Phase 1 (the deterministic MVP) runs locally without Docker. The quick start below gets you
+chatting with the bot in a few minutes. [INSTALL_LOCAL.md](INSTALL_LOCAL.md) is the full guide:
+backups, the daily prune job, demo data, proxies, monitoring and every setting.
+
+## Quick start
+
+**You need:**
+- PHP 8.3, release 8.3.36 or later (not 8.4), with the extensions `pdo_sqlite`, `curl`,
+  `mbstring` and `openssl` (`php -m` lists them);
+- Composer 2 and git;
+- an ExchangeRate-API key (next section).
+
+On Windows, PHP also needs a CA bundle in `php.ini`, or every rate lookup fails
+([INSTALL_LOCAL.md](INSTALL_LOCAL.md) section 1, "The CA bundle").
+
+Run every command from the repository root. They work as typed in PowerShell and in a Linux or
+macOS shell, except where a block names one shell.
+
+1. Get the code and its dependencies:
+
+   ```
+   git clone https://github.com/ComeGalletas/payjoy_test.git "fx-installments"
+   cd "fx-installments"
+   composer install --working-dir=api
+   ```
+
+2. Create `.env` from the template: `Copy-Item .env.example .env` (PowerShell) or
+   `cp .env.example .env` (Linux and macOS). Open it and set `EXCHANGERATE_API_KEY` to your key.
+   Leave the other keys empty for now.
+3. Create the database (`api/var/app.db`):
+
+   ```
+   php api/bin/migrate.php
+   ```
+
+4. Start the server, and keep this terminal open (the app's error log appears there):
+
+   ```
+   php -d display_errors=0 -S 127.0.0.1:8080 -t api/public api/public/index.php
+   ```
+
+5. Open the chat widget at <http://127.0.0.1:8080/bot/widget> and press **Start chat**. Or chat
+   in a second terminal with `php api/bin/bot.php` (on a Windows console, run `chcp 65001` first
+   if you type accented text).
+
+### Test the bot by hand
+
+The bot greets you, then asks for three things in order. Try this conversation:
+
+| You type | The bot answers |
+|---|---|
+| `200` | asks which currency or country |
+| `Brazil` (or `BRL`, or a button) | asks how many monthly installments (default 1) |
+| `3` | 200 USD in BRL at today's rate, split into 3 monthly payments; when the total doesn't split evenly, the last payment absorbs the remainder |
+
+Things worth trying:
+- **Amounts:** `200.50`, `1,000`, `1.000,50` or `$200` are read; `abc` or `0` get a retry; an
+  ambiguous `1.500` gets a clarifying question.
+- **Currencies:** a code (`COP`), a country (`Mexico`) or a name (`euro`). A name several
+  currencies share asks you to type the code.
+- **Installments:** press **Just one payment**, or type a whole number up to the maximum (60).
+  Too many installments for a tiny total gets its own message.
+- **Retries:** three failed answers at one step end the session. The widget then offers **Start
+  a new conversation**; the terminal bot exits.
+
+The API directly, without the bot (PowerShell needs `curl.exe`, since `curl` is an alias there):
+
+```
+curl.exe "http://127.0.0.1:8080/health"
+curl.exe "http://127.0.0.1:8080/convert?amount=200&cy=BRL&installments=3"
+```
+
+`/health` answers `{"ok":true,"data":{"status":"ok"}}`. `/convert` answers the raw numbers plus a
+`display` block, the strings every front-end shows. To run the tests:
+`composer check --working-dir=api` (lint and the full suite; they never touch the network).
+
+## The ExchangeRate-API key
+
+The app gets its rates from [ExchangeRate-API](https://www.exchangerate-api.com).
+
+1. Sign up for the free plan at <https://www.exchangerate-api.com>. It allows 1,500 requests a
+   month, and its rates update once a day.
+2. Copy your API key from the dashboard, and put it in `.env`, at the repository root:
+
+   ```
+   EXCHANGERATE_API_KEY=your-key-here
+   ```
+
+   The key is letters, digits, `-` and `_`, with no quotes or spaces. `.env` is git-ignored:
+   never commit it, and never put the key in a URL you share. It stays on the server, and the
+   app never shows it.
+3. No restart is needed: the server and the CLIs read `.env` on every request or run.
+
+**How the app spends the quota.** One `/latest/USD` call refreshes every rate, and the app calls
+again only when upstream says the next update is due. So it makes about 30 calls a month, whatever
+the traffic, and every conversion is computed locally from the stored table. If a refresh fails,
+it serves the last table for up to `rates.max_stale_hours` (48), with `stale: true`, and the bot
+adds a note.
+
+**When the key is wrong or missing:**
+- **Empty key:** every rate lookup fails with `UPSTREAM_AUTH` without calling upstream. The bot
+  still runs up to the last step, then says "Exchange rates are temporarily unavailable. Please
+  try again later."
+- **Invalid or inactive key:** the breaker stops all calls until you fix the key and run
+  `php api/bin/upstream.php reset`.
+- **Check the state:** `php api/bin/upstream.php status` shows the breaker and the stored rate
+  table.
+- **Quota reached:** calls stop until the 1st of the next month (UTC), and cached rates are served
+  while they are young enough (ADR 0012).
+
+Tests never use your key: they run with a fake key against a mocked upstream, and the network is
+switched off (ADR 0018).
 
 ## The parts
 
@@ -93,6 +203,83 @@ bot never stores what a user typed, only the validated values (amount in cents, 
 country when one was typed, installments). One thing is outside the app: PHP's built-in server
 (`php -S`) prints each request's client address in its own terminal; if you redirect that output
 to a file, that file holds IPs too, and no prune touches it.
+
+## Technical choices
+
+Each choice has an ADR in [adr/](adr/README.md); this is the short version.
+
+- **PHP 8.3, no framework** (ADR 0001). The app is small: a handful of JSON endpoints, a
+  state-machine bot and reports. Plain PHP keeps it easy for one person to read end to end, and it
+  runs both with `php -S` and in a container. There is one entry point (`api/public/index.php`)
+  and a small router. Three Composer packages do the work a framework would: Guzzle for the
+  upstream HTTP, `symfony/yaml` for the bot's flow file, `vlucas/phpdotenv` for `.env`. PHPUnit
+  is for tests only.
+- **SQLite through PDO** (ADR 0010). Zero setup for a local install. The SQL stays portable, so
+  Postgres can come later. Schema changes run only through `migrate.php`, never inside a request
+  (ADR 0019).
+- **A deterministic bot, not an LLM** (ADR 0003). The conversation is a fixed pipeline: amount,
+  then currency, then installments. Strict parsers and a YAML flow make it predictable, cheap,
+  fast and testable, with no prompt injection. An LLM normalizer for free-form input is Phase 2.
+  Typebot is an optional front-end over the same `POST /bot/message` contract (ADR 0004).
+- **Exact money** (ADR 0011, ADR 0017). Amounts are stored as integer cents and rates as integers
+  scaled by 10^10. Only `InstallmentCalculator::display()` rounds, in each currency's minor units,
+  so the installments always add up to the converted total.
+- **Few upstream calls** (ADR 0012). One `/latest/USD` call refreshes every rate, the math is
+  local, and a breaker protects the quota.
+
+**Structure.**
+
+| Folder | Holds |
+|---|---|
+| `api/src/` | The code, one folder per area: `Convert` (the money math), `Rates` (upstream client, cache, breaker), `Flow` (the bot engine), `Validation` (the input parsers), `Http` (router, endpoints, rate limit, IP blocks), `Metrics` (events and reports), `Db` and `Config`. `App.php` wires them together. |
+| `api/public/` | The single HTTP entry point |
+| `api/bin/` | The command-line tools (bot, migrate, report, ip, upstream) |
+| `api/flows/` | The bot's texts and steps (`default.yaml`); change the wording here, no PHP needed |
+| `api/resources/widget/` | The chat widget's HTML, CSS and JS |
+| `api/db/` | The generated schema and the demo seed |
+| `api/tests/` | Unit and acceptance tests (PHPUnit), guard tests, and the widget's JS tests |
+| `docs/` | This guide, the plan, the ADRs and the journal |
+
+## Measuring success in production
+
+Success means customers get a correct installment amount quickly, and the service stays up within
+its quota. Most of these numbers are in the report today (`GET /reports` or
+`php api/bin/report.php`, see [REPORTS.md](REPORTS.md)); the rest needs a little more work.
+
+**Do customers get an answer?** The bot funnel, per channel.
+- **Completion rate:** completed sessions divided by started ones. This is the headline number.
+- **Drop-off per step:** where sessions are abandoned (`amount`, `currency`, `installments`) and
+  why (`BOT_MAX_RETRIES`, `BOT_SESSION_EXPIRED`, an upstream error).
+- **Retries per step:** high retries at `amount` or `currency` mean the parsers miss what people
+  type. That would be the case for Phase 2's LLM normalizer.
+- **Never-answered sessions:** people who open the chat and leave. This tells you whether the
+  greeting works.
+
+**Are the answers right?** This is a hard requirement, not a trend.
+- **Exact totals:** installments always add up to the converted total. The test suite enforces
+  this; in production, spot-check `display` against the stored `rate_scaled`.
+- **Fresh rates:** the share of conversions served with a stale rate (`stale: true`), and the age
+  of `rate_as_of`.
+- **No errors on the money path:** zero 500s on `/convert` and `/bot/message`. The report's
+  error section counts every error code.
+
+**Is it reliable and affordable?**
+- **Availability:** an external monitor on `GET /health` (200 versus 503), with alerts.
+- **Upstream health and cost:** calls per month against the 1,500 quota (expect about 30),
+  failed calls, breaker trips, and the cache hit rate (the report's upstream section).
+- **Abuse:** rate-limited requests and automatic IP blocks. A sudden rise means an attack, or a
+  limit that is too tight for real users.
+- **Speed:** p95 latency of `/convert` and `/bot/message`. The request log stores each request's
+  latency, but the report doesn't summarize it yet; add that, or read it from the proxy's logs
+  (Phase 3).
+
+**Business impact** (outside the app). The real goal is that customers who see the installment in
+their own currency go on to buy. Measure it by joining the bot's completed sessions with the
+checkout's conversions, or by A/B testing the widget on a product page. The app has no link to
+the checkout yet.
+
+Set a baseline over the first weeks, then set targets. For example: a completion rate above 70%,
+no stale rates older than a day, `/health` up 99.9%, and fewer than 50 upstream calls a month.
 
 ## Read on
 

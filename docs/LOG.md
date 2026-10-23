@@ -4,6 +4,17 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-23 — README quick start (P1-09 follow-up)
+
+- PR #35 (L-04 cleanup B) was merged by the owner as `f3d694a`. Its close-out docs PR is still
+  owed. The owner then paused development to plan a Python version.
+- At the owner's request, `docs/README.md` gains four sections:
+  - a quick start: install, run and test the chatbot by hand, without reading INSTALL_LOCAL.md;
+  - the ExchangeRate-API key setup;
+  - the technical choices and the folder structure;
+  - how to measure success in production.
+- Filed under P1-09, the docs task that wrote the README.
+
 ## 2026-10-22 — L-04 cleanup A (PR #33, head cd9a648)
 
 - PR #32 (the PHP2Shell and cleanup-scope docs) merged by the owner as `4cb1921`.
