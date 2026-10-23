@@ -77,10 +77,12 @@ post_max_size = 64K
   once it runs, and section 7 also passes `-d display_errors=0`.
 - `expose_php = Off`: PHP adds `X-Powered-By` before the app runs; the app removes it from every
   answer, and this stops PHP sending it at all.
-- `file_uploads = Off`, `session.upload_progress.enabled = 0` and `post_max_size = 64K`: the app
-  takes no uploads and uses no PHP sessions, and its largest request body is 4 KiB
-  (`/bot/message`). They narrow the paths CVE-2026-109618 and CVE-2026-109619 use; only PHP
-  8.3.36 or later fixes them.
+- `session.upload_progress.enabled = 0` closes a confirmed CVE-2026-109619 path (the app uses no
+  PHP sessions); set it in `php.ini`, not through `ini_set()` or `.user.ini`, and restart the
+  server. `file_uploads = Off` and `post_max_size = 64K` cut the multipart work PHP does before
+  the app runs (the app takes no uploads, and its largest request body is 4 KiB,
+  `/bot/message`); `post_max_size` bounds only a request that declares its length. None of these
+  fixes either CVE; only PHP 8.3.36 or later does.
 
 **Don't disable `ini_set`.** Some hardened hosts list it in `disable_functions`. The app calls
 `ini_set()` at startup (`serialize_precision = -1`) and when it sends an answer without a body,

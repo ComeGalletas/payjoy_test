@@ -853,10 +853,12 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   Also (from P1-08): rate-limit `/reports` and `/health` (in nginx or the app), or decide they
   stay open; a limiter must not break `/health` on a read-only database (ADR 0016 fourth
   amendment).
-  Also (from the PHP2Shell review, ADR 0001 third amendment): pin the image to a PHP release
-  that fixes CVE-2026-109618 and CVE-2026-109619 (8.3.36 or later), run PHP-FPM rather than
-  mod_php, set the `php.ini` lines of `INSTALL_LOCAL.md` section 1, and have nginx reject
-  multipart request bodies and cap `client_max_body_size`.
+  Also (from the PHP2Shell review, ADR 0001 third amendment): pin the image to a patch release
+  of 8.3.36 or later (for example `php:8.3.36-fpm-alpine`, or by digest), run PHP-FPM rather
+  than mod_php, set the `php.ini` lines of `INSTALL_LOCAL.md` section 1, have nginx reject
+  multipart request bodies, cap `client_max_body_size` and never pass `PHP_VALUE` or
+  `PHP_ADMIN_VALUE`; decide whether those rejections answer 444 and are imported like the
+  deny-list drops (INV-08, ADR 0016) or return the envelope (INV-04).
 - **P3-02** Config API: `config` table, `GET /config`, `PUT /config` with per-key type and range
   checks, `config.changed` events.
 - **P3-03** `POST /events`: per-channel ingest token, allow-listed `event_type`/`channel`/`step`,
@@ -898,38 +900,48 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
   cleanup tasks under this ID, run one after the other, each with a builder, tester and judge
   (LOG 2026-10-22):
   - **Cleanup A, correctness and safety:**
-    - `bin/upstream.php`, `bin/bot.php`, `public/index.php` and `migrate.php --prune` refuse a
-      missing SQLite file without creating it; `Database::fromEnvironment` creates the folder of
-      any SQLite path, not only the default's; `Database::connect` checks the schema before
-      setting WAL mode; `.env.example` says to leave `DB_DSN` empty for the default;
+    - only `migrate.php` in apply mode creates a missing SQLite file and its folder, for any
+      SQLite path; every other entry point (`--prune`, `bin/bot.php`, `bin/upstream.php`,
+      `bin/ip.php`, `bin/report.php`, `seed_demo.php`, `public/index.php`) refuses a missing file
+      and creates neither; `Database::connect` checks the schema before setting WAL mode;
+      `.env.example` says to leave `DB_DSN` empty for the default;
     - `ConfigRepository` rejects `amount.max` ≤ 0; `ClientIp` compares `TRUSTED_PROXY` and
       `REMOTE_ADDR` as parsed addresses; `RateLimiter` retries only on a unique violation;
       `Metrics` rejects a bool in a text column;
-    - a message in flight when its session expires gets a new session and the greeting;
+    - a message in flight when the expiry sweep closes its session gets a new session and the
+      greeting (ADR 0021 second amendment);
     - the Kernel and `RateLimiter` share one clock reading;
-    - `seed_demo` reads `block.duration_minutes` and handles a long TTL and a daylight-saving
+    - `seed_demo` reads `block.duration_minutes`, refuses a `bot.session_ttl_minutes` that would
+      place a row in the future (exit 1, with a clear message), and handles a daylight-saving
       change day;
     - the CLI hints say `php api/bin/migrate.php`, and `--prune` on a corrupt schema says
       `prune:`;
     - `CsvWriter` also guards a segment that starts with `"` or a non-ASCII space before `=`;
-    - PHP 8.3.36 at least: `config.platform.php` set to 8.3.36 and a gate test that fails on an
-      older PHP (ADR 0001 third amendment).
-  - **Cleanup B, tests and comments:**
+    - PHP 8.3.36 at least (ADR 0001 third amendment): `require.php` `^8.3.36` and
+      `config.platform.php` `8.3.36`, the lock refreshed with `composer update --lock` (only
+      `platform`, `platform-overrides` and the content-hash change, no packages), `SmokeTest`'s
+      version check reading the pin; `composer.json` `scripts` untouched (GR-006).
+  - **Cleanup B, tests, comments and small code tidy-ups:**
     - `RoundingRuleTest` adds `floor(`, `ceil(` and `fdiv(`, scans `api/bin`, `api/db` and
       `api/public`, and drops `ReportFormatter` from the allowed files;
     - `EntryPointEndToEndTest` moves onto `BuiltInServer`;
     - `P1_09_SeedAndDocsTest` anchors the REPORTS example parts and checks its quoted notes,
       counts the demo `DB_DSN` lines per section, normalises whitespace in the open-ids check,
       drops the duplicated DSN check, tells `VACUUM INTO` from a copy and calls `Bootstrap`;
-    - the `P1_10_LiveCodesTest` sha256 assertion gets a failure message; `mt_srand` is reseeded
-      in `tearDown`; `InstallmentCalculator::exactTotal()` becomes private or narrower;
+    - the `P1_10_LiveCodesTest` sha256 assertion gets a failure message; `ScaledRateTest` and
+      `InstallmentCalculatorTest` reseed `mt_srand` in `tearDown`;
+      `InstallmentCalculator::exactTotal()` becomes private or narrower;
+    - the report's "outside the flow" note also covers open sessions (the brief fixes the new
+      wording, and a lead docs PR puts it in `REPORTS.md` before the builder starts);
     - stale comments: `IpBlock`, `QuotaStatus`, `App.php`, `RequestLog`, `ConvertService` and
-      `Conversion`, the `P1_10_LiveCodesTest` docblock ("owner decision"), the report's "outside
-      the flow" note, and the `widget.js` lines over 100 columns.
+      `Conversion`, the `P1_10_LiveCodesTest` docblock ("owner decision"), and the `widget.js`
+      lines over 100 columns.
+  - Docs that a cleanup changes are the lead's: for cleanup A, `REPORTS.md`'s hint line and
+    INSTALL's migrate output, at its close-out.
   - **Owner-owned items** (CI, hooks, the Makefile, GUARDRAILS wording, `CLAUDE.md`) are in issue
-    #31, and the GR-030 precedent in issue #30.
-  - The items below that neither cleanup lists stay in the backlog, each for the reason given in
-    the LOG (P3 refactors, L-03 Postgres work, P3-01 nginx, owner decisions, release steps).
+    #31, and the GR-030 precedent in issue #30; they leave this list when the owner settles them.
+  - Each cleanup replaces the matching parts of the items below, and the lead deletes those parts
+    at that cleanup's close-out. Everything else below stays, for the reason in LOG 2026-10-22.
   - Move `actions/cache` to v5 (v4 runs on the deprecated Node 20 runtime; CI warns).
   - Write hooks atomically in `install-hooks.php` (temp file + rename), so a failed write can't
     leave a truncated hook.

@@ -14,11 +14,12 @@ end to end.
 
 ## Decision
 
-PHP 8.3 with no framework. A single entry point (`public/index.php`) and a tiny router. Composer
-dependencies are limited to `guzzlehttp/guzzle` (upstream HTTP; version per the amendment),
-`vlucas/phpdotenv` (`.env`), `symfony/yaml` (flow definitions; version per the second
-amendment), and `phpunit/phpunit` (tests) as require-dev only. Required extensions:
-`pdo_sqlite`, `curl`, `mbstring`, `openssl`; `apcu` optional from Phase 3 (ADR 0014).
+PHP 8.3 (8.3.36 or later, see "Third amendment") with no framework. A single entry point
+(`public/index.php`) and a tiny router. Composer dependencies are limited to `guzzlehttp/guzzle`
+(upstream HTTP; version per the amendment), `vlucas/phpdotenv` (`.env`), `symfony/yaml` (flow
+definitions; version per the second amendment), and `phpunit/phpunit` (tests) as require-dev
+only. Required extensions: `pdo_sqlite`, `curl`, `mbstring`, `openssl`; `apcu` optional from
+Phase 3 (ADR 0014).
 
 ## Consequences
 
@@ -70,26 +71,42 @@ chose 7.4, the long-term-support line, and the owner ratified it.
 
 ## Third amendment (2026-10-22): PHP 8.3.36 at least
 
-Recorded from the lead's review of CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell", disclosed
-2026-10-21); owner decision 2026-10-22.
+Recorded from the lead's review of CVE-2026-109618 and CVE-2026-109619 ("PHP2Shell"); owner
+decisions 2026-10-22.
+
+**Context.** PHP published both on 2026-10-21 (GHSA-w8hw-w9fx-j79w, GHSA-6wmf-4rv5-p3rp); the
+details had leaked the day before, and public proofs of concept and exploitation attempts were
+reported. CVE-2026-109618: PHP's out-of-memory exit can leave request memory invalid; a crafted
+multipart body, or any input that exhausts `memory_limit`, triggers it, and on mod_php that
+happens during body parsing, before any application code runs. CVE-2026-109619: a persistent
+worker keeps state that points into a previous request's freed memory (a use-after-free; memory
+disclosure is also reported). Both are rated CVSS 4.0 9.2 (network, high complexity, no
+authentication). Remote code execution was confirmed on mod_php; PHP-FPM is affected too, and the
+advisories call the upgrade the only complete fix.
 
 **Decision.**
-- The app needs PHP 8.3.36 or later, the 8.3 security release that fixes both. One is memory
-  corruption in PHP's out-of-memory handling, reachable through a crafted multipart request before
-  any application code runs; the other is a use-after-free across requests on the same worker.
-  Both are rated CVSS 9.2 (unauthenticated remote code execution; memory disclosure is also
-  reported), and an upgrade is the only complete fix.
-- `api/composer.json`'s `config.platform.php` moves from 8.3.33 to 8.3.36, and a gate test fails
-  on an older PHP (L-04 cleanup A).
-- The server's `php.ini` turns off what the app doesn't use: `file_uploads = Off` and
-  `session.upload_progress.enabled = 0` (it takes no uploads and uses no PHP sessions), and a
-  small `post_max_size` (its largest request body is 4 KiB). These narrow the attack paths but
-  don't replace the upgrade (`INSTALL_LOCAL.md` section 1).
+- The app needs PHP 8.3.36 or later, the 8.3 release that fixes both (8.2.35, 8.4.27 and 8.5.12
+  on the other branches).
+- `api/composer.json` `require.php` becomes `^8.3.36` (owner decision), so Composer's generated
+  platform check refuses an older PHP on every entry point; `config.platform.php` moves from
+  8.3.33 to 8.3.36, and the lock's `platform-overrides` with it. `SmokeTest`'s version check reads
+  that pin, so a release moves both with one edit (L-04 cleanup A).
+- The server's `php.ini` sets `session.upload_progress.enabled = 0` (a confirmed
+  CVE-2026-109619 path, which the advisory says to disable even after the upgrade; the app uses
+  no PHP sessions), `file_uploads = Off` (the app takes no uploads) and `post_max_size = 64K`
+  (its largest body is 4 KiB). The last bounds only a request that declares its length, so
+  P3-01's nginx enforces the size. These reduce exposure; they don't replace the upgrade.
+  `memory_limit = -1`, the advisory's main configuration mitigation, isn't adopted, because one
+  request could then take all the host's memory (`INSTALL_LOCAL.md` section 1).
 
 **Consequences.**
 - CI's `setup-php` resolves `8.3` to the latest patch release and was already on 8.3.36; the
   owner upgraded the dev host the same day.
-- Every release checks for a newer PHP 8.3 security release along with the dependency check, and
-  the gate test's minimum moves with it.
-- P3-01's image pins a fixed PHP and uses PHP-FPM, not mod_php (the most exposed server API), and
-  nginx rejects multipart request bodies, since no route takes one.
+- P3-01's image pins a patch release (for example `php:8.3.36-fpm-alpine`, or by digest) and
+  uses PHP-FPM, not mod_php, the server API where both remote code executions were confirmed
+  (FPM is still affected, so the pinned release is the fix). nginx rejects multipart bodies,
+  caps `client_max_body_size`, and never passes `PHP_VALUE` or `PHP_ADMIN_VALUE`.
+- **Known limits.** Between releases nothing detects a new PHP security release, and the gate
+  checks only the PHP that runs `make check`; the next release checks again and moves the pin.
+  PHP 8.3 security support ends on 2027-12-31; moving to 8.4 needs a new ADR (see the second
+  amendment).
