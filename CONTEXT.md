@@ -46,8 +46,8 @@ name, add it here in the same commit that introduces it.
 | **code word** | An English word that is also a currency code (`CurrencySynonyms::CODE_WORDS`: `all cup kid mad mop sos top try`; `bob` left it when Bolivia was mapped, so it is the BOB code in any case). Typed in capitals it is the code (`TRY`); in any other case it is ambiguous (`try`, `Try`). |
 | **currency-country map** | PHP array (`CurrencyCountryMap`) linking country names to currencies. A country is recorded only when the user typed one. |
 | **admin token** | `ADMIN_TOKEN` from `.env`, sent only as `Authorization: Bearer`; unset means all admin requests are refused. On `/health`, only the Bearer scheme selects the admin view; other schemes get the public view. |
-| **unhealthy** | `/health`'s public 503 `UNHEALTHY`: the database is behind the code, has a corrupt schema version, can't be opened or can't be written (ADR 0019 amendment). |
-| **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` equals `REMOTE_ADDR`. |
+| **unhealthy** | `/health`'s public 503 `UNHEALTHY`: the database is missing, behind the code, has a corrupt schema version, can't be opened or can't be written (ADR 0019 amendments). |
+| **client IP** | The address a request is counted under: `REMOTE_ADDR`, or the last `X-Forwarded-For` hop when `TRUSTED_PROXY` is the same address as `REMOTE_ADDR` (compared as parsed addresses; ADR 0016 fifth amendment). |
 | **trusted proxy** | `TRUSTED_PROXY`: the one peer whose `X-Forwarded-For` header is believed. |
 | **rate-limit window** | A fixed one-minute UTC window (`window_start`) in which an IP's requests are counted against `ratelimit.per_minute`. |
 | **preflight** | A CORS `OPTIONS` request; answered with a 200 envelope, with `Access-Control-*` headers only for an allowed origin. |

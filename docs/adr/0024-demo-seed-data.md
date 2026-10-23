@@ -1,6 +1,6 @@
 # 0024 — Demo seed data
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-10-22: L-04 cleanup A, see "Amendment")
 - **Date:** 2026-10-22
 - **Deciders:** owner
 - **Relates to:** 0011, 0016, 0019, 0021, 0023
@@ -85,15 +85,28 @@ of rounds 2 and 3) are process decisions, recorded in `docs/LOG.md`.
   - Demo data seeded into the real database can't be removed; the guide's way back is a new
     database.
   - The numbers in the docs hold over the dates the seed prints (or on the day you seed).
-  - The demo `ip.block` event records `duration_minutes` 60 whatever `block.duration_minutes`
-    says, and each of its five rate-limited minutes has a single 429 and no `rate_limits` row,
-    not the 31 or more requests that would cause it. A very long
-    `bot.session_ttl_minutes` can place a demo row in the future, which aborts the seed, and in
-    a time zone with daylight saving the fixed local times shift by an hour on a change day
-    (L-04).
+  - Each of the demo block's five rate-limited minutes has a single 429 and no `rate_limits` row,
+    not the 31 or more requests that would cause it. The fixed block duration and the
+    daylight-saving change day were fixed, and a TTL too long for the demo is refused, in L-04
+    cleanup A (see "Amendment").
   - Under `php -S`, a shell `DB_DSN` loses to a `DB_DSN` line in `.env` (the template's empty one
     included) unless `E` is in `variables_order` (`-d` or `php.ini`; PHP without a `php.ini`
     defaults to `EGPCS`). Making `Env::get` prefer
     the process environment would remove the option (L-04, owner's call).
   - The seed's session INSERT repeats `SessionStore`'s columns, and its template choice repeats
     the flow engine's (a test pins it to `display()->even`).
+
+## Amendment (2026-10-22): L-04 cleanup A
+
+Recorded from L-04 cleanup A (PR #33): the owner scheduled the items and decided the refusal
+earlier; how each is built is the builder's design, which the tester and judge accepted.
+
+- The demo `ip.block` event records `block.duration_minutes`. The unblock comes 25 minutes in, or
+  30 seconds before the block ends if that is sooner, and the demo's blocked requests are written
+  only before it.
+- `seed_demo` refuses (exit 1, nothing written) a `bot.session_ttl_minutes` that would close a
+  demo session after now, and names the longest TTL that works.
+- Local times hold on a daylight-saving change day: they are built with `DateTimeImmutable` in
+  `reports.timezone`.
+- Tests load the script with `require_once` for `DemoWriter::fromConfig()`; it runs only when it
+  is the main script.

@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (amended 2026-10-21: Guzzle 8, see "Amendment"; amended again 2026-10-21:
   `symfony/yaml` 7.4, see "Second amendment"; note 2026-10-22: the P1-10 patch check, LOG
-  2026-10-22; amended a third time 2026-10-22: PHP 8.3.36 at least, see "Third amendment")
+  2026-10-22; amended a third time 2026-10-22: PHP 8.3.36 at least, see "Third amendment";
+  amended a fourth time 2026-10-22: PHP 8.3 only, see "Fourth amendment")
 - **Date:** 2026-10-20
 - **Deciders:** owner
 
@@ -88,11 +89,11 @@ advisories call the upgrade the only complete fix.
 **Decision.**
 - The app needs PHP 8.3.36 or later, the 8.3 release that fixes both (8.2.35, 8.4.27 and 8.5.12
   on the other branches).
-- `api/composer.json` `require.php` becomes `^8.3.36` (owner decision), so Composer's generated
-  platform check refuses an older PHP on every entry point; `config.platform.php` moves from
-  8.3.33 to 8.3.36, and the lock's `platform-overrides` with it. `SmokeTest`'s version check reads
-  that pin and checks that `require.php`'s lower bound matches it, so the two values can't drift
-  (L-04 cleanup A).
+- `api/composer.json` `require.php` becomes `^8.3.36` (owner decision; `~8.3.36` from the fourth
+  amendment), so Composer's generated platform check refuses an older PHP on every entry point;
+  `config.platform.php` moves from 8.3.33 to 8.3.36, and the lock's `platform-overrides` with it.
+  `SmokeTest`'s version check reads that pin and checks that `require.php`'s lower bound matches it,
+  so the two values can't drift (L-04 cleanup A).
 - The server's `php.ini` sets `session.upload_progress.enabled = 0` (a confirmed
   CVE-2026-109619 path, which the advisory says to disable even after the upgrade; the app uses
   no PHP sessions), `file_uploads = Off` (the app takes no uploads) and `post_max_size = 64K`
@@ -113,3 +114,19 @@ advisories call the upgrade the only complete fix.
   values. On an older PHP, Composer's platform check stops every entry point with a plain error
   (a 500 for HTTP), not the envelope, an intended exception to INV-04. PHP 8.3 security support
   ends on 2027-12-31; moving to 8.4 needs a new ADR (see the second amendment).
+
+## Fourth amendment (2026-10-22): PHP 8.3 only
+
+Owner decision 2026-10-22, from the review of L-04 cleanup A (PR #33).
+
+- `^8.3.36` also accepts PHP 8.4.0 to 8.4.26 and 8.5.0 to 8.5.11, which have the same two CVEs
+  (their fixed releases are 8.4.27 and 8.5.12), and both Composer's generated platform check and
+  `SmokeTest` check only the lower bound. `require.php` becomes `~8.3.36` (8.3.36 up to, not
+  including, 8.4), and `SmokeTest` checks the running PHP against that constraint (L-04 cleanup
+  B; the `SmokeTest` check follows the third amendment's rule that the gate and the pin agree).
+  Moving to 8.4 or later stays a new ADR (see the second amendment).
+- Composer's generated platform check reads only the constraint's lower bound, also for
+  `~8.3.36`, and `config.platform.php` makes `composer install` resolve against 8.3.36. So after
+  cleanup B only the gate (`SmokeTest`) refuses PHP 8.4 or later; the app itself still starts on
+  it. Until cleanup B merges, the gate also passes a PHP 8.4 or 8.5 older than its fixed release.
+  CI (`php-version: '8.3'`) and the dev host run 8.3.
