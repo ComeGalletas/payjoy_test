@@ -4,6 +4,42 @@ Dated progress and anomalies: quota usage, upstream errors, test failures, tool 
 entry first. Dates are `YYYY-MM-DD`, America/Bogota. The owner mirrors anything relevant into the
 "Payment conversion app architecture" chat.
 
+## 2026-10-23 — README quick start (P1-09 follow-up, PR #36)
+
+- PR #35 (L-04 cleanup B) was merged by the owner as `f3d694a`. Its close-out docs PR is still
+  owed. The owner then paused development to plan a Python version.
+- At the owner's request, `docs/README.md` gains four sections:
+  - a quick start: install, run and test the chatbot by hand, without reading INSTALL_LOCAL.md;
+  - the ExchangeRate-API key setup;
+  - the technical choices and the folder structure;
+  - how to measure success in production.
+- Filed under P1-09, the docs task that wrote the README.
+- **Review round 1.**
+  - Tester: FAIL, on two wrong lines: `abc` gets the same reply as `1.500`, and the report has no
+    breaker-trip count. The tester walked the quick start in its worktree with an empty key and a
+    temp database; the sample conversation ran up to the expected "temporarily unavailable"
+    answer.
+  - Judge: REQUEST CHANGES. The Windows `php.ini` and CA bundle setup was only a link; the curl
+    block broke the both-shells rule; and the success section claimed too much was in the report.
+  - All findings were applied in round 2. No root `README.md` was added: GitHub shows
+    `docs/README.md` on the landing page, and root files are outside the lead's scope.
+- **Review round 2.**
+  - Tester: FAIL, on two lines.
+    - The Windows `php.ini` step needs `extension_dir`, since PHP defaults to `C:\php\ext`;
+      INSTALL section 1 had the same gap and is fixed too.
+    - The report can't show which currency names were missed: the bot never stores input.
+  - Judge: APPROVE WITH NITS.
+  - Both reviews' nits were applied without a third review:
+    - the stale boundary;
+    - what the "temporarily unavailable" text covers;
+    - the backoff wait;
+    - `status` doesn't validate the key;
+    - the funnel heading;
+    - the message-quality metric.
+  - The tester drove the `0.10` / `JPY` / `60` and `peso` / `dollar` examples on the CLI against
+    a seeded rate table, with no upstream call. It also found that `say_uneven` says "1 monthly
+    payments"; that is now a PLAN L-04 backlog item.
+
 ## 2026-10-22 — L-04 cleanup A (PR #33, head cd9a648)
 
 - PR #32 (the PHP2Shell and cleanup-scope docs) merged by the owner as `4cb1921`.

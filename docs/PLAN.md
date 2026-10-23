@@ -777,7 +777,8 @@ Phase 1 runs solo (one writing session at a time); the lead ticks `docs/TODO.md`
   for the demo server). Owner process decisions, in the LOG: the builder may create the three
   docs, P1-09 only; `REPORTS.md` through PR #25; the scope of rounds 2 and 3. The walkthrough
   runs INSTALL's commands and compares its output blocks with real output; INSTALL's `/convert`
-  step runs in-process with the mocked upstream.*
+  step runs in-process with the mocked upstream. Follow-up 2026-10-23: the README quick start,
+  key setup, technical choices and success measures (lead PR #36, owner request).*
 - **P1-10** End-to-end run: CLI and widget against the real key, then `/reports`. Log quota used in
   `docs/LOG.md`. **Deliver MVP.** The lead repeats the by-hand widget check (a typed `<script>`
   shows as text) on the release build, and tries the iframe and `<script>` embeds from a second
@@ -978,6 +979,9 @@ Acceptance paths for Phase 2 and 3 are set when each phase starts, in the same f
     would shrink the loader.
   - (P1-06) "Just one payment" maps to `installments.default`; if the owner changes the default
     from 1, change the button text too.
+  - (P1-06) `say_uneven` in `api/flows/default.yaml` says "1 monthly payments" when
+    `display.regular_count` is 1 (2 installments, uneven); word it for the singular (found by
+    the PR #36 tester, 2026-10-23).
   - (P1-07) Add an ETag (or Last-Modified) to the widget files so views revalidate instead of
     downloading again; log the `AllowedOrigins` warning once per bad configuration instead of per
     request (PHP keeps no state between requests, so remember, for example, a hash of the dropped
