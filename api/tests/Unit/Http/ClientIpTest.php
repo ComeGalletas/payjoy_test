@@ -54,10 +54,18 @@ final class ClientIpTest extends TestCase
         yield 'IPv6, case and zero runs' => ['2001:DB8:0:0::A', '2001:db8::a'];
         yield 'IPv6, leading zeros' => ['2001:0db8::0001', '2001:db8::1'];
         yield 'IPv4 is the same in any spelling PHP accepts' => ['10.0.0.2', '10.0.0.2'];
+        // L-04 cleanup B (owner decision, ADR 0016 fifth amendment): an IPv4-mapped address is
+        // its IPv4 address, in either argument, as it is to IpBlocking::isLoopback.
+        yield 'IPv4 proxy, IPv4-mapped peer' => ['10.0.0.2', '::ffff:10.0.0.2'];
+        yield 'IPv4-mapped proxy, IPv4 peer' => ['::ffff:10.0.0.2', '10.0.0.2'];
+        yield 'IPv4 proxy, IPv4-mapped peer in hex' => ['10.0.0.2', '::ffff:a00:2'];
+        yield 'IPv4 proxy, IPv4-mapped peer in full' => ['10.0.0.2', '0:0:0:0:0:FFFF:10.0.0.2'];
+        yield 'IPv4-mapped on both sides' => ['::ffff:10.0.0.2', '::FFFF:a00:2'];
     }
 
     /**
-     * L-04: TRUSTED_PROXY and REMOTE_ADDR are compared as parsed addresses.
+     * L-04: TRUSTED_PROXY and REMOTE_ADDR are compared as parsed addresses, an IPv4-mapped
+     * address as its IPv4 address (cleanup B).
      */
     #[DataProvider('spellingsOfOneAddress')]
     public function testTwoSpellingsOfTheTrustedProxyMatch(string $trustedProxy, string $peer): void
@@ -72,11 +80,20 @@ final class ClientIpTest extends TestCase
     public static function differentOrInvalidAddresses(): iterable
     {
         yield 'different IPv6' => ['::1', '::2'];
-        yield 'IPv4 and its IPv4-mapped IPv6 form' => ['10.0.0.2', '::ffff:10.0.0.2'];
         yield 'the same invalid text' => ['proxy', 'proxy'];
         yield 'empty and empty' => ['', ''];
         yield 'a valid proxy and an invalid peer' => ['10.0.0.2', '10.0.0.2 '];
         yield 'an IPv6 zone index' => ['fe80::1%eth0', 'fe80::1%eth0'];
+        // L-04 cleanup B: unmapping matches only the same IPv4 address, and only valid values.
+        yield 'another IPv4 address, mapped' => ['10.0.0.2', '::ffff:10.0.0.3'];
+        yield 'another IPv4 address, mapped proxy' => ['::ffff:10.0.0.3', '10.0.0.2'];
+        yield 'IPv4-compatible, not mapped' => ['10.0.0.2', '::10.0.0.2'];
+        yield 'mapped with a zone index' => ['10.0.0.2', '::ffff:10.0.0.2%eth0'];
+        yield 'mapped in brackets' => ['10.0.0.2', '[::ffff:10.0.0.2]'];
+        yield 'mapped in brackets with a port' => ['10.0.0.2', '[::ffff:10.0.0.2]:8080'];
+        yield 'IPv4 with a port' => ['::ffff:10.0.0.2', '10.0.0.2:8080'];
+        yield 'mapped, invalid IPv4 part' => ['10.0.0.2', '::ffff:10.0.0.256'];
+        yield 'the same invalid mapped text' => ['::ffff:proxy', '::ffff:proxy'];
     }
 
     #[DataProvider('differentOrInvalidAddresses')]

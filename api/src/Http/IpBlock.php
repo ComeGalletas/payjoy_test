@@ -6,8 +6,9 @@ namespace FxInstallments\Http;
 
 /**
  * One `ip_blocks` row (ADR 0016). A block is active while `now < expires_at`, or forever when
- * `expires_at` is null, which only a manual block may be (the ADR 0016 amendment; `--prune`
- * uses the same contract and deletes rows with `expires_at <= now`).
+ * `expires_at` is null, which only a manual block may be (the ADR 0016 amendment). `--prune`
+ * waits one `block.window_minutes` window after a block ends before deleting it
+ * (`expires_at <= now - window`, Db\Retention), so automatic blocking's clean slate survives.
  */
 final class IpBlock
 {

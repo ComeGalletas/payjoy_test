@@ -10,7 +10,8 @@ use PDO;
 use Throwable;
 
 /**
- * Retention for `php bin/migrate.php --prune` (docs/PLAN.md §5, ADR 0016). Deletes, as of $now:
+ * Retention for `php api/bin/migrate.php --prune` (docs/PLAN.md §5, ADR 0016). Deletes, as of
+ * $now:
  *
  * - rate_limits rows whose window started more than a day ago (window_start < now - 1 day);
  * - closed sessions (completed or abandoned) last updated more than 30 days ago

@@ -18,7 +18,8 @@ namespace FxInstallments\Metrics;
  *   can be read as a quoted field holding a formula), and whitespace that isn't ASCII before
  *   `= + - @`: any Unicode space or separator, a zero-width space or a byte order mark
  *   (` =1`). Text that isn't UTF-8 is checked byte-wise, with Latin-1's no-break space (0xA0)
- *   and next-line (0x85) counted as spaces. Reports can't produce any of these; the writer is
+ *   and next-line (0x85) counted as spaces. Both branches cover next-line: in UTF-8, `\s`
+ *   under `/u` matches U+0085 (cleanup B). Reports can't produce any of these; the writer is
  *   safe on its own.
  * - **Quoting:** a cell holding `"`, `,`, `;`, CR or LF is quoted, with each `"` doubled, so
  *   neither separator splits it. Other cells are written as they are.

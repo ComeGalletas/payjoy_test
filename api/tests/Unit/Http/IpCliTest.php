@@ -11,11 +11,11 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * `php bin/ip.php block | unblock | list`, run as a separate process on a temp database.
+ * `php api/bin/ip.php block | unblock | list`, run as a separate process on a temp database.
  */
 final class IpCliTest extends TestCase
 {
-    private const USAGE = "usage: php bin/ip.php block <ip> [--minutes=N] [--reason=TEXT] | unblock <ip> | list\n";
+    private const USAGE = "usage: php api/bin/ip.php block <ip> [--minutes=N] [--reason=TEXT] | unblock <ip> | list\n";
 
     private string $path;
     private PDO $pdo;

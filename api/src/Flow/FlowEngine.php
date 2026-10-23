@@ -186,13 +186,13 @@ final class FlowEngine
 
     /**
      * Whether $fresh is $read closed by the expiry sweep, not by another message. The sweep
-     * (SessionStore::closeExpired()) changes only the status (to abandoned) and `updated_at`;
-     * every save a message makes changes the step, the retry count or what was collected, and
-     * always moves `expires_at` (to now + TTL while open, to now when it closes the session).
-     * $read was live when this message read it (now < expires_at), and a message whose now
-     * reached that expiry would have closed it as expired itself (liveSession()), so another
-     * message's save can never leave `expires_at` where it was. So an abandoned row that still
-     * holds $read's step, collected values, retry count and expiry was closed by the sweep.
+     * (SessionStore::closeExpired()) changes only the status (to abandoned) and `updated_at`.
+     * Every save a message makes changes the step, the retry count or what was collected, and
+     * moves `expires_at` (to now + TTL while open, to now when it closes the session), except
+     * that a save in the same second as the one that set the expiry $read holds leaves
+     * `expires_at` as it was (ADR 0021 second amendment), so the step, retry and collected
+     * checks are needed too: an abandoned row is taken as swept only when it still holds
+     * $read's expiry, step, retry count and collected values.
      */
     private static function sweptAsExpired(Session $read, Session $fresh): bool
     {

@@ -62,12 +62,12 @@ use Throwable;
  *   on every row (for `result`, `completed` in place of `passed`), and started = completed +
  *   abandoned + never_answered + open. `retries` counts every failed answer at a step, a
  *   conversion that sent the user back (`via: convert`) included.
- *   Round 3: a session that ended at a step outside the flow's order (a renamed step, `other`,
- *   a null step) is placed at the known step after the furthest one it answered, with a note,
- *   so `amount.reached` always equals `started`; that step name keeps a row for its retries. A
- *   session whose `sessions` row is closed but whose end event is missing (the write failed,
- *   INV-07) is counted by the row's status (completed, or abandoned at the row's step with
- *   code `other`), with a note.
+ *   Round 3: a session that ended at, or waits on, a step outside the flow's order (a renamed
+ *   step, `other`, a null step) is placed at the known step after the furthest one it
+ *   answered, with a note, so `amount.reached` always equals `started`; that step name keeps a
+ *   row for its retries. A session whose `sessions` row is closed but whose end event is
+ *   missing (the write failed, INV-07) is counted by the row's status (completed, or
+ *   abandoned at the row's step with code `other`), with a note.
  * - **errors** by code: `http`, one per error response (the Kernel's `error` event; a
  *   `/convert` 4xx or 503 also has an `api.request` event, which is not counted again;
  *   rate-limited and INTERNAL answers have only the `error` event; blocked requests have
@@ -197,7 +197,7 @@ final class ReportQuery
         }
         if ($funnel['outside_flow'] > 0) {
             $notes[] = sprintf(
-                '%d session(s) ended at a step outside the flow\'s order; the funnel places each at the known step after its last answer.',
+                '%d session(s) ended at, or wait on, a step outside the flow\'s order; the funnel places each at the known step after its last answer.',
                 $funnel['outside_flow'],
             );
         }
@@ -642,7 +642,7 @@ final class ReportQuery
         }
 
         // Steps outside the flow's order keep a row for their retries; the sessions that ended
-        // there are placed at a known step (knownStep()), so these rows reach nobody.
+        // or wait there are placed at a known step (knownStep()), so these rows reach nobody.
         $others = array_map('strval', array_keys($funnel['retries'] + $funnel['abandoned_at'] + $funnel['open_at']));
         $others = array_values(array_diff(array_unique($others), self::STEPS));
         sort($others, SORT_STRING);

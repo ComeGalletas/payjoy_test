@@ -33,9 +33,10 @@ try {
     $app = FxInstallments\App::fromEnvironment($apiRoot);
     $request = FxInstallments\Http\Request::fromGlobals();
     // Open the database and check its schema version before routing: a missing SQLite file or
-    // a database behind the code (run php api/bin/migrate.php) fails closed with INTERNAL below. `GET /health` is the one
-    // exception (P1-08): it reports an unusable database itself, as 503 UNHEALTHY. Any other
-    // method on /health fails closed too, instead of reaching the router's counted 404.
+    // a database behind the code (run php api/bin/migrate.php) fails closed with INTERNAL
+    // below. `GET /health` is the one exception (P1-08): it reports an unusable database
+    // itself, as 503 UNHEALTHY. Any other method on /health fails closed too, instead of
+    // reaching the router's counted 404.
     if ($request->method() !== 'GET' || $request->path() !== FxInstallments\Http\HealthEndpoint::PATH) {
         $app->db->pdo();
     }

@@ -10,7 +10,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 
 /**
- * P1-02 acceptance (docs/PLAN.md §10), through the real `php bin/migrate.php` in a child
+ * P1-02 acceptance (docs/PLAN.md §10), through the real `php api/bin/migrate.php` in a child
  * process with APP_ENV=test and DB_DSN pointing at a temp SQLite file:
  * - migrating an empty database creates all seven Phase 1 tables;
  * - running it twice is a no-op;
@@ -239,7 +239,7 @@ final class P1_02_MigrateTest extends TestCase
     }
 
     /**
-     * Runs `php bin/migrate.php` against the SQLite file at $path.
+     * Runs `php api/bin/migrate.php` against the SQLite file at $path.
      *
      * @return array{int, string, string} exit code, stdout, stderr
      */

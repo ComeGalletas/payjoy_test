@@ -94,7 +94,8 @@ final class App
      * missing SQLite file throws DatabaseFileMissing without creating one, and a version check
      * (one indexed SELECT on app_state, before WAL mode is set) throws SchemaOutOfDate if the
      * database is behind the code, and nothing runs against it. public/index.php opens the
-     * database before routing, so every request then fails closed with 500 INTERNAL.
+     * database before routing, so every request then fails closed with 500 INTERNAL, except
+     * `GET /health`, which reports the unusable database itself as 503 UNHEALTHY (P1-08).
      */
     public static function fromEnvironment(string $apiRoot): self
     {

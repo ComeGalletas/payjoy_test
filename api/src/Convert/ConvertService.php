@@ -23,8 +23,9 @@ use FxInstallments\Validation\ValidationFailed;
  *   float rate is the stored decimal's nearest float (ScaledRate::toRate()).
  * - **Raw numbers**, floats at full precision, never rounded: `converted = amount_usd × rate`,
  *   `installment_amount = converted / installments` (amount is the total, ADR 0006; floats
- *   by ADR 0011). They are the nearest doubles, so their last digits may differ from the
- *   exact decimal. Upstream's `conversion_result` is never used.
+ *   by ADR 0011). They are double products (and a quotient) of the nearest doubles of the
+ *   amount and the rate, not the nearest doubles of the exact results, so their last digits
+ *   may differ from the exact decimal. Upstream's `conversion_result` is never used.
  * - **Display**, exact: InstallmentCalculator computes the minor-unit total from the cents
  *   and `rate_scaled` with integer arithmetic (owner decision 2026-10-21). A total of 2^53
  *   minor units or more is rejected here, before display(), with VALIDATION_AMOUNT

@@ -5,8 +5,8 @@ declare(strict_types=1);
 /*
  * The bot in a terminal (docs/PLAN.md §7), channel `cli`:
  *
- *     php bin/bot.php                         interactive
- *     printf '200\nbrazil\n3\n' | php bin/bot.php   scripted
+ *     php api/bin/bot.php                               interactive
+ *     printf '200\nbrazil\n3\n' | php api/bin/bot.php   scripted
  *
  * It runs the flow engine in-process on the configured database (DB_DSN, default
  * api/var/app.db), so its sessions and events land next to the HTTP ones; the conversion uses
@@ -28,7 +28,7 @@ $apiRoot = dirname(__DIR__);
 require $apiRoot . '/vendor/autoload.php';
 
 if (count($argv) !== 1) {
-    fwrite(STDERR, "usage: php bin/bot.php\n");
+    fwrite(STDERR, "usage: php api/bin/bot.php\n");
     exit(2);
 }
 

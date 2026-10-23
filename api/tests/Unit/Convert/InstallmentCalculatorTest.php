@@ -26,6 +26,15 @@ use PHPUnit\Framework\TestCase;
 final class InstallmentCalculatorTest extends TestCase
 {
     /**
+     * The sweeps seed mt_rand with fixed seeds; reseed it randomly afterwards, so later tests
+     * don't inherit that state (L-04 cleanup B).
+     */
+    protected function tearDown(): void
+    {
+        mt_srand();
+    }
+
+    /**
      * The §3a examples and more: cents, rate (decimal text), n, currency → total, installment,
      * last, regular_count, even.
      *
@@ -232,6 +241,16 @@ final class InstallmentCalculatorTest extends TestCase
         self::assertSame('9,007,199,254,740.991', InstallmentCalculator::formatMinor(2 ** 53 - 1, 3));
     }
 
+    public function testTheExponentRangeIsTheOneMinorUnitsUses(): void
+    {
+        $exponents = array_values(array_unique(MinorUnits::all()));
+        sort($exponents);
+
+        self::assertSame([0, 2, 3, InstallmentCalculator::MAX_EXPONENT], $exponents);
+        self::assertSame(4, InstallmentCalculator::MAX_EXPONENT);
+        self::assertSame(10_000, InstallmentCalculator::exactTotal(100, ScaledRate::SCALE, 4), '1.0000 at 4 decimals');
+    }
+
     public function testInvalidArgumentsAreRejected(): void
     {
         $calls = [
@@ -241,7 +260,9 @@ final class InstallmentCalculatorTest extends TestCase
             static fn () => InstallmentCalculator::exactTotal(100, 0, 2),
             static fn () => InstallmentCalculator::exactTotal(100, ScaledRate::MAX_SCALED, 2),
             static fn () => InstallmentCalculator::exactTotal(100, ScaledRate::SCALE, -1),
-            static fn () => InstallmentCalculator::exactTotal(100, ScaledRate::SCALE, 13),
+            // L-04 cleanup B: only the exponents in use (0..4), no longer up to 12.
+            static fn () => InstallmentCalculator::exactTotal(100, ScaledRate::SCALE, 5),
+            static fn () => InstallmentCalculator::exactTotal(100, ScaledRate::SCALE, 12),
             static fn () => InstallmentCalculator::formatMinor(-1, 2),
             static fn () => InstallmentCalculator::formatMinor(1, -1),
             static fn () => InstallmentCalculator::formatRate(0),

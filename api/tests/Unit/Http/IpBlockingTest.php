@@ -326,6 +326,9 @@ final class IpBlockingTest extends TestCase
         yield 'the trusted proxy' => ['10.0.0.5', '10.0.0.5'];
         // L-04: compared as parsed addresses, like ClientIp.
         yield 'the trusted proxy, spelled another way' => ['2001:db8::5', '2001:DB8:0:0:0:0:0:5'];
+        // L-04 cleanup B: an IPv4-mapped address is its IPv4 address (ADR 0016 fifth amendment).
+        yield 'the trusted proxy, IPv4-mapped' => ['::ffff:10.0.0.5', '10.0.0.5'];
+        yield 'the IPv4-mapped trusted proxy, as IPv4' => ['10.0.0.5', '::ffff:10.0.0.5'];
         yield 'empty' => ['', null];
         yield 'not an IP' => ['unknown', null];
     }
@@ -352,6 +355,7 @@ final class IpBlockingTest extends TestCase
         yield 'private IPv4' => ['10.0.0.6', '10.0.0.5'];
         yield 'public IPv6' => ['2001:db8::1', null];
         yield 'IPv4-mapped public' => ['::ffff:203.0.113.7', null];
+        yield 'IPv4-mapped, next to the trusted proxy' => ['::ffff:10.0.0.6', '10.0.0.5'];
         yield '128.0.0.1 is not loopback' => ['128.0.0.1', null];
         yield '::2 is not loopback' => ['::2', null];
     }

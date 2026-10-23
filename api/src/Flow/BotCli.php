@@ -7,9 +7,9 @@ namespace FxInstallments\Flow;
 use InvalidArgumentException;
 
 /**
- * The CLI front-end (docs/PLAN.md §7): `php bin/bot.php`, interactive or piped, channel `cli`.
- * It calls the flow engine in-process, the same engine `POST /bot/message` uses, so a scripted
- * run exercises the real flow, sessions, events and conversion path.
+ * The CLI front-end (docs/PLAN.md §7): `php api/bin/bot.php`, interactive or piped, channel
+ * `cli`. It calls the flow engine in-process, the same engine `POST /bot/message` uses, so a
+ * scripted run exercises the real flow, sessions, events and conversion path.
  *
  * Output is the bot's replies verbatim, one line per reply part, then the buttons as
  * `[BRL] [COP] …` when the step has any. Interactive runs (a terminal on stdin) also print a

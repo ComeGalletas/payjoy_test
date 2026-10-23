@@ -5,14 +5,14 @@ declare(strict_types=1);
 /*
  * Manual IP blocks, for operators (ADR 0016).
  *
- *     php bin/ip.php block <ip> [--minutes=N] [--reason=TEXT]
- *                           block an IP, for N minutes or until unblocked; replaces any
- *                           block the IP has, automatic or manual
- *     php bin/ip.php unblock <ip>
- *                           end the IP's active block now; its earlier requests no longer
- *                           count toward an automatic block
- *     php bin/ip.php list   print every active block; manual blocks without an expiry keep
- *                           a raw IP until removed, so review them
+ *     php api/bin/ip.php block <ip> [--minutes=N] [--reason=TEXT]
+ *                               block an IP, for N minutes or until unblocked; replaces any
+ *                               block the IP has, automatic or manual
+ *     php api/bin/ip.php unblock <ip>
+ *                               end the IP's active block now; its earlier requests no longer
+ *                               count toward an automatic block
+ *     php api/bin/ip.php list   print every active block; manual blocks without an expiry
+ *                               keep a raw IP until removed, so review them
  *
  * The IP is stored in its canonical form (lowercase, compressed IPv6), which is how PHP and
  * web servers report REMOTE_ADDR. `block` and `unblock` write `ip.block` / `ip.unblock` events
@@ -33,7 +33,7 @@ use FxInstallments\Metrics\Metrics;
 $apiRoot = dirname(__DIR__);
 require $apiRoot . '/vendor/autoload.php';
 
-const IP_USAGE = "usage: php bin/ip.php block <ip> [--minutes=N] [--reason=TEXT] | unblock <ip> | list\n";
+const IP_USAGE = "usage: php api/bin/ip.php block <ip> [--minutes=N] [--reason=TEXT] | unblock <ip> | list\n";
 
 $usage = static function (string $problem = ''): never {
     fwrite(STDERR, ($problem === '' ? '' : "ip: {$problem}\n") . IP_USAGE);

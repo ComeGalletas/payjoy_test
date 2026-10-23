@@ -13,10 +13,10 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 
 /**
- * `php bin/report.php`, run as a separate process on a temp database, under the gate scripts'
- * flags (`-d allow_url_fopen=0 -d disable_functions=curl_exec,curl_multi_exec`, ADR 0018), like
- * BotCliTest: the report never builds the upstream client, so it needs no transport. A canary
- * key and HTTP(S)_PROXY on a closed loopback port are an extra layer.
+ * `php api/bin/report.php`, run as a separate process on a temp database, under the gate
+ * scripts' flags (`-d allow_url_fopen=0 -d disable_functions=curl_exec,curl_multi_exec`,
+ * ADR 0018), like BotCliTest: the report never builds the upstream client, so it needs no
+ * transport. A canary key and HTTP(S)_PROXY on a closed loopback port are an extra layer.
  */
 final class ReportCliTest extends TestCase
 {
@@ -88,10 +88,10 @@ final class ReportCliTest extends TestCase
         ] as [$args, $problem]) {
             [$exit, $out, $err] = $this->runCli($args);
 
-            self::assertSame([2, '', $problem . "usage: php bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]\n"], [$exit, $out, $err], implode(' ', $args));
+            self::assertSame([2, '', $problem . "usage: php api/bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]\n"], [$exit, $out, $err], implode(' ', $args));
         }
 
-        self::assertSame([0, "usage: php bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]\n", ''], $this->runCli(['--help']));
+        self::assertSame([0, "usage: php api/bin/report.php [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--format=table|csv|json]\n", ''], $this->runCli(['--help']));
     }
 
     public function testAMissingDatabaseFileIsRefusedAndNotCreated(): void

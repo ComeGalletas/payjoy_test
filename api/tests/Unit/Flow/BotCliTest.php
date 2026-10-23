@@ -15,8 +15,8 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 
 /**
- * `php bin/bot.php`, run as a separate process on a temp database whose stored rate table is
- * fresh, so the conversion is a cache hit and no upstream call is made (the test checks the
+ * `php api/bin/bot.php`, run as a separate process on a temp database whose stored rate table
+ * is fresh, so the conversion is a cache hit and no upstream call is made (the test checks the
  * `upstream.call` event says `hit`). The process can't load the test bootstrap's guards, so it
  * runs with the gate scripts' flags (`-d allow_url_fopen=0 -d disable_functions=curl_exec,
  * curl_multi_exec`, ADR 0018): Guzzle has no transport at all, which works because the rate
@@ -84,7 +84,7 @@ final class BotCliTest extends TestCase
     {
         [$exit, $out, $err] = $this->runCli(['--help'], '');
 
-        self::assertSame([2, '', "usage: php bin/bot.php\n"], [$exit, $out, $err]);
+        self::assertSame([2, '', "usage: php api/bin/bot.php\n"], [$exit, $out, $err]);
     }
 
     public function testADatabaseBehindTheCodeIsRefused(): void

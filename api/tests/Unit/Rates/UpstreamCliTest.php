@@ -17,7 +17,7 @@ use FxInstallments\Tests\Support\TestEnvironment;
 use PHPUnit\Framework\TestCase;
 
 /**
- * `php bin/upstream.php status | reset`, run as a separate process on a temp database.
+ * `php api/bin/upstream.php status | reset`, run as a separate process on a temp database.
  */
 final class UpstreamCliTest extends TestCase
 {
@@ -111,7 +111,7 @@ final class UpstreamCliTest extends TestCase
             [$exit, $out, $err] = $this->runCli($args);
             self::assertSame(2, $exit);
             self::assertSame('', $out);
-            self::assertSame("usage: php bin/upstream.php status | reset\n", $err);
+            self::assertSame("usage: php api/bin/upstream.php status | reset\n", $err);
         }
     }
 

@@ -145,7 +145,7 @@ final class ReportQueryTest extends TestCase
         self::assertSame(['amount', 'currency', 'installments', 'result', 'nickname'], array_column($static['steps'], 'step'));
         self::assertSame([1, 1, 1], [$static['started'], $static['steps'][0]['reached'], $static['steps'][1]['abandoned']]);
         self::assertFunnelAddsUp($report['funnel']);
-        self::assertStringContainsString('1 session(s) ended at a step outside the flow', implode("\n", $report['notes']));
+        self::assertContains("1 session(s) ended at, or wait on, a step outside the flow's order; the funnel places each at the known step after its last answer.", $report['notes']);
     }
 
     /**
@@ -172,7 +172,7 @@ final class ReportQueryTest extends TestCase
         // a answered installments: placed at installments (never result); b answered nothing: amount.
         self::assertSame([1, 0, 1], [$cli['steps'][0]['abandoned'], $cli['steps'][1]['abandoned'], $cli['steps'][2]['abandoned']]);
         self::assertFunnelAddsUp($report['funnel']);
-        self::assertStringContainsString('2 session(s) ended at a step outside the flow', implode("\n", $report['notes']));
+        self::assertContains("2 session(s) ended at, or wait on, a step outside the flow's order; the funnel places each at the known step after its last answer.", $report['notes']);
     }
 
     /**

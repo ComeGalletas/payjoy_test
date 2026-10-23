@@ -11,6 +11,15 @@ use PHPUnit\Framework\TestCase;
 
 final class ScaledRateTest extends TestCase
 {
+    /**
+     * The sweeps seed mt_rand with fixed seeds; reseed it randomly afterwards, so later tests
+     * don't inherit that state (L-04 cleanup B).
+     */
+    protected function tearDown(): void
+    {
+        mt_srand();
+    }
+
     /** Random rates per decimal count (0..10) in the sweep. */
     private const SWEEP_PER_DECIMAL_COUNT = 20_000;
 

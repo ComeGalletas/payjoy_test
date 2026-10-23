@@ -48,9 +48,8 @@ declare(strict_types=1);
  *
  * Exit codes: 0 done; 1 failed (no database file, a schema behind the code or corrupt, a
  * database that already has events or sessions, a TTL too long for the demo, a failed write;
- * stderr names the exception
- * class only, or gives a fixed text); 2 usage. `--help` prints the usage and exits 0. Like
- * bin/report.php, a missing SQLite file is refused and never created.
+ * stderr names the exception class only, or gives a fixed text); 2 usage. `--help` prints the
+ * usage and exits 0. Like bin/report.php, a missing SQLite file is refused and never created.
  *
  * A test may `require_once` this file for DemoWriter and the SEED_* lists: the script part runs
  * only when this file is the one PHP was started with.
@@ -89,7 +88,10 @@ const SEED_MESSAGE_GAP = 40;
 /** Seconds after its expiry at which a later sweep closes a demo session declared to expire. */
 const SEED_SWEEP_DELAY = 75;
 
-/** The demo unblock: this many minutes after the first 429's minute, unless the block ends first. */
+/**
+ * The demo unblock: this many minutes after the first 429's minute, unless the block ends
+ * first.
+ */
 const SEED_UNBLOCK_MINUTES = 25;
 
 /**
@@ -134,7 +136,10 @@ const SEED_CONVERSIONS = [
     [1, '09:58', '198.51.100.14', 9_999, 'BRL', 4, null, null],
 ];
 
-/** Other error responses (each an `error` event and a request-log row): days, time, IP, method, path, code. */
+/**
+ * Other error responses (each an `error` event and a request-log row): days, time, IP,
+ * method, path, code.
+ */
 const SEED_ERRORS = [
     [5, '03:12', '203.0.113.40', 'GET', '/robots.txt', ErrorCodes::NOT_FOUND],
     [5, '03:13', '203.0.113.41', 'GET', '/robots.txt', ErrorCodes::NOT_FOUND],

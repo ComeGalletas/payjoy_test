@@ -23,8 +23,10 @@ use Throwable;
  * - A failed write never fails the request (the INV-07 policy of Metrics): every Throwable is
  *   caught and a short note naming the exception class only goes to the fallback logger.
  *
- * Raw IPs are personal data: they live only here and in `ip_blocks`, and `--prune` deletes
- * rows older than `requests.retention_days`.
+ * Raw IPs are personal data: they live only here, in `ip_blocks` and in `rate_limits` (the
+ * per-IP minute counts), and `--prune` deletes them: `requests` rows older than
+ * `requests.retention_days`, `rate_limits` windows older than a day, and ended blocks one
+ * window after their end (Db\Retention).
  */
 final class RequestLog
 {

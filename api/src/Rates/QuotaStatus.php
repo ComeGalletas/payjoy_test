@@ -10,8 +10,9 @@ namespace FxInstallments\Rates;
  *
  * - `cache`: the stored answer is younger than `health.quota_cache_minutes`;
  * - `upstream`: upstream was just asked (the answer may be an error);
- * - `blocked`: not asked, because the breaker holds an auth block (the key is known bad); the
- *   last stored answer, if any, is kept for reference.
+ * - `blocked`: not asked, because the breaker holds an auth block (the key is known bad), or
+ *   because the database can't be written, so the answer couldn't be cached (QuotaCache,
+ *   reason NOT_WRITABLE); the last stored answer, if any, is kept for reference.
  */
 final class QuotaStatus
 {
