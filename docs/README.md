@@ -326,6 +326,52 @@ Set a baseline over the first weeks, then set targets. For example: a completion
 stale answers under 1% of conversions, `/health` up 99.9%, p95 latency under 500 ms, and fewer
 than 50 upstream calls a month.
 
+## What I would do differently or improve with more time
+
+The current release is a deliberately narrow, deterministic MVP. With more time, I would invest in
+four areas. Most of this work is already scoped in [PLAN.md](PLAN.md) (Phases 2 and 3) and tracked
+in [TODO.md](TODO.md).
+
+**1. Product and conversation**
+- **Natural-language input.** Add the Phase 2 LLM normalizer, so customers can write freely
+  ("how much is 200 dollars in pesos over 6 months?"). It sits behind a flag and in front of the
+  same validators, so the money path stays deterministic.
+- **A more flexible conversation.** Let customers correct an earlier answer, compare currencies
+  or run several conversions in one session, instead of following a fixed linear flow.
+- **Localization.** Offer the bot and the amounts in Spanish and Portuguese, the main languages of
+  the target markets; today every text and display string is in English.
+- **More channels.** Connect Typebot and other front-ends through the existing
+  `POST /bot/message` contract (Phase 3).
+
+**2. Reporting and observability**
+- Add the metrics the report doesn't summarize yet: latency percentiles, the share of stale-rate
+  answers, breaker trips and errors per endpoint.
+- Add dashboards and alerting on top of `/health` and the report, and a configuration API, so
+  operators can tune limits without a deploy (Phase 3).
+- Connect bot sessions to checkout conversions, to measure the real business impact.
+
+**3. Platform and code quality**
+- **Production deployment.** Docker with nginx and php-fpm (Phase 3), and Postgres support
+  (L-03).
+- **Technical debt.** A backlog of minor defects and code-quality items is tracked in PLAN.md
+  (L-04): for example a wording error in one bot reply, a large report class to split, and a
+  few test gaps. None of the known items affects the money math. PHP's loose numeric model is a
+  standing risk, though: every new feature has to keep floats out of the money path, which costs
+  ongoing effort and review.
+
+**4. Technology and process**
+- **Language.** In hindsight, I would build this service in Python. It has exact decimal
+  arithmetic in its standard library (`Decimal`), mature typing and validation (Pydantic), and
+  strong testing tools. A significant share of the review effort here went into keeping money
+  exact in PHP: integer cents, rates stored as scaled integers, and a test that forbids rounding
+  outside one function. PHP also needed an urgent upgrade during the project, to close two
+  critical CVEs (ADR 0001). A Python version of the app is planned.
+- **Process.** Every change went through a builder, an independent tester and a judge, with
+  mutation testing and two approvals before merge. That made the app reliable (2,116 automated
+  tests, no known defect in the money math) but slowed delivery. With more time I would keep
+  this process for the money path and security, and use a lighter review for low-risk changes
+  such as documentation.
+
 ## Read on
 
 | Document | For |
